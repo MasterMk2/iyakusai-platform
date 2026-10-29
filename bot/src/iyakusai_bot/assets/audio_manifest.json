@@ -1,0 +1,13 @@
+{
+  "original_composition": true,
+  "source": "original procedural fanfare",
+  "duration_seconds": 10,
+  "channels": 2,
+  "sample_rate": 48000,
+  "sample_width": 2,
+  "frames": 480000,
+  "pcm_sha256": "de57128eda76ffc9bebfe915f6e5c538ba79728e2b6cd40df07cd046b88fe4ab",
+  "wav_sha256": "1a253b2571f2250a1517e1f33393af459f27b849d041ed23fc548baba7ac87ab",
+  "external_music_or_samples": false,
+  "impact_seconds": 4.8
+}

@@ -1,0 +1,12 @@
+{
+  "guildId": "100000000000000001",
+  "botId": "100000000000000002",
+  "categoryId": "100000000000000003",
+  "committeeRoleIds": ["100000000000000011", "100000000000000012", "100000000000000013"],
+  "mylineForumId": "100000000000000004",
+  "adminBotExceptionId": "100000000000000005",
+  "approvedForumId": "100000000000000006",
+  "storeDirectory": "/home/<RELAY_USER>/iyakusai/line-oa-store/events",
+  "legacyOrganizationIds": ["oa_example_a1b2", "oa_sample_c3d4"],
+  "internalSourceFingerprints": ["000000000000"]
+}

@@ -1,0 +1,58 @@
+# Local credentials and private operational data
+.env
+.env.*
+!.env.example
+secrets/
+credentials/
+*.pem
+*.key
+*.htpasswd
+*.p12
+*.pfx
+
+# Operator-local hosting files (only the *.example samples are tracked; keep real ones outside the repository)
+deploy/proxy-mode.env
+deploy/user-map.json
+deploy/auth-proxy.nginx.conf
+data/
+backups/
+logs/
+*.log
+*.db
+*.sqlite
+*.sqlite3
+
+# Real mail and local attachment stores
+mailboxes/
+attachments/
+fixtures/local/
+*.eml
+*.mbox
+*.pst
+*.ost
+
+# Local build and editor output
+node_modules/
+.venv/
+__pycache__/
+dist/
+build/
+coverage/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local test output and demo persistence (never commit)
+.tmp/
+test-results/
+playwright-report/
+*.png
+
+# Synthetic ledger written by tests/rental/fixtures/make_python_ledger.py (no real data).
+!tests/rental/fixtures/python-ledger/folder/rental.sqlite3
+
+# Windows issuer: vendored card libraries (nfcpy, libusb DLL) stay local; copy from the shared drive card/.deps
+clients/issuer/card/.deps/
+clients/issuer/**/__pycache__/
+clients/issuer/build/

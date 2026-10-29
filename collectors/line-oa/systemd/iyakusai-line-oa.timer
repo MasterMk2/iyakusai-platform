@@ -1,0 +1,14 @@
+[Unit]
+Description=Pull LINE Official Account log (公式LINE) 4 times a day
+
+[Timer]
+# KV の保持は既定90日なので日次でも足りるが、団体からの返事は鮮度が要る
+# (Bot の /ask がこの JSONL を読む)。1日4回にしてある。
+OnCalendar=*-*-* 03,09,15,21:10:00
+# Pi が落ちていた間に飛ばした回を、起動後に1回だけ補う。
+Persistent=true
+RandomizedDelaySec=180
+Unit=iyakusai-line-oa.service
+
+[Install]
+WantedBy=timers.target

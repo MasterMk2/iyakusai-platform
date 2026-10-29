@@ -1,0 +1,26 @@
+{
+  "kind": "smm-identity-registry",
+  "version": 1,
+  "bindings": [
+    {
+      "linkId": "link-placeholder-1",
+      "linkVersion": 1,
+      "status": "active",
+      "evidence": "verified_roster",
+      "google": { "userId": "100000000000000000001", "primaryEmail": "person-placeholder-1@example.invalid" },
+      "discord": { "userId": "3000000000000000001", "verified": true },
+      "principalId": "principal-placeholder-1",
+      "taskUserId": "task-user-placeholder-1"
+    },
+    {
+      "linkId": "link-placeholder-2",
+      "linkVersion": 3,
+      "status": "revoked",
+      "evidence": "verified_roster",
+      "google": { "userId": "100000000000000000002", "primaryEmail": "person-placeholder-2@example.invalid" },
+      "discord": { "userId": "3000000000000000002", "verified": true },
+      "principalId": "principal-placeholder-2",
+      "taskUserId": null
+    }
+  ]
+}

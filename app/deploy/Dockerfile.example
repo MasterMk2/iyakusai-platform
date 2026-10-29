@@ -1,0 +1,26 @@
+# 無効なサンプル（未適用）。任意の「ソースからのビルド」方式で、外部からの取得を伴うオンライン操作。
+# 推奨はオフライン成果物方式（deploy/Dockerfile.offline.example）。この方式を使う場合は承認 A6 に加えて、
+# 次の取得ごとに個別の承認（承認 A7）を得る。取得元:
+#   - ベースイメージ: Docker Hub（docker.io/library/node）。ローカルに無ければ取得される。
+#   - npm パッケージ: npm レジストリ（registry.npmjs.org）。npm ci が package-lock.json の版を取得する。
+# イメージはダイジェストで固定する。既定値はなく、タグだけ・latest・未指定では実行しない。
+#   例: --build-arg NODE_IMAGE=docker.io/library/node@sha256:<承認時に確認した 64 桁>
+# リポジトリのルートをビルドコンテキストにする（.dockerignore で資格情報・deploy/ を除外）。ポートは公開しない。
+
+ARG NODE_IMAGE
+FROM ${NODE_IMAGE} AS build
+WORKDIR /src
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+FROM ${NODE_IMAGE}
+ENV NODE_ENV=production
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+COPY --from=build /src/dist ./dist
+RUN mkdir -p /app/data && chown node:node /app/data
+USER node
+CMD ["node", "dist/server/main.js"]

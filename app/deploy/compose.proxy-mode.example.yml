@@ -1,0 +1,77 @@
+# 配置の例（動作は確かめていない）。trusted-proxy モードの説明は README.md。
+# - どのサービスにも ports を書かない（ホストへのポート公開なし）。
+# - アプリは internal ネットワークだけに置き、外部へも出られない。
+# - 認証サイドカーだけが既存エッジのネットワークにも参加する（承認 A4 が必要）。
+# - サブネット・固定 IP は例。空いているプライベート範囲を運用者が選ぶ。
+# - このファイルはリポジトリの外にある運用者ローカルのディレクトリへ複製して使う。相対パスはそのディレクトリ基準で、
+#   proxy-mode.env、user-map.json、auth-proxy.nginx.conf、smm.htpasswd、artifact/ はすべてそこに置く
+#   （リポジトリ内に置かないので、ソースのビルドコンテキストやキャッシュにも入らない）。
+# - 外部から何も取得しない構成: pull_policy: never、ビルドは network: none。イメージは
+#   ビルドホストに既にあるものをダイジェストで指定する。プレースホルダーのままでは起動できない。
+# - このサンプルと Docker・Compose・nginx での動作は未検証。
+
+name: shared-mail-manager-sample
+
+services:
+  app:
+    image: shared-mail-manager:offline-local
+    pull_policy: never
+    build:
+      # オフライン成果物。Dockerfile は deploy/Dockerfile.offline.example の複製。
+      context: ./artifact
+      dockerfile: Dockerfile
+      network: none
+      args:
+        RUNTIME_IMAGE: REPLACE_WITH_LOCAL_NODE_IMAGE@sha256:REPLACE_WITH_VERIFIED_DIGEST
+    env_file: ./proxy-mode.env
+    volumes:
+      - smm-data:/app/data
+      - ./user-map.json:/run/smm/user-map.json:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks:
+      smm-internal:
+        ipv4_address: 172.30.57.10
+    healthcheck:
+      # コンテナ内のループバックからの死活確認。本文は {"ok":true} だけ。
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/api/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  auth-proxy:
+    # ビルドホストに既にある nginx イメージをダイジェストで指定する（タグだけ・latest は不可）。
+    # 取得が必要なら Docker Hub（docker.io/library/nginx）からの取得として承認 A7 を別に得る。
+    image: REPLACE_WITH_LOCAL_NGINX_IMAGE@sha256:REPLACE_WITH_VERIFIED_DIGEST
+    pull_policy: never
+    volumes:
+      - ./auth-proxy.nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./smm.htpasswd:/etc/nginx/smm.htpasswd:ro
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+    networks:
+      smm-internal:
+        ipv4_address: 172.30.57.2
+      edge: {}
+    depends_on: [app]
+    restart: unless-stopped
+
+volumes:
+  smm-data: {}
+
+networks:
+  smm-internal:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.30.57.0/24
+  edge:
+    # 既存のエッジ リバースプロキシのネットワーク。名前は承認後に運用者ローカルの計画で指定する。
+    external: true
+    name: REPLACE_WITH_APPROVED_EDGE_NETWORK

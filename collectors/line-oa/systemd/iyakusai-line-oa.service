@@ -1,0 +1,15 @@
+[Unit]
+Description=Pull LINE Official Account log (公式LINE) into the shared drive
+Requires=iyakusai-mount.service
+After=iyakusai-mount.service network-online.target
+
+[Service]
+Type=oneshot
+# 接続情報がまだ無い間(= Cloudflare Worker のデプロイ前)は「条件不成立」で静かに飛ばす。
+# ここを外すと、設定が済むまで毎回 failed が journal に積み上がる。
+ExecCondition=/usr/bin/test -f %h/.iyakusai/line_oa.json
+Environment=PYTHONIOENCODING=utf-8
+# 出力先は rclone マウントの下。マウントが落ちていれば oa_pull.py 側が
+# センチネル(_oa_contacts.json)を見て中断する(空の raw/ を作らない)。
+ExecStart=/usr/bin/python3 %h/iyakusai/drive/line/tools/oa_pull.py
+TimeoutStartSec=1800

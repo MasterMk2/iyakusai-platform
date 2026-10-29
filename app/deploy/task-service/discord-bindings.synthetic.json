@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "guilds": [
+    {
+      "guildId": "1000000000000000001",
+      "channels": [
+        { "channelId": "1000000000000000101", "workspaceId": "ws-planning" },
+        { "channelId": "1000000000000000102", "workspaceId": "ws-publicity" }
+      ]
+    }
+  ],
+  "users": [
+    { "discordUserId": "1000000000000001001", "userId": "user-chair-a" },
+    { "discordUserId": "1000000000000001002", "userId": "user-member-a1" },
+    { "discordUserId": "1000000000000001003", "userId": "user-member-a2" },
+    { "discordUserId": "1000000000000001004", "userId": "user-observer-a" },
+    { "discordUserId": "1000000000000001005", "userId": "user-former-a3" },
+    { "discordUserId": "1000000000000001006", "userId": "user-chair-b" },
+    { "discordUserId": "1000000000000001007", "userId": "user-member-b1" },
+    { "discordUserId": "1000000000000001008", "userId": "user-outsider" }
+  ]
+}

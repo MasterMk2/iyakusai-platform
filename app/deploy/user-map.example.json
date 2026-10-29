@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "identities": [
+    { "identity": "placeholder-editor@idp.example", "userId": "u-editor-a" },
+    { "identity": "placeholder-admin@idp.example", "userId": "u-admin" }
+  ]
+}

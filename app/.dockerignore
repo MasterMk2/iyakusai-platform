@@ -1,0 +1,9 @@
+node_modules
+dist
+data
+.tmp
+.git
+reference
+tests
+docs
+*.log

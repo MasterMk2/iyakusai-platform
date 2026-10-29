@@ -1,0 +1,79 @@
+/* 返却チェックシートの印刷（/rental/print）。画面では操作部と A4 の見本、印刷では票だけを出す。 */
+@page { size: A4 portrait; margin: 9mm 8mm 10mm 8mm; }
+:root { --navy: #163960; --line: #ccd7e1; --ink: #172c40; --muted: #52677b; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; color: #000; background: #e9eef4; font-family: "BIZ UDGothic", "Yu Gothic", "Hiragino Sans", "Meiryo", sans-serif; font-size: 10pt; }
+
+/* ---- 操作部（画面だけ） */
+.controls { background: #fff; color: var(--ink); padding: 12px 16px 14px; border-bottom: 3px solid var(--navy); font-size: 14px; }
+.controls .bar { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; }
+.controls h1 { font-size: 20px; margin: 0; color: var(--navy); }
+.controls h2 { font-size: 15px; margin: 14px 0 6px; }
+.controls .back { color: var(--navy); font-weight: 700; }
+.controls .status { margin: 8px 0; font-weight: 700; }
+.controls .actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.controls button { min-height: 44px; cursor: pointer; border: 1px solid var(--line); background: #fff; color: var(--ink); border-radius: 6px; padding: 8px 14px; font-weight: 700; font-size: 14px; }
+.controls button.primary { background: var(--navy); border-color: var(--navy); color: #fff; }
+.controls button:disabled { opacity: .5; cursor: default; }
+.controls button.quiet { background: transparent; border: 0; text-decoration: underline; color: var(--muted); }
+.controls button.mini { min-height: 34px; padding: 4px 8px; font-size: 13px; }
+.controls button:focus-visible, .controls input:focus-visible, .controls select:focus-visible, .controls summary:focus-visible { outline: 3px solid #000; outline-offset: 2px; }
+.controls fieldset { border: 1px solid var(--line); border-radius: 6px; margin: 8px 0; padding: 6px 10px 8px; display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.controls legend { font-weight: 700; padding: 0 4px; }
+.controls label { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; }
+.controls input[type=checkbox] { width: 20px; height: 20px; }
+.controls select, .controls input:not([type=checkbox]) { min-height: 36px; font-size: 14px; border: 1px solid var(--line); border-radius: 4px; padding: 4px 6px; max-width: 100%; }
+.controls input[type=number] { width: 64px; }
+.controls details { margin-top: 8px; }
+.controls summary { cursor: pointer; font-weight: 700; min-height: 36px; display: flex; align-items: center; color: var(--navy); }
+.controls summary::before { content: "▶"; font-size: 11px; margin-right: 6px; }
+.controls details[open] summary::before { content: "▼"; }
+.controls button.mini:disabled { color: var(--muted); }
+.controls .hint { color: var(--muted); margin: 4px 0 8px; }
+.controls table.rules { width: 100%; border-collapse: collapse; }
+.controls table.rules th, .controls table.rules td { border: 1px solid var(--line); padding: 4px 6px; text-align: left; vertical-align: middle; }
+.controls table.rules input { width: 100%; }
+.controls .nowrap { white-space: nowrap; }
+.controls .warn-row td { background: #fff1d6; font-weight: 700; }
+
+/* ---- 票（画面では A4 の見本として並べる） */
+main { padding: 16px 0 40px; }
+.sheet { background: #fff; width: 210mm; min-height: 297mm; margin: 0 auto 16px; padding: 9mm 8mm 10mm; box-shadow: 0 1px 6px rgba(0, 0, 0, .25); }
+.sheet .title { font-size: 15pt; margin: 0; }
+.sheet .sub { font-size: 8pt; color: #222; margin: .5mm 0 1.5mm; }
+.big { font-size: 19pt; font-weight: bold; border-bottom: 2.5px solid #000; padding: .5mm 0; margin: 0 0 2mm; }
+.loc { font-size: 17pt; font-weight: bold; border: 3px solid #000; padding: 1.5mm 2mm; margin-bottom: 2mm; }
+.big span, .loc span { font-size: 11pt; font-weight: normal; }
+.sheet table { border-collapse: collapse; width: 100%; table-layout: fixed; }
+.sheet th, .sheet td { border: 1px solid #000; padding: 1mm 1.2mm; vertical-align: middle; word-break: break-all; }
+.sheet th { background: #d9e1ea; font-size: 8.5pt; }
+.sheet thead { display: table-header-group; }
+.sheet tr { break-inside: avoid; page-break-inside: avoid; }
+.sheet tr.blank td { height: 8mm; }
+.sheet tr.tall td { height: 10mm; }
+.c { text-align: center; } .r { text-align: right; } .s { font-size: 8.5pt; } .xs { font-size: 7.5pt; }
+.warn { font-weight: bold; }
+.qty { font-size: 14pt; font-weight: bold; text-align: center; }
+.box { font-size: 15pt; text-align: center; line-height: 1; }
+.grp td { background: #ececec; font-weight: bold; border-top: 2px solid #000; font-size: 10pt; }
+.dmg { font-size: 8.5pt; text-align: center; white-space: nowrap; }
+.note { font-size: 8.5pt; margin: 1.5mm 0; line-height: 1.45; }
+.sign { margin-top: 3mm; }
+.sign td { height: 8mm; font-size: 9.5pt; }
+.guide { font-size: 11pt; line-height: 1.55; } .guide li { margin-bottom: 2mm; }
+col.w6 { width: 6mm; } col.w9 { width: 9mm; } col.w10 { width: 10mm; } col.w11 { width: 11mm; } col.w12 { width: 12mm; } col.w13 { width: 13mm; }
+col.w14 { width: 14mm; } col.w15 { width: 15mm; } col.w16 { width: 16mm; } col.w17 { width: 17mm; } col.w19 { width: 19mm; } col.w20 { width: 20mm; }
+col.w22 { width: 22mm; } col.w26 { width: 26mm; } col.w28 { width: 28mm; } col.w30 { width: 30mm; } col.w33 { width: 33mm; } col.w40 { width: 40mm; } col.w44 { width: 44mm; }
+col.p16 { width: 16%; } col.p24 { width: 24%; } col.p28 { width: 28%; } col.p32 { width: 32%; }
+
+@media screen and (max-width: 840px) {
+  main { overflow-x: auto; padding: 8px; }
+  .sheet { margin: 0 0 12px; }
+}
+@media print {
+  body { background: #fff; }
+  .controls { display: none; }
+  main { padding: 0; }
+  .sheet { width: auto; min-height: 0; margin: 0; padding: 0; box-shadow: none; break-after: page; page-break-after: always; }
+  .sheet:last-child { break-after: auto; page-break-after: auto; }
+}

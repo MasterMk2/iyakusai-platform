@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.venv/
+*.tgz
+# 配置ごとの本物の値（ひな形は site.example.json）
+site.json

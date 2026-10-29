@@ -1,0 +1,13 @@
+{
+  "guildId": "100000000000000001",
+  "bootstrapUserId": "100000000000000002",
+  "sharedAccountIds": ["100000000000000003"],
+  "listenHost": "10.0.0.50",
+  "listenPort": 18432,
+  "callerIp": "10.0.0.19",
+  "resourceUid": 1002,
+  "configDirectory": "/home/<BOT_USER>/.iyakusai/web-auth-dm/config",
+  "ledgerDirectory": "/home/<BOT_USER>/.iyakusai/web-auth-dm/state",
+  "serverCertificate": "/home/<BOT_USER>/.iyakusai/task-web-api/config/server.crt",
+  "serverPrivateKey": "/home/<BOT_USER>/.iyakusai/task-web-api/config/server.key"
+}

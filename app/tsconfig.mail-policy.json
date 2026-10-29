@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "module": "NodeNext", "moduleResolution": "NodeNext", "lib": ["ES2023"],
+    "types": ["node"], "noEmit": true
+  },
+  "include": [
+    "src/server/domain/access.ts", "src/server/domain/queries.ts", "src/server/domain/seed.ts",
+    "src/server/domain/shared-mail-policy.ts", "src/server/domain/sync.ts", "src/server/domain/types.ts",
+    "src/server/account/http.ts", "src/server/connector/**/*.ts", "src/server/login/**/*.ts",
+    "tests/unit/committee-shared-mail-read.test.ts", "tests/api/committee-shared-mail-read.test.ts"
+  ]
+}

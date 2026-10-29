@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "mailboxes": [
+    { "id": "contact", "name": "問い合わせ", "address": "contact@committee.example", "subjectTag": "cnt", "forwardsTo": ["adm"] },
+    { "id": "sponsorship", "name": "協賛", "address": "sponsorship@committee.example", "subjectTag": "sps", "forwardsTo": ["adm"] },
+    { "id": "adm", "name": "大学・業者窓口", "address": "adm@committee.example", "subjectTag": "adm" },
+    { "id": "taro", "name": "委員会共用", "address": "taro@committee.example", "catchAll": true }
+  ],
+  "domainAliases": { "committee-alias.example": "committee.example" },
+  "ingestKeyFile": "/config/mail-ingest.key",
+  "previewDiscordUserIds": ["1000000000000001001"],
+  "idleHours": 12,
+  "backfillUseGroupDelivery": true,
+  "draftBccAddress": "archive@committee.example"
+}

@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#163960">
+  <link rel="stylesheet" href="/rental/print.css">
+  <title>返却チェックシートの印刷｜医薬祭 委員会アプリ</title>
+  <script src="/rental/print.js" defer></script>
+</head>
+<body>
+  <!-- 画面だけに出す操作部。印刷では隠れ、下の票だけが紙に出る。 -->
+  <header class="controls" aria-label="印刷の設定">
+    <div class="bar">
+      <h1>返却チェックシートの印刷</h1>
+      <a class="back" href="/rental">物品の画面へ戻る</a>
+    </div>
+    <p id="status" class="status" role="status" aria-live="polite">読み込み中…</p>
+    <div class="actions">
+      <button id="reload" type="button">最新の情報を読み込む</button>
+      <button id="print" type="button" class="primary" disabled>印刷する（PDF保存も可）</button>
+    </div>
+    <fieldset>
+      <legend>印刷する票</legend>
+      <label><input type="checkbox" name="sheet" value="guide" checked>使い方</label>
+      <label><input type="checkbox" name="sheet" value="group" checked>団体別チェック表</label>
+      <label><input type="checkbox" name="sheet" value="location" checked>返却場所別一覧</label>
+      <label><input type="checkbox" name="sheet" value="summary" checked>返却場所別 品目集計</label>
+      <label><input type="checkbox" name="sheet" value="progress" checked>本部 進捗表</label>
+      <label><input type="checkbox" name="sheet" value="report" checked>破損・不足・未返却 報告票</label>
+    </fieldset>
+    <fieldset class="narrow">
+      <legend>対象</legend>
+      <label>団体 <select id="filter-group"><option value="">すべての団体</option></select></label>
+      <label>返却場所 <select id="filter-location"><option value="">すべての返却場所</option></select></label>
+      <label>手書き用の団体別ページ <input id="blank-pages" type="number" min="0" max="10" value="2"></label>
+    </fieldset>
+    <details id="rules-box">
+      <summary>返却場所の決め方（規則）</summary>
+      <p class="hint">上から順に当てはめ、最初に合った規則の返却場所にします。どれにも合わない物品は「返却先 要確認（本部へ）」になります。変更はこの端末に保存されます。</p>
+      <table class="rules">
+        <thead><tr><th>見る項目</th><th>値</th><th>返却場所</th><th></th></tr></thead>
+        <tbody id="rules"></tbody>
+      </table>
+      <div class="actions">
+        <button id="rule-add" type="button">規則を追加</button>
+        <button id="rule-save" type="button">規則を保存して反映</button>
+        <button id="rule-reset" type="button" class="quiet">初期の規則に戻す</button>
+      </div>
+      <h2>いまの当てはまり方</h2>
+      <table class="rules">
+        <thead><tr><th>借用元</th><th>物品区分</th><th>品名の例</th><th>貸出中</th><th>返却場所</th></tr></thead>
+        <tbody id="rule-check"></tbody>
+      </table>
+    </details>
+  </header>
+  <main id="sheets" aria-label="印刷する票"></main>
+</body>
+</html>

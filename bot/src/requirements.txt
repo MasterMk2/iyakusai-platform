@@ -1,0 +1,6 @@
+discord.py>=2.7
+python-docx>=1.2
+tzdata>=2025.1 ; sys_platform == "win32"
+numpy>=1.26        # /ask の意味検索(vector)用。Ollama/bge-m3 が無い環境では未使用でよい
+sudachipy>=0.6.8   # 俳句検出(F5)の形態素解析・読み取得。未導入なら機能ごと自動OFF
+sudachidict-small  # 上記の辞書(約30MB)。ARM64 wheel あり(RPi可)

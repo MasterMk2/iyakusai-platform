@@ -1,0 +1,143 @@
+# IyakusaiBot 設定(ホストごとにローカルへコピーして編集する)
+# 置き場所: ~/.iyakusai/config.toml  (Windows: C:\Users\<名前>\.iyakusai\config.toml)
+# ※ このファイル自体は雛形。共有ドライブに実設定を置かないこと。
+
+[host]
+name = "windows-ws"   # ロック識別名。RPi では例えば "rpi4b"
+mode = "direct"       # direct = ドライブ直接(Windows) / mirror = ローカルミラー(RPi)
+
+[paths]
+# 可変データ(reminders.json / lock.json)の置き場
+# direct(Windows)の例:
+data_dir = '<共有ドライブ>\_目録\discord\bot\data'
+# mirror(RPi)の例:
+# data_dir = '/home/bot/iyakusai/mirror/bot/data'
+
+# ナレッジ参照(M3 で使用。direct なら _目録 を直接指す)
+# knowledge_dir = '<共有ドライブ>\_目録'
+
+# エージェント検索用の無害化ミラー(既定: ~/.iyakusai/mirror)。**ドライブ外**に置くこと。
+# collector が30分tickごとに増分同期(初回tickで全量ビルド)する。
+# mirror_dir = 'C:\Users\<名前>\.iyakusai\mirror'
+
+# ネタ帳(既定: ~/.iyakusai/neta)。**ドライブ外**に置くこと。ネタ枠の口調で使う。
+# 同じフォルダの persona_presets.json に、個人の語り口を写した口調プリセットを置く(無ければコード内の口調だけ)。
+# (個人の公開ポストから選んだ小ネタ=委員会の共有ドライブに素材を置かない)。
+# neta/lines.txt が無ければネタは載らない(=口調を選んでも通常どおり喋る)。
+# neta_dir = 'C:\Users\<名前>\.iyakusai\neta'
+
+[lock]
+heartbeat_sec = 300        # ハートビート間隔(秒)
+takeover_after_sec = 900   # これだけ途絶えたロックは乗っ取り可(秒)
+
+[reminders]
+check_sec = 60             # 期限チェック間隔(秒)
+
+[help]
+# 不具合・要望の連絡先。/help のフッターとエラー文に出る(未設定なら「システム課」)
+# contact = "システム課"
+
+[mail]
+# メールの草案(/mail・/doc のメール文面)の署名に入れる住所の行(未設定なら【住所】のまま)
+# address = "〒000-0000 〇〇市〇〇町 1-2-3 〇〇大学"
+
+[org]
+# 委員会の名前。メールの署名・件名と AI への指示文に入る(未設定なら「医学薬学祭実行委員会」)
+# name = "〇〇大学医学薬学祭実行委員会"
+# 学祭を開くキャンパスと、ほかのキャンパスの学祭。AI が他キャンパスの行事と取り違えないために指示文に入れる
+# campus = "〇〇キャンパス"
+# other_campuses = "〇〇キャンパス=〇〇祭/〇〇キャンパス=〇〇祭"
+# 文書の中で伏せずに残すメールドメイン。委員会のドメイン(iyakusai.com・iyakusai.jp)は常に残る。
+# 学校の事務のドメインを足す。学生個人の学校のアドレスは学籍番号から個人が分かるので足さない
+# keep_mail_domains = ["adm.example.ac.jp"]
+
+[permissions]
+admin_roles = ["役員", "システム課"]
+
+[ai]
+provider = "claude-cli"   # claude-cli(Claude Code CLI・既定。認証は CLI の設定) | none(grep直返しのみ)
+                          # 多人数で使う Bot では、個人向けのプランではなく API キー(従量課金)で使うことを勧める
+model = "sonnet"          # 既定モデル(速い・枠消費が少ない)
+heavy_model = "opus"      # 複雑タスク用(自動振り分け/明示指定時)
+auto_route = true         # 質問・文書の複雑さで自動的に heavy へ昇格
+timeout_sec = 180
+usd_jpy = 160.0           # 「API換算 ≒◯円」の円換算レート(参考表示用)
+# --- エージェント検索(/ask の主経路) ---
+# 無害化ミラー(paths.mirror_dir)上で claude -p に Read/Grep/Glob だけ許して
+# 自律検索させる。抜粋10件の one-shot と違い、資料を横断して統合できる。
+# 失敗/未構築時は自動で従来の one-shot にフォールバック(さらに落ちれば grep 直返し)。
+agentic = "all"           # all=全質問 / heavy=まとめ・経緯系のみ(枠節約) / off=従来動作
+agent_model = "sonnet"    # ターン数が多い分 sonnet 推奨(opus はトークン消費大)
+agent_max_turns = 15      # ターン上限(トークン浪費の頭打ち)
+agent_timeout_sec = 300
+
+[knowledge]
+# 省略時は knowledge_search.py の既定(discord/digest, mail/digest, line/digest, プレイブック, カタログ/Google文書目録_*.md)
+# ※ Google文書目録_*.md は gdoc/gsheet 等(drive上に実体が無い)の唯一の検索源なので既定に含む
+# ※ line/digest は三キャンパス委員長間の LINE(他ソースに原文が無い一次連絡)。手動エクスポート由来
+# digest_roots = ["discord/digest", "mail/digest", "line/digest", "過去アーカイブ運営プレイブック.md", "カタログ/Google文書目録_*.md"]
+# blocklist     = ["パスワード", "password", "ログイン", "認証情報", "credential", "秘密", "secret", ".env"]  # 既定。digest/raw/perdoc すべて遮断(秘密源)。実際のファイル名・チャンネル名を足す
+# raw_blocklist = ["非公開", "private"]  # 既定。raw だけ遮断(非公開CHだが人手で機微を除いた digest は検索可)。実際の非公開チャンネル名を書く
+discord_raw = true         # /ask で discord/raw の最新分も検索(digest 未反映の最新動向を補完)
+discord_raw_days = 45      # 直近この日数だけを raw 検索対象に(古い分は digest 側で見る)
+vector = true             # 意味検索(bge-m3)で文書+digestを補完。※Ollama+bge-m3 が要る。RPi等で無ければ false
+                          #  (digest索引 digest_vectors.npy は collector が陳腐化時に自動再構築)
+vector_min_score = 0.5    # このcosine未満は不採用(下げると recall↑/ノイズ↑)
+vector_topk = 4           # 意味検索から拾う文書数
+
+[collect]
+# F3: Bot 内で Discord 収集(collect_discord_v2.py)を定期実行し raw を最新化する。
+# ※単一インスタンスはホストロックで保証。RPi 等で systemd タイマーと二重に走らせないこと。
+enabled = true             # false にすると常駐収集を止める(手動収集運用に戻す)
+interval_min = 30          # 収集間隔(分)
+# digest 本文の鮮度リマインド: 収集後に digest_staleness.py を回し、digest(.md)が raw に
+# 遅れていたら知らせる。**自動再生成はしない**(要約の劣化回避=②③の再生成判断は人)。
+staleness_threshold = 30   # 未反映がこの件数以上で「再生成を」と促す
+# 通知先チャンネルID(未設定=ログのみ)。Discord へ通知したいなら低ノイズな bot 用CHを推奨。
+# チャンネルIDは discord/raw/<CH名>__<ID>.jsonl のファイル名末尾の数字(例: bottest)。
+# staleness_channel_id = 1000000000000000003   # 合成ID
+
+[haiku]
+# F5: 発言がたまたま 5-7-5 になっていたら反応する(AI不使用・0円)。
+# 要件: pip install sudachipy sudachidict-small(無ければ機能ごと自動OFF)。
+# ※ enabled = true にすると Bot が message_content 特権インテントを要求する。
+#    ポータルで MESSAGE CONTENT INTENT を切っていると起動時に落ちるので注意。
+enabled = false            # 出し方を決めてから true にする
+mode = "react"             # react=元の発言に🎋を付けるだけ(通知ゼロ・既定)/ reply=その場に返信 /
+                           #  digest=専用CHへ転記 / both=reply+digest
+                           #  ※reply は silent でも「新着」が積まれて会話を切るため、
+                           #    通知が多すぎるという指摘から既定を react にした
+# channel_id = 0000000000  # digest・both の転記先(そのモードでは必須)
+min_score = 60             # この点未満は出さない(下げると検出増/質↓。/haiku check で確認可)
+daily_limit = 15           # 1日の上限(連投抑制)。react は通知が鳴らないので reply 時代の 5 より緩め
+allow_hachou = true        # 破調(1句だけ±1拍の字余り・字足らず)も拾う。
+                           #  実測: 定型のみ=10句 / 破調あり=62句(約2.5か月分)。false で定型のみ
+public_only = true         # 転記(digest/both)の対象を @everyone が読めるCHだけに限る安全弁。
+                           #  react・reply はその場に付ける/返すだけで可視範囲が広がらないため適用しない
+# blocklist = ["秘密", "非公開"]   # 省略時は [knowledge] の blocklist と raw_blocklist を流用
+
+[assistant]
+# 統合アプリの「Bot」タブ(2026-10-14 追加)。false か節が無ければ従来どおり(Cog を読まない)。
+# 連携口(Pi の task-web-api の gateway)が受けた依頼を、この Bot が実行する。
+# ジョブ表と生成物は**共有ドライブの外**(ローカルディスク)に置く。絶対パスで書くこと。
+enabled = false
+store_path = 'C:\Users\<名前>\.iyakusai\assistant\assistant.sqlite3'   # 例(Windows)。Pi: /home/<user>/.iyakusai/assistant/assistant.sqlite3
+files_dir = 'C:\Users\<名前>\.iyakusai\assistant\files'              # 生成した画像・文書
+share_channel_id = 1000000000000000001           # #bottest。アプリ発の ask/doc/image を投稿する(合成ID)
+reminder_channel_ids = [1000000000000000001, 1000000000000000002]   # アプリのリマインドの通知先の候補(先頭が既定・合成ID)
+poll_sec = 2
+image_enabled = false                            # 画像の作成(既定は無効)。true にすると起動で止める
+max_active_per_user = 3                          # 受付中＋実行中の ask/doc/image の上限(1 人あたり)
+[kiban]
+# 基盤システム(統合アプリ app.iyakusai.com)の写しをミラーの kiban/ に置き、/ask の根拠にする(2026-10-14)。
+# タスクは Bot ホストのタスク DB([tasks] が有効なとき)から、物品・受信箱の対応状況はアプリの
+# Bot 専用の読み取り口から取る。取り決めはリポジトリ直下の docs/contracts/bot-datasource.md。
+# /ask の答えは Discord で全委員が見える(物品のメモ欄・受信箱のメモも載る)。
+enabled = false
+tasks = true                       # タスクを写すか([tasks] が無効なら写さない)
+# app_url = "https://app.iyakusai.com"   # 空なら物品・受信箱は取りに行かない
+# key_file = "/home/<PI_USER>/.iyakusai/bot-datasource.key"   # この口専用の鍵(600)。共有ドライブに置かない
+# ca_file = ""                     # 私設 CA を使うときだけ
+# sources = ["rental", "mailbox"]
+interval_sec = 300                 # 作り直す間隔(60 以上)
+timeout_sec = 20

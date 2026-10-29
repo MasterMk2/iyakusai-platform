@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "bindings": [
+    { "principalId": "principal-placeholder-1", "taskUserId": "task-user-placeholder-1" },
+    { "principalId": "principal-placeholder-2", "taskUserId": "task-user-placeholder-2" }
+  ]
+}

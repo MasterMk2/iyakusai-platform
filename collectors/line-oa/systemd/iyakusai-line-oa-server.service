@@ -1,0 +1,22 @@
+[Unit]
+Description=LINE Official Account webhook receiver (公式LINE の受け口)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+# 設定(=チャネルシークレット等)が無い間は「条件不成立」で静かに止まる。
+# Restart=always と組み合わせても、条件が満たされるまで再起動ループにならない。
+ExecCondition=/usr/bin/test -f %h/.iyakusai/line_oa_server.json
+Environment=PYTHONIOENCODING=utf-8
+# ★ コードは rclone マウントではなく **Pi のローカル**に置く。
+#   受け口がマウントに依存すると、マウントが落ちた瞬間に受信そのものが止まる
+#   (保管はローカルなので、落ちても本来は受け続けられる)。更新は配布し直すこと:
+#     install -Dm755 ~/iyakusai/drive/line/tools/oa_server/oa_server.py ~/iyakusai/line-oa/oa_server.py
+ExecStart=/usr/bin/python3 %h/iyakusai/line-oa/oa_server.py
+Restart=always
+RestartSec=10
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,105 @@
+import {createHash} from 'node:crypto';
+import {mkdtempSync,readFileSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
+import {afterEach,beforeEach,describe,expect,it} from 'vitest';
+import {RentalStore} from '../../src/server/rental/store.js';
+import {IssuerManagement} from '../../src/server/rental/issuer-management.js';
+import {CardHistory} from '../../src/server/rental/card-history.js';
+import {ACTOR,metadata,RED,statusOf} from './helpers.js';
+
+let dir:string,store:RentalStore,manager:IssuerManagement,cards:CardHistory;
+const origin='https://app.example.test';
+const row={code:'IY-100001',name:'旧机',url:origin+'/i/IY-100001',borrower_name:'旧団体',item_scope:'学内'};
+const digest=(s:string)=>createHash('sha256').update(s).digest('hex');
+const apply=(p:ReturnType<IssuerManagement['preview']>)=>manager.apply({token:p.token,all_writers_stopped:p.mode==='force_reset_all',confirmation:p.mode==='force_reset_all'?'連番と重複防止を含めて初期化':p.mode==='force_reset'?'物品台帳を強制リセット':'変更を反映'},ACTOR,true);
+const register=(name='旧机')=>apply(manager.preview({mode:'update',items:[{...row,name}]},ACTOR,true));
+beforeEach(()=>{
+ dir=mkdtempSync(path.join(tmpdir(),'number-reset-'));store=new RentalStore(dir,{demo:true});manager=new IssuerManagement(store,origin);cards=new CardHistory(store);register();
+ const registry=JSON.stringify({idm:'0123456789ABCDEF',code:row.code,url:row.url,status:'passed'})+'\n';
+ cards.importLegacy({registry,sha256:digest(registry),evidence:{'evidence/old/result.json':Buffer.from('original evidence').toString('base64')}},ACTOR);
+ store.setPermissions('kept-user',['rental.issue','rental.loan'],ACTOR);
+});
+afterEach(()=>{store.close();rmSync(dir,{recursive:true,force:true});});
+describe('optional reset including numbering and physical-card duplicate protection',()=>{
+ it('reuses No.100001, archives old identities and evidence, and keeps loan receipts and photo bytes',()=>{
+  const request=metadata({item_code:row.code,item_version:store.item(row.code).version,borrower:'旧団体'});
+  const receipt=store.submit(request,[RED],ACTOR);
+  const files=store.db.prepare('SELECT path FROM files ORDER BY path').all().map(r=>[String(r.path),readFileSync(path.join(dir,String(r.path))).toString('hex')]);
+  const oldHistory=cards.backup();
+  apply(manager.preview({mode:'force_reset'},ACTOR,true));
+  expect(manager.snapshot().archived_count).toBe(1);
+  const result=apply(manager.preview({mode:'force_reset_all'},ACTOR,true));
+  expect(result).toMatchObject({ledger_generation:1,reserved_through:100000,items:[],archived_count:0});
+  expect(cards.snapshot()).toMatchObject({ledger_generation:1,initialized:true,passed:0,reserved:0,registry:'',events:0});
+  expect(store.permissionsOf('kept-user')).toEqual(['rental.issue','rental.loan']);
+  expect(store.operation(request.operation_id)).toEqual(receipt);
+  expect(store.submit(request,[RED],ACTOR)).toEqual(receipt);
+  for(const [name,hex] of files)expect(readFileSync(path.join(dir,name!)).toString('hex')).toBe(hex);
+  const archive=store.db.prepare('SELECT * FROM numbering_reset_archives').get()!;
+  expect(digest(String(archive.snapshot_json))).toBe(archive.sha256);
+  const old=JSON.parse(String(archive.snapshot_json));
+  expect(old.items[0]).toMatchObject({code:row.code,status:'loaned'});
+  expect(old.card_history_seed[0].registry).toBe(oldHistory.registry);
+  expect(old.card_history_evidence[0].data).toBe(Buffer.from('original evidence').toString('base64'));
+  register('新机');
+  expect(store.item(row.code)).toMatchObject({name:'新机',status:'ready',current_loan:null});
+  expect(store.inspection(row.code)).toMatchObject({latest:null,last_check:null,loan:null});
+  expect(store.overview().items[0]).toMatchObject({phase:'planned',lent_at:null,returned_at:null});
+  const claim=cards.claim({code:row.code,idm:'0123456789ABCDEF',url:row.url,client:'new-PC',manifest_sha256:'a'.repeat(64),pdf_sha256:'b'.repeat(64)},ACTOR);
+  cards.cancel({operation:claim.operation},ACTOR);
+  expect(store.db.prepare('PRAGMA integrity_check').get()!.integrity_check).toBe('ok');
+ });
+ it('rejects an unsent old loan even when its No. is newly registered again',()=>{
+  const pending=metadata({item_code:row.code,item_version:store.item(row.code).version,borrower:'旧団体'});
+  apply(manager.preview({mode:'force_reset_all'},ACTOR,true));register('新机');
+  expect(statusOf(()=>store.submit(pending,[RED],ACTOR))).toBe(409);
+  expect(store.item(row.code).status).toBe('ready');
+  const fresh=metadata({item_code:row.code,item_version:store.item(row.code).version,borrower:'旧団体'});
+  store.submit(fresh,[RED],ACTOR);
+  expect(store.db.prepare('SELECT ledger_generation FROM operations').get()!.ledger_generation).toBe(1);
+  expect(store.inspection(row.code).loan!.operation_id).toBe(fresh.operation_id);
+ });
+ it('keeps stale writers blocked, and keeps repeated resets monotonic while numbering restarts',()=>{
+  const old=manager.preview({mode:'update',items:[row]},ACTOR,true);
+  apply(manager.preview({mode:'force_reset_all'},ACTOR,true));
+  expect(statusOf(()=>store.checkLedgerGeneration(undefined))).toBe(409);
+  expect(statusOf(()=>store.checkLedgerGeneration('0'))).toBe(409);
+  expect(()=>store.checkLedgerGeneration('1')).not.toThrow();
+  expect(statusOf(()=>apply(old))).toBe(409);
+  register();const version=Number(store.item(row.code).version);
+  apply(manager.preview({mode:'force_reset_all'},ACTOR,true));register();
+  expect(store.ledgerGeneration()).toBe(2);expect(store.item(row.code).version).toBeGreaterThan(version);
+  expect(manager.snapshot().reserved_through).toBe(100001);
+ });
+ it('refuses non-admin use, wrong confirmation and history changed after preview',()=>{
+  expect(statusOf(()=>manager.preview({mode:'force_reset_all'},ACTOR,false))).toBe(403);
+  const p=manager.preview({mode:'force_reset_all'},ACTOR,true);
+  expect(statusOf(()=>manager.apply({token:p.token,confirmation:'物品台帳を強制リセット'},ACTOR,true))).toBe(400);
+  store.db.prepare('INSERT INTO card_history_evidence VALUES(?,?,?)').run('evidence/late/new.json',digest('new'),Buffer.from('new').toString('base64'));
+  expect(statusOf(()=>apply(p))).toBe(409);
+  expect(store.ledgerGeneration()).toBe(0);
+ });
+ it('blocks open physical-card writes and preserves everything when the audit commit fails',()=>{
+  const claimed=cards.claim({code:row.code,idm:'1123456789ABCDEF',url:row.url,client:'PC',manifest_sha256:'a'.repeat(64),pdf_sha256:'b'.repeat(64)},ACTOR);
+  const preview=manager.preview({mode:'force_reset_all'},ACTOR,true);
+  expect(statusOf(()=>manager.apply({token:preview.token,confirmation:'連番と重複防止を含めて初期化'},ACTOR,true))).toBe(400);
+  expect(cards.snapshot().active).toHaveLength(1);
+  cards.cancel({operation:claimed.operation},ACTOR);
+  const revision=manager.snapshot().revision,history=cards.backup();
+  store.db.exec("CREATE TRIGGER reject_reset_audit BEFORE INSERT ON issuer_management_events BEGIN SELECT RAISE(FAIL,'test-audit'); END;");
+  expect(()=>apply(manager.preview({mode:'force_reset_all'},ACTOR,true))).toThrow('test-audit');
+  expect(manager.snapshot().revision).toBe(revision);expect(cards.backup()).toEqual(history);expect(store.ledgerGeneration()).toBe(0);
+  expect(store.db.prepare('SELECT count(*) AS n FROM numbering_reset_archives').get()!.n).toBe(0);
+ });
+ it('clears unfinished reservations only with explicit all-PC-stop confirmation and archives them',()=>{
+  const claimed=cards.claim({code:row.code,idm:'1123456789ABCDEF',url:row.url,client:'stopped-PC',manifest_sha256:'a'.repeat(64),pdf_sha256:'b'.repeat(64)},ACTOR);
+  const p=manager.preview({mode:'force_reset_all'},ACTOR,true);
+  expect(p.numbering_reset?.outstanding_claims).toBe(1);
+  apply(p);expect(cards.snapshot().active).toEqual([]);
+  expect(store.db.prepare('SELECT count(*) AS n FROM card_history_locks').get()!.n).toBe(0);
+  const saved=JSON.parse(String(store.db.prepare('SELECT snapshot_json FROM numbering_reset_archives').get()!.snapshot_json));
+  expect(saved.card_history_claims[0].id).toBe(claimed.operation);
+  expect(saved.card_history_locks.length).toBeGreaterThan(0);
+ });
+});

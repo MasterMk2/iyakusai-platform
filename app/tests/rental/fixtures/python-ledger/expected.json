@@ -1,0 +1,162 @@
+{
+ "actor": {
+  "id": "demo",
+  "name": "試用スタッフ"
+ },
+ "canonical_sample": "{\"Z\":{\"x\":-5,\"y\":0},\"a\":\"日本\\n\\\"x\\\"\\u0001\",\"b\":[1,true,null],\"é\":2}",
+ "fingerprints": {
+  "0a1b2c3d-4e5f-4a6b-9c7d-8e9f0a1b2c3d": "339bbdcbe4c2019524720bf6ebfdd3f244400112759cc32fec092b80f50e0453",
+  "1d2c3b4a-5f6e-4d7c-a8b9-c0d1e2f3a4b5": "f616404074174b96b3897f38c290ed62e25cae577673d9e9ea7477ab32ae1a77",
+  "6f1c1d2e-3b4a-4c5d-8e6f-7a8b9c0d1e2f": "38147333abaa4c7d87a77f67fcfc76c92e97d769e49551fbebf042c8825543c6"
+ },
+ "groups": [
+  {
+   "id": "B-7824d953e6df4b8c993d2a1989c35d64",
+   "name": "試用 事前団体"
+  },
+  {
+   "id": "B-110da45048c64912aeedea9a94120887",
+   "name": "試用 本部"
+  },
+  {
+   "id": "B-baf7206ac759498eab45c8a92a86489a",
+   "name": "試用 模擬店A"
+  },
+  {
+   "id": "B-7fc01f790cc444a8a92e6442c10c8dc5",
+   "name": "試用 模擬店B"
+  }
+ ],
+ "items": {
+  "IY-000123": {
+   "code": "IY-000123",
+   "current_loan": null,
+   "name": "試用 延長コード",
+   "planned_actor_id": null,
+   "planned_assigned_at": null,
+   "planned_borrower_id": null,
+   "planned_borrower_name": null,
+   "planned_consumed_operation": null,
+   "planned_state": "unassigned",
+   "status": "review",
+   "url": null,
+   "version": 2
+  },
+  "IY-000124": {
+   "code": "IY-000124",
+   "current_loan": null,
+   "name": "試用 折りたたみ机",
+   "planned_actor_id": null,
+   "planned_assigned_at": null,
+   "planned_borrower_id": null,
+   "planned_borrower_name": null,
+   "planned_consumed_operation": null,
+   "planned_state": "unassigned",
+   "status": "ready",
+   "url": null,
+   "version": 0
+  },
+  "IY-PLAN-000001": {
+   "code": "IY-PLAN-000001",
+   "current_loan": {
+    "actor": {
+     "id": "demo",
+     "name": "試用スタッフ"
+    },
+    "borrower": "試用 模擬店B",
+    "borrower_id": "B-7fc01f790cc444a8a92e6442c10c8dc5",
+    "operation_id": "1d2c3b4a-5f6e-4d7c-a8b9-c0d1e2f3a4b5",
+    "server_at": "2026-10-13T05:53:18.954Z"
+   },
+   "name": "事前割当 机",
+   "planned_actor_id": "demo",
+   "planned_assigned_at": "2026-10-13T05:53:18.927Z",
+   "planned_borrower_id": "B-7824d953e6df4b8c993d2a1989c35d64",
+   "planned_borrower_name": "試用 事前団体",
+   "planned_consumed_operation": "1d2c3b4a-5f6e-4d7c-a8b9-c0d1e2f3a4b5",
+   "planned_state": "fulfilled",
+   "status": "loaned",
+   "url": "https://rental.example.jp/i/IY-PLAN-000001",
+   "version": 2
+  }
+ },
+ "operations": [
+  {
+   "meta": {
+    "action": "borrow",
+    "borrower": "試用 模擬店A",
+    "client_at": "2026-10-12T12:00:00Z",
+    "client_read_at": "2026-10-12T11:59:58+09:00",
+    "condition": "normal",
+    "item_code": "IY-000123",
+    "item_version": 0,
+    "note": "付属品\tケーブル 2本",
+    "operation_id": "6f1c1d2e-3b4a-4c5d-8e6f-7a8b9c0d1e2f"
+   },
+   "photos": [
+    "red",
+    "blue"
+   ],
+   "receipt": {
+    "action": "borrow",
+    "drive_synced_count": 0,
+    "item_code": "IY-000123",
+    "operation_id": "6f1c1d2e-3b4a-4c5d-8e6f-7a8b9c0d1e2f",
+    "photos_count": 2,
+    "server_at": "2026-10-13T05:53:18.932Z",
+    "status": "local_saved"
+   }
+  },
+  {
+   "meta": {
+    "action": "return",
+    "borrower": "",
+    "client_at": "",
+    "client_read_at": "",
+    "condition": "damage",
+    "item_code": "IY-000123",
+    "item_version": 1,
+    "note": "角に傷",
+    "operation_id": "0a1b2c3d-4e5f-4a6b-9c7d-8e9f0a1b2c3d"
+   },
+   "photos": [
+    "blue"
+   ],
+   "receipt": {
+    "action": "return",
+    "drive_synced_count": 0,
+    "item_code": "IY-000123",
+    "operation_id": "0a1b2c3d-4e5f-4a6b-9c7d-8e9f0a1b2c3d",
+    "photos_count": 1,
+    "server_at": "2026-10-13T05:53:18.945Z",
+    "status": "local_saved"
+   }
+  },
+  {
+   "meta": {
+    "action": "borrow",
+    "borrower": "試用 模擬店B",
+    "client_at": "2026-10-17T09:00:00.123Z",
+    "client_read_at": "",
+    "condition": "normal",
+    "item_code": "IY-PLAN-000001",
+    "item_version": 1,
+    "note": "",
+    "operation_id": "1d2c3b4a-5f6e-4d7c-a8b9-c0d1e2f3a4b5"
+   },
+   "photos": [
+    "red",
+    "blue"
+   ],
+   "receipt": {
+    "action": "borrow",
+    "drive_synced_count": 0,
+    "item_code": "IY-PLAN-000001",
+    "operation_id": "1d2c3b4a-5f6e-4d7c-a8b9-c0d1e2f3a4b5",
+    "photos_count": 2,
+    "server_at": "2026-10-13T05:53:18.954Z",
+    "status": "local_saved"
+   }
+  }
+ ]
+}

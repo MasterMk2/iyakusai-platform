@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#163960">
+  <meta name="description" content="医薬祭スタッフ用の物品貸出・返却">
+  <link rel="manifest" href="/rental/manifest.webmanifest">
+  <link rel="stylesheet" href="/rental/styles.css">
+  <title>物品貸出｜医薬祭 委員会アプリ</title>
+  <script src="/rental/app.js" defer></script>
+</head>
+<body>
+  <!-- Same header and module tabs as the common screens (src/client/components/AppShell.tsx). -->
+  <header class="masthead"><a class="brand" href="/#/home" data-leave><span>医薬祭</span><strong>委員会アプリ</strong></a><div class="session"><span id="connection">接続確認中</span><button id="logout" class="quiet" hidden>ログアウト</button></div></header>
+  <nav class="global-nav" aria-label="機能"><ul>
+    <li><a href="/#/home" data-leave><svg class="nav-icon" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11.5 12 4l9 7.5M5.5 9.5V20h5v-6h3v6h5V9.5"/></svg><span>ホーム</span></a></li>
+    <li><a href="/#/tasks" data-leave><svg class="nav-icon" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 6.5h10M10 12h10M10 17.5h10M3.5 6.5l1.5 1.5 2.5-3M3.5 12l1.5 1.5 2.5-3M3.5 17.5 5 19l2.5-3"/></svg><span>タスク</span></a></li>
+    <li><a href="/rental" aria-current="page" data-leave><svg class="nav-icon" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.5 12 3.5l8.5 4v9L12 20.5l-8.5-4zM3.5 7.5 12 11.5l8.5-4M12 11.5v9"/></svg><span>物品<wbr>貸出</span></a></li>
+    <li><a href="/#/all" data-leave><svg class="nav-icon" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 13.5 6.5 5h11l3 8.5V19a1 1 0 0 1-1 1h-15a1 1 0 0 1-1-1zM3.5 13.5h5l1.5 2.5h4l1.5-2.5h5"/></svg><span>メール</span></a></li>
+    <li><a href="/#/contacts" data-leave><svg class="nav-icon" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5h12a1.5 1.5 0 0 1 1.5 1.5v14a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 19V5A1.5 1.5 0 0 1 6 3.5zM2.5 8h2M2.5 12h2M2.5 16h2M12 11.5a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5zM8 16.5c.7-2 2.2-3 4-3s3.3 1 4 3"/></svg><span>連絡先</span></a></li>
+    <li><a href="/#/bot" data-leave><svg class="nav-icon" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 6.5h15a1.5 1.5 0 0 1 1.5 1.5v7.5a1.5 1.5 0 0 1-1.5 1.5h-8.5L7 20.5V17h-2.5A1.5 1.5 0 0 1 3 15.5V8a1.5 1.5 0 0 1 1.5-1.5zM8 12h.01M12 12h.01M16 12h.01"/></svg><span>Bot</span></a></li>
+    <li><a href="/#/settings" data-leave><svg class="nav-icon" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h9m4 0h3M4 17h3m4 0h9M15 4.5v5M9 14.5v5"/></svg><span>設定</span></a></li>
+  </ul></nav>
+  <main>
+    <div id="message" class="message" role="status" aria-live="polite" hidden></div>
+    <section id="login-panel" class="login-panel">
+      <h1>ログイン</h1><p id="login-text">医薬祭アカウントでログインしてください。ログインすると、この画面に戻ります。</p>
+      <button id="login-button" class="primary" type="button">ログイン画面を開く</button>
+      <p class="small">この端末で保留した登録は、ログイン後に再送できます。</p>
+    </section>
+    <div id="workspace" hidden>
+      <div class="view-tabs" role="tablist" aria-label="画面の切替"><button id="view-work" role="tab" aria-selected="true" aria-controls="work-view" class="selected">貸出・返却</button><button id="view-info" role="tab" aria-selected="false" aria-controls="info-view">情報</button></div>
+      <div id="work-view" role="tabpanel" aria-labelledby="view-work">
+      <section class="batch" aria-labelledby="batch-title">
+        <div class="section-line"><h1 id="batch-title">連続して処理する</h1><button id="new-batch" class="quiet">区切って次の団体へ</button></div>
+        <div class="mode-tabs" role="group" aria-label="処理の種類"><button data-mode="borrow" class="selected" aria-pressed="true">貸出</button><button data-mode="return" aria-pressed="false">返却</button><button data-mode="check" aria-pressed="false"><span class="mode-word">随時</span><span class="mode-word">チェック</span></button></div>
+        <p class="small auto-mode-hint">読取り時に物品の状態に合わせて切り替えます。貸出中は、返却か随時チェックを選んでください。</p>
+        <div id="borrower-row" class="borrower-row"><label for="borrower">今回の貸出先</label><input id="borrower" list="borrower-options" placeholder="登録済みの団体・部署・受取人" autocomplete="off"><datalist id="borrower-options"></datalist><span class="small">事前に割り当てた団体は読取り時に入ります。変更もできます。</span></div>
+        <label id="photo-skip-row" class="skip-row"><input id="photo-skip" type="checkbox"><span>写真を省略する <span class="small">椅子など写真が要らない物品。傷があれば撮れます。</span></span></label>
+        <div class="section-line"><div id="batch-summary" class="batch-summary"></div><button id="edit-batch" class="quiet" hidden>設定を開く</button></div>
+      </section>
+      <div class="station">
+        <div class="work-area">
+          <section class="identify" aria-label="物品を読み取る">
+            <div class="scan-actions"><button id="scan-qr" class="primary">QRを連続で読む</button><button id="scan-nfc" hidden>NFCを連続で読む</button><button id="scan-pc" type="button" aria-pressed="false" hidden>PCの読取機を使う</button><button id="stop-camera" hidden>カメラを閉じる</button></div>
+            <p id="reader-status" class="reader-status" role="status" aria-live="polite" hidden></p>
+            <form id="item-form"><label class="sr-only" for="item-code">個体コードまたはURL</label><input id="item-code" placeholder="No.・個体コード／URL" inputmode="text" autocomplete="off" autocapitalize="characters"><button type="submit">開く</button></form>
+            <p class="small">NFCはスマホで読み取ってこの画面を開けます。iPhoneでNFCを読むときはカメラを閉じてください。<span id="pc-reader-hint" hidden>PCでは、RC-S370をつないで「物品読取」を起動し、「PCの読取機を使う」を押すと、置いたカードがこの画面で開きます。</span></p>
+          </section>
+          <section id="camera-panel" class="camera-panel" hidden aria-label="カメラ">
+            <video id="camera" muted playsinline autoplay></video><div id="scan-frame" class="scan-frame"></div><div id="camera-label" class="camera-label">次のQRを写してください</div>
+            <div id="capture-actions" class="capture-actions" hidden><button id="capture-photo">1枚撮る</button><button id="capture-and-next" class="primary">撮って登録・次へ</button></div>
+          </section>
+          <section id="empty-item" class="empty-item"><div class="empty-mark" aria-hidden="true">▥</div><h2>最初の物品を読み取る</h2><p>貸出先を1回選んだら、読取り・撮影・登録を繰り返せます。送信中も次へ進めます。</p></section>
+          <section id="item-panel" class="item-panel" hidden aria-labelledby="item-title">
+            <div class="item-top"><div><p id="current-code" class="item-code"></p><h2 id="item-title"></h2><p id="item-state"></p><p id="item-origin" class="small"></p><p id="planned-borrower" class="small" hidden></p><p id="lend-note" class="lend-note" hidden></p></div><button id="edit-current-item" class="quiet" type="button" hidden>物品情報を編集</button><button id="correct-current-item" class="quiet" type="button" hidden>登録を訂正・取消</button><button id="skip-item" class="quiet">この物品を閉じる</button></div>
+            <div id="item-warning" class="item-warning" hidden></div>
+            <section id="workflow" class="workflow" hidden aria-label="貸出・返却の手順">
+              <ol id="workflow-progress" class="workflow-progress" aria-label="操作の進み具合"></ol>
+              <h3 id="workflow-title" tabindex="-1"></h3>
+              <div id="workflow-context" class="workflow-context" aria-label="入力中の物品"><strong id="workflow-context-item"></strong><span id="workflow-context-action"></span></div>
+              <div id="workflow-details" data-feedback hidden>
+                <p>今回貸す物品を入力し、券面の手書き内容と照合してください。同じ品名の物品をまとめて貸し、全数をまとめて返却するカードです。</p>
+                <div class="irregular-fields">
+                  <label>品名<input id="irregular-name" maxlength="160" autocomplete="off" placeholder="例：延長コード 5m"></label>
+                  <div class="irregular-quantity"><label>数量<input id="irregular-quantity" type="number" min="1" max="10000" step="1" inputmode="numeric"></label><label>単位<input id="irregular-unit" maxlength="20" placeholder="個・本・セット"></label></div>
+                  <label>物品区分<select id="irregular-scope"><option value="">選んでください</option><option>学内</option><option>学外</option><option>委員会</option></select></label>
+                  <label>借用元<span class="small">（学外物品は必須）</span><input id="irregular-owner" maxlength="120" autocomplete="off" placeholder="借りた業者・部署など"></label>
+                </div>
+                <p class="small">返却後は内容を消して、別の物品に再利用できます。過去の入力は下の履歴に残ります。</p>
+              </div>
+              <div id="workflow-condition" data-feedback><div class="damage-choices"><button type="button" data-damage="normal" aria-pressed="false" aria-describedby="condition-hint">破損なし</button><button type="button" data-damage="damage" aria-pressed="false" aria-describedby="condition-hint">破損あり</button></div><p id="condition-hint">実物を確認し、破損の有無を選んでください。</p></div>
+              <div id="workflow-photos" data-feedback></div>
+              <div id="workflow-note" data-feedback><p id="note-save-status" class="small" role="status" aria-live="polite"></p></div>
+              <div id="workflow-review" data-feedback><dl id="workflow-review-values"></dl></div>
+              <div id="workflow-navigation" class="workflow-navigation" data-feedback><button id="workflow-back" type="button">戻る</button><button id="workflow-next" type="button" class="primary">次へ</button></div>
+            </section>
+            <section id="operation-choice" class="operation-choice" hidden tabindex="-1" aria-labelledby="operation-choice-title" aria-describedby="operation-choice-hint">
+              <p id="operation-choice-item" class="operation-choice-item"></p>
+              <h3 id="operation-choice-title">この貸出中の物品をどうしますか？</h3>
+              <div class="operation-choice-actions"><button type="button" data-choice="return">返却する</button><button type="button" data-choice="check">随時チェック</button></div>
+              <p id="operation-choice-hint" class="small">選んだ後に状態・写真・メモを確認して登録します。随時チェックは、貸出中の状態を保ったまま今回の確認記録を保存します。</p>
+            </section>
+            <section id="inspection-panel" class="inspection-panel" hidden tabindex="-1" aria-label="随時チェック">
+              <div class="section-line"><h3>随時チェック</h3><button id="check-refresh" type="button">最新情報に更新</button></div>
+              <p class="small">貸出時の記録と現物を比べ、今回のチェック記録を保存します。貸出・返却の状態は変わりません。</p>
+              <p id="check-updated" class="small" role="status"></p>
+              <p id="check-pending" class="item-warning" hidden></p>
+              <h3 id="check-loan-title">貸出時の状態</h3><p id="check-loan-state"></p><p id="check-loan-note" class="check-note"></p>
+              <div id="check-photos" class="check-photos"></div><p id="check-photo-hint" class="small"></p>
+              <h3 id="check-group-title"></h3><p id="check-group-total"></p><div id="check-inventory"></div>
+              <button id="check-next" class="primary full-width" type="button">確認を終えて次の物品へ</button>
+            </section>
+            <details id="irregular-history" class="item-summary" hidden><summary>このカードの貸出・返却履歴（最近50件）</summary><div id="irregular-history-values"></div></details>
+            <details id="item-summary" class="item-summary"><summary>物品の詳細・貸出時の記録</summary><dl id="item-summary-values"></dl><p id="summary-updated" class="small"></p><div id="summary-loan-photos" class="check-photos"></div></details>
+            <div id="return-options" class="return-options" hidden><p>実物を確認して、そのまま返却登録</p><button id="return-normal" class="primary">異常なしで返却・次へ</button><div class="condition-actions"><button data-condition="maintenance">要清掃・整備</button><button data-condition="damage">破損・不足</button></div></div>
+            <div id="photo-block"><div class="section-line"><h3>現状写真 <span id="photo-count">0枚</span></h3><div class="photo-tools"><button id="open-photo-camera">連続撮影</button><button id="file-photo">写真を追加</button></div></div><input id="photo-input" type="file" accept="image/*" capture="environment" multiple hidden><div id="photos" class="photos"></div><p id="photo-tip" class="small">貸出は2枚以上、最大5枚。全体・付属品・傷を写してください。</p></div>
+            <div id="lend-condition" class="lend-condition" hidden><p>貸出時の状態</p><div class="condition-actions"><button data-lend="normal" class="selected" aria-pressed="true">損傷なし</button><button data-lend="damage" aria-pressed="false">損傷あり（傷・汚れ・不足）</button></div></div>
+            <label class="note-label" for="note"><span id="note-title">メモ</span> <span id="note-hint" class="small">任意</span></label><textarea id="note" rows="2" placeholder="不足しているもの、傷の場所など"></textarea>
+            <button id="queue-item" class="primary full-width">貸出を登録・次へ</button><p id="commit-hint" class="small">次へ進んだ後も、この画面で送信が続きます。未送信が0件になるまで画面を開いてください。</p>
+          </section>
+          <section id="workflow-completion" class="workflow-completion" hidden aria-label="処理結果" data-feedback><h2 id="completion-title" tabindex="-1"></h2><p id="completion-item"></p><p id="completion-status" role="status" aria-live="polite"></p><button id="completion-next" class="primary" type="button">次の物品を読み取る</button></section>
+        </div>
+        <aside class="queue-panel" aria-labelledby="queue-title"><div class="section-line"><h2 id="queue-title">今回の処理</h2><button id="resend" class="quiet">再送</button></div><div id="queue-summary" class="queue-summary"></div><p id="storage-info" class="small"></p><ol id="queue-list" class="queue-list"></ol><p class="small storage-warning">端末の未送信写真は、ブラウザのデータを消すと失われます。登録済みとDrive保存済みは別に表示します。</p></aside>
+      </div>
+      <details class="label-panel" hidden><summary>貼付ラベルをまとめて作る</summary><p class="small">名刺サイズ91×55 mm、A4に10枚。1行に「個体コード・物品名・HTTPS URL」をタブ区切りで入れてください。</p><form id="label-form"><label for="label-items">ラベル一覧 <span class="small">最大200個体</span></label><textarea id="label-items" rows="4" spellcheck="false" placeholder="IY-TEST-000001&#9;試験用カード&#9;https://example.com/?iy=IY-TEST-000001"></textarea><div class="label-actions"><button id="label-current" type="button">表示中の物品を追加</button><button class="primary" type="submit">印刷用PDFを作る</button></div><a id="label-download" hidden download="物品ラベル.pdf">PDFを開く・保存する</a><button id="label-export" type="button" hidden>書込み用データを保存</button><p class="small">PDFと書込み用データを同じフォルダーに保存し、印刷したラベルと合わせて使ってください。ラベル作成だけでは物品登録やカード発行は完了しません。</p></form></details>
+      </div>
+      <section id="info-view" class="info-view" role="tabpanel" aria-labelledby="view-info" hidden>
+        <div class="section-line"><h1>団体ごとの物品</h1><div class="info-actions"><button id="info-refresh">更新</button><button id="info-csv">CSVを保存</button><a id="info-print" class="info-print" href="/rental/print" target="_blank" rel="noopener">返却チェックシート</a></div></div>
+        <p id="info-updated" class="small"></p>
+        <p id="info-drive" class="small" hidden></p>
+        <div id="info-total" class="info-total"></div>
+        <label class="sr-only" for="info-filter">団体名・No.・物品名で絞り込む</label><input id="info-filter" type="search" placeholder="団体名・No.・物品名で絞り込む" autocomplete="off">
+        <label class="info-check"><input id="info-open-only" type="checkbox"><span>貸出中・要確認がある団体だけ</span></label>
+        <div id="info-groups" class="info-groups"></div>
+        <p class="small">返却の確認：団体から戻ったカードの枚数が「貸出中」の数と合えば、全点が戻っています。合わないときは団体を開き、貸出中の No. を確認してください。No. を押すと貸出・返却の画面で開きます。</p>
+      </section>
+    </div>
+  </main><footer>医薬祭実行委員会 <span id="staff-name"></span></footer>
+  <dialog id="item-editor" class="item-editor" aria-labelledby="item-edit-title">
+    <form id="item-edit-form">
+      <div class="section-line"><h2 id="item-edit-title">物品情報を編集</h2><button id="item-edit-close" type="button" class="quiet">閉じる</button></div>
+      <p id="item-edit-code" class="item-code"></p>
+      <p class="small">番号・QR・貸出状態はそのままです。過去の貸出記録と写真は保持されます。変更はこの管理システムに保存されます。</p>
+      <div class="irregular-fields">
+        <label>物品名<input id="edit-item-name" maxlength="200" required autocomplete="off"></label>
+        <label>物品区分<select id="edit-item-scope"><option value="">未確認</option><option>学内</option><option>学外</option><option>委員会</option></select></label>
+        <label>借用元<span class="small">（学外物品は必須）</span><input id="edit-item-owner" maxlength="120" autocomplete="off"></label>
+      </div>
+      <p class="small">学外物品は写真が必要です。印刷済みの券面や元のスプレッドシートは自動では変わりません。</p>
+      <p id="item-edit-status" class="item-edit-status" role="status" aria-live="polite"></p>
+      <p id="item-edit-current" class="item-edit-current" hidden></p>
+      <div class="item-edit-actions"><button id="item-edit-save" class="primary" type="submit">変更を保存</button><button id="item-edit-compare" type="button" hidden>最新の情報を確認</button></div>
+      <details class="item-edit-history"><summary>変更履歴（直近20件）</summary><div id="item-edit-history"></div></details>
+    </form>
+  </dialog>
+  <dialog id="correction-dialog" class="item-editor correction-dialog" aria-labelledby="correction-title">
+    <div class="section-line"><h2 id="correction-title">登録の訂正・取消</h2><button id="correction-close" type="button" class="quiet">閉じる</button></div>
+    <p id="correction-item" class="item-code"></p>
+    <p id="correction-state" class="correction-state"></p>
+    <p class="small">誤って登録したときに使います。元の記録と写真は消さずに残し、「取消」「訂正」として、この画面の履歴とDriveの台帳シートに記録します。</p>
+    <p id="correction-status" class="item-edit-status" role="status" aria-live="polite"></p>
+    <button id="correction-reload" type="button" hidden>最新の情報を読み直す</button>
+    <section id="correction-release" class="correction-action" hidden aria-labelledby="correction-release-title">
+      <h3 id="correction-release-title">要確認を解除する</h3>
+      <p id="correction-release-target"></p>
+      <label><span>確認した内容<span class="small">（必須）</span></span><input id="correction-release-reason" maxlength="200" autocomplete="off" placeholder="例：清掃済み・破損なしを確認した"></label>
+      <button id="correction-release-submit" type="button" class="primary">貸出可能に戻す</button>
+    </section>
+    <section id="correction-borrower" class="correction-action" hidden aria-labelledby="correction-borrower-title">
+      <h3 id="correction-borrower-title">貸出先を訂正する</h3>
+      <p id="correction-borrower-target"></p>
+      <label><span>正しい貸出先</span><input id="correction-borrower-name" list="borrower-options" maxlength="120" autocomplete="off" placeholder="登録済みの団体・部署・受取人"></label>
+      <label><span>理由<span class="small">（任意）</span></span><input id="correction-borrower-reason" maxlength="200" autocomplete="off"></label>
+      <button id="correction-borrower-submit" type="button" class="primary">貸出先を訂正する</button>
+    </section>
+    <section id="correction-void" class="correction-action" hidden aria-labelledby="correction-void-title">
+      <h3 id="correction-void-title">直前の登録を取り消す</h3>
+      <p id="correction-void-target"></p>
+      <p id="correction-void-effect" class="correction-effect"></p>
+      <label><span>取り消す理由<span class="small">（必須）</span></span><input id="correction-void-reason" maxlength="200" autocomplete="off" placeholder="例：別の物品のカードを読んでいた"></label>
+      <button id="correction-void-submit" type="button" class="danger">この登録を取り消す</button>
+    </section>
+    <p id="correction-void-blocked" class="small" hidden></p>
+    <details class="item-edit-history" open><summary>この物品の登録（新しい順・最大20件）</summary><ol id="correction-operations" class="correction-list"></ol></details>
+    <details class="item-edit-history"><summary>訂正・取消の履歴</summary><ol id="correction-history" class="correction-list"></ol></details>
+  </dialog>
+</body>
+</html>

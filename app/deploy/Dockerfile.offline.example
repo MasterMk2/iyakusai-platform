@@ -1,0 +1,20 @@
+# 無効なサンプル（未適用）。承認 A6 まで実行しない。推奨の「オフライン成果物」方式。
+# - ビルドコンテキストはリポジトリではなく、運用者ローカルの成果物ディレクトリ。
+#   中身は Dockerfile（このファイルの複製）、package.json、package-lock.json、dist/、本番依存だけの node_modules/ に限る。
+# - このファイルは何も取得しない（npm を実行しない）。ベースイメージは、ビルドホストに既にある
+#   イメージを運用者がダイジェストで指定する。既定値はなく、未指定ならビルドは失敗する。
+#   例: --build-arg RUNTIME_IMAGE=<リポジトリ名>@sha256:<運用者が確認した 64 桁>（タグだけ・latest は不可）
+# - 取得を防ぐため、ビルドは --pull=false と --network=none で行う。ポートは公開しない（EXPOSE も書かない）。
+# - このサンプルと Docker・Compose での動作は未検証。
+
+ARG RUNTIME_IMAGE
+FROM ${RUNTIME_IMAGE}
+ENV NODE_ENV=production
+WORKDIR /app
+COPY package.json package-lock.json ./
+COPY node_modules ./node_modules
+COPY dist ./dist
+# データボリュームの書き込み先だけを作る（取得なし）。
+RUN mkdir -p /app/data && chown node:node /app/data
+USER node
+CMD ["node", "dist/server/main.js"]

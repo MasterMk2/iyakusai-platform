@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "identities": [
+    { "identity": "editor-a@idp.example", "userId": "u-editor-a" },
+    { "identity": "viewer-b@idp.example", "userId": "u-viewer-b" },
+    { "identity": "admin@idp.example", "userId": "u-admin" }
+  ]
+}

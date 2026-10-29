@@ -1,0 +1,5 @@
+nfcpy==1.0.4
+ndeflib==0.3.3
+libusb1==3.4.0
+pyserial==3.5
+pyDes==2.0.1

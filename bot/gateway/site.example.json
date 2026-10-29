@@ -1,0 +1,4 @@
+{
+  "listenHost": "10.0.0.50",
+  "trustedClientAddresses": ["10.0.0.19", "10.0.0.50"]
+}

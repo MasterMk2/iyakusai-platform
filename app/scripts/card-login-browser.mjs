@@ -1,0 +1,91 @@
+import { chromium } from '@playwright/test';
+import { writeFileSync, mkdirSync } from 'node:fs';
+import assert from 'node:assert/strict';
+/* global document, innerWidth */
+
+mkdirSync('verification', { recursive: true });
+const browser = await chromium.launch({ channel: 'msedge', headless: true });
+const errors = [];
+const context = await browser.newContext({ viewport: { width: 1280, height: 960 } });
+const page = await context.newPage();
+page.on('pageerror', error => errors.push(error.message));
+const base = 'http://127.0.0.1:18749';
+const fixture = await (await context.request.get(base + '/api/card-demo/tap')).json();
+const results = [];
+const check = (name, value) => { assert.ok(value, name); results.push({ name, passed: true }); };
+const login = async (id) => {
+  await page.goto(base + '/login');
+  await page.getByRole('textbox', { name: '学籍番号', exact: true }).fill(id);
+  await page.getByLabel('パスワード', { exact: true }).fill(fixture.password);
+  await page.getByRole('button', { name: 'ログイン', exact: true }).click();
+  await page.getByRole('link', { name: '設定', exact: true }).click();
+  await page.getByRole('heading', { name: '委員カード', exact: true }).waitFor();
+};
+try {
+  await page.goto(base + '/login');
+  await page.getByRole('heading', { name: '委員カードでログイン', exact: true }).waitFor();
+  check('card and password login coexist', await page.getByRole('button', { name: 'PCの読取機に接続' }).isVisible());
+  await page.screenshot({ path: 'verification/login-desktop.png', fullPage: true });
+  await page.setViewportSize({ width: 375, height: 900 });
+  await page.screenshot({ path: 'verification/login-phone.png', fullPage: true });
+  check('375px login has no page overflow', await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await page.goto(fixture.url);
+  await page.getByRole('alert').waitFor();
+  check('fragment is removed before render', new URL(page.url()).hash === '');
+  check('unregistered phone directs to initial verification', (await page.getByRole('alert').innerText()).includes('初回の本人確認'));
+  check('credential is absent from rendered HTML', !(await page.content()).includes(fixture.url.split('#')[1]));
+  await page.screenshot({ path: 'verification/unregistered-phone.png', fullPage: true });
+  await login('21110002');
+  await page.getByLabel('端末の名前', { exact: true }).fill('合成ブラウザ');
+  await page.getByRole('button', { name: 'この端末を登録する', exact: true }).click();
+  await page.getByText('このブラウザを登録しました。次回から委員カードをタッチしてログインできます。', { exact: true }).waitFor();
+  check('initial registration works after password login', true);
+  check('375px settings have no page overflow', await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await page.screenshot({ path: 'verification/member-settings-phone.png', fullPage: true });
+  await page.getByRole('button', { name: 'ログアウト', exact: true }).click();
+  await page.goto(fixture.url);
+  await page.waitForURL('**/#/home');
+  check('registered browser logs in with a tap and no password entry', true);
+  await page.getByRole('button', { name: 'ログアウト', exact: true }).click();
+  let reads = 0;
+  const bridgeQueries = [];
+  await page.route('http://127.0.0.1:48731/v1/reads?**', async route => {
+    const query = new URL(route.request().url()).searchParams;
+    bridgeQueries.push(route.request().url());
+    const first = query.has('claim');
+    if (!first) reads += 1;
+    await route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': base }, body: JSON.stringify({ ok: true, login_cards: true, instance: 'synthetic', seq: first ? 0 : 1, revision: 0, event_seq: 0, reader: { state: 'ready', text: '委員カードをタッチしてください' }, reads: first || reads > 1 ? [] : [{ seq: 1, url: fixture.url, code: 'LOGIN-CARD', age_ms: 50 }] }) });
+  });
+  await page.getByRole('button', { name: 'PCの読取機に接続' }).click();
+  await page.getByTestId('current-user').waitFor();
+  check('PC reader contract logs in with no password entry', (await page.getByTestId('current-user').innerText()).includes('合成 太郎'));
+  check('PC reader requests are purpose-limited and never put card credentials in URLs', bridgeQueries.length >= 2 && bridgeQueries.every(u => !u.includes(fixture.url.split('#')[1]) && new URL(u).searchParams.get('purpose') === 'login'));
+  await page.unroute('http://127.0.0.1:48731/v1/reads?**');
+  await page.getByRole('link', { name: '設定', exact: true }).click();
+  await page.getByRole('button', { name: '登録を解除', exact: true }).click();
+  await page.getByRole('heading', { name: '委員カードでログイン', exact: true }).waitFor();
+  await page.goto(fixture.url);
+  await page.getByRole('alert').waitFor();
+  check('revoked browser cannot log in on the next tap', (await page.getByRole('alert').innerText()).includes('初回の本人確認'));
+  await login('21110001');
+  await page.setViewportSize({ width: 1280, height: 960 });
+  check('common admin sees issuing controls', await page.getByRole('heading', { name: '委員カードを発行', exact: true }).isVisible());
+  await page.getByLabel('委員', { exact: true }).selectOption({ label: '合成 太郎' });
+  await page.getByLabel('カードの呼び名', { exact: true }).fill('合成発行テスト');
+  await page.getByRole('button', { name: '書込み用の情報を作る', exact: true }).click();
+  await page.getByRole('button', { name: '読取確認が済んだカードを有効化', exact: true }).waitFor();
+  await page.getByRole('button', { name: '読取確認が済んだカードを有効化', exact: true }).click();
+  check('activation asks for readback confirmation', (await page.getByRole('alert').innerText()).includes('書込みと読取確認'));
+  await page.screenshot({ path: 'verification/admin-issuance.png', fullPage: true });
+  // No card data are copied into screenshots: the credential disclosure stays closed.
+  await page.getByRole('button', { name: '今回の発行を取り消す', exact: true }).click();
+  await page.getByText('今回の発行を取り消しました。', { exact: true }).waitFor();
+  check('pending issue can be cancelled', true);
+  check('no browser exceptions', errors.length === 0);
+  writeFileSync('verification/browser-result.json', JSON.stringify({ syntheticOnly: true, hardwareUsed: false, results, errors }, null, 2));
+  console.log(JSON.stringify({ passed: results.length, errors }));
+} catch (error) {
+  await page.screenshot({ path: 'verification/browser-failure.png', fullPage: true });
+  writeFileSync('verification/browser-failure.txt', (await page.locator('body').innerText()).slice(0, 6000));
+  throw error;
+} finally { await browser.close(); }
