@@ -9,11 +9,15 @@ import { CandidatesView } from './CandidatesView';
 import { DocView } from './DocView';
 import { ImageView } from './ImageView';
 import { MailView } from './MailView';
+import { MinutesView, useRecordingActive } from './MinutesView';
 import { PendingJobs } from './PendingJobs';
 import { RemindView } from './RemindView';
 
-/** The Bot sub-views (../docs/contracts/bot-front.md §5), in this order. メール was added 2026-10-25. */
-export const BOT_SECTIONS = ['ask', 'doc', 'mail', 'image', 'remind', 'candidates'] as const;
+/**
+ * The Bot sub-views (../docs/contracts/bot-front.md §5), in this order. メール was added 2026-10-25, 議事録 (α,
+ * 2026-11-02) is the app's own and works without the Bot host; it shows only where the server has the minutes on.
+ */
+export const BOT_SECTIONS = ['ask', 'doc', 'mail', 'image', 'remind', 'candidates', 'minutes'] as const;
 export type BotSection = (typeof BOT_SECTIONS)[number];
 
 export const BOT_SECTION_LABELS: Record<BotSection, string> = {
@@ -23,6 +27,7 @@ export const BOT_SECTION_LABELS: Record<BotSection, string> = {
   image: '画像',
   remind: 'リマインド',
   candidates: 'タスク候補',
+  minutes: '議事録',
 };
 
 export function parseBotSection(value: string | undefined): BotSection {
@@ -56,12 +61,18 @@ export function BotView({ section, jobId, refresh, onNavigate, mail }: BotViewPr
     [refresh],
   );
   const meta = useLoader(loadMeta);
-  const failure = meta.error;
+  const loadMinutes = useCallback((signal: AbortSignal) => api<unknown>('GET', '/api/minutes/meta', undefined, signal), []);
+  const minutes = useLoader(loadMinutes);
+  // Off on this server (no such route): the section is not offered. Any other failure shows in the section.
+  const minutesOn = !(minutes.error?.status === 404) && !(minutes.loading && !minutes.data);
+  const isMinutes = section === 'minutes';
+  const recording = useRecordingActive();
+  const failure = isMinutes ? null : meta.error;
   // The picture screen (画像) is optional: it is shown only when the Bot
   // reports the image feature on. Opening its address while it is off shows the questions instead.
   const imageOn = meta.data?.features.image === true;
   const shown: BotSection = section === 'image' && meta.data && !imageOn ? 'ask' : section;
-  const sections = BOT_SECTIONS.filter((item) => item !== 'image' || imageOn);
+  const sections = BOT_SECTIONS.filter((item) => (item !== 'image' || imageOn) && (item !== 'minutes' || minutesOn || isMinutes));
   const select = (target: BotSection) => (event: MouseEvent<HTMLAnchorElement>) => {
     if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
     event.preventDefault();
@@ -87,7 +98,15 @@ export function BotView({ section, jobId, refresh, onNavigate, mail }: BotViewPr
           ))}
         </ul>
       </nav>
-      {meta.loading && <LoadStatus loader={meta} what="Bot の状態" compact />}
+      {!isMinutes && recording && (
+        <p className="banner banner-error" role="status" data-testid="minutes-recording-elsewhere">
+          議事録の録音中か、まだ送っていない録音があります。
+          <a href="#/bot/minutes" onClick={select('minutes')}>
+            議事録を開く
+          </a>
+        </p>
+      )}
+      {!isMinutes && meta.loading && <LoadStatus loader={meta} what="Bot の状態" compact />}
       {failure && isBotDisabled(failure) && (
         <p className="status error" role="alert" data-testid="bot-disabled">
           Bot 機能は、このサーバーでは有効になっていません。管理者に設定を確認してもらってください。
@@ -99,13 +118,18 @@ export function BotView({ section, jobId, refresh, onNavigate, mail }: BotViewPr
         </p>
       )}
       {failure && !isBotDisabled(failure) && failure.status !== 403 && <LoadStatus loader={meta} what="Bot の状態" />}
-      {meta.data && !meta.data.bot.alive && (
+      {!isMinutes && meta.data && !meta.data.bot.alive && (
         <p className="banner banner-warning" role="status" data-testid="bot-not-alive">
           Bot が応答していません（Discord の Bot が止まっている可能性）。依頼は受け付けられ、Bot が動き出すと順に処理されます。
         </p>
       )}
-      {meta.data && !meta.data.bot.alive && <PendingJobs openedJobId={jobId} />}
-      {meta.data && (
+      {!isMinutes && meta.data && !meta.data.bot.alive && <PendingJobs openedJobId={jobId} />}
+      {isMinutes && (
+        <section className="bot-body" aria-label={BOT_SECTION_LABELS.minutes} data-section="minutes">
+          <MinutesView meetingId={jobId && /^mt_[0-9a-f]{16}$/.test(jobId) ? jobId : null} onOpen={(id) => onNavigate('minutes', id)} />
+        </section>
+      )}
+      {!isMinutes && meta.data && (
         <section className="bot-body" aria-label={BOT_SECTION_LABELS[shown]} data-section={shown}>
           {shown === 'ask' && <AskView meta={meta.data} jobId={jobId} onNavigate={onNavigate} />}
           {shown === 'doc' && <DocView meta={meta.data} jobId={jobId} onNavigate={onNavigate} />}

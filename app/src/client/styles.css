@@ -424,6 +424,32 @@ html { scroll-padding-top: 64px; }
 .bot-sections a:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 2px; box-shadow: 0 0 0 2px var(--focus); }
 .bot-body { margin-top: 12px; display: grid; gap: 16px; }
 .bot-ask, .bot-doc, .bot-mail, .bot-image-view, .bot-remind, .bot-candidates { display: grid; gap: 16px; }
+/* Meeting minutes (α 2026-11-02) */
+.bot-minutes { display: grid; gap: 12px; min-width: 0; }
+.minutes-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; }
+.minutes-head .hint { flex: 1 1 320px; }
+.minutes-legend { font-weight: 700; margin: 14px 0 0; padding: 0; }
+.minutes-people { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 4px 12px; margin-top: 8px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-sunken); max-height: 260px; overflow: auto; }
+.bot-form label.minutes-person { display: flex; align-items: center; gap: 8px; margin: 0; font-weight: 400; min-height: 36px; }
+.minutes-recorder { margin-top: 10px; display: grid; gap: 8px; justify-items: start; }
+.minutes-live { width: 100%; border-radius: 6px; font-size: 16px; }
+.minutes-live button { margin-top: 0; }
+.minutes-done { display: grid; gap: 6px; justify-items: start; }
+.minutes-done audio, .minutes-audio { width: 100%; max-width: 640px; }
+.minutes-columns { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; align-items: start; }
+@media (max-width: 860px) { .minutes-columns { grid-template-columns: minmax(0, 1fr); } }
+.minutes-columns .panel { padding: 12px 14px; }
+.minutes-columns h3 { margin: 0 0 8px; font-size: 16px; }
+.minutes-columns h4 { margin: 12px 0 4px; font-size: 15px; }
+.minutes-editor textarea { width: 100%; display: block; font: inherit; line-height: 1.6; resize: vertical; }
+.minutes-body { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.7; margin: 0; }
+.minutes-evidence { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.minutes-ai .rows li { align-items: flex-start; gap: 4px; }
+button.minutes-at { min-height: 28px; padding: 0 6px; font-size: 13px; font-weight: 700; background: var(--info-bg); color: var(--navy); border: 1px solid var(--info-line); font-variant-numeric: tabular-nums; }
+button.minutes-at:hover:not(:disabled) { background: var(--hover-strong); border-color: var(--info-line); }
+button.minutes-at.minutes-unverified { background: var(--amber-bg); color: var(--amber); border-color: var(--amber-line); }
+.minutes-segments { list-style: none; margin: 8px 0 0; padding: 0; max-height: 480px; overflow: auto; display: grid; gap: 4px; line-height: 1.6; }
+.minutes-danger { margin-top: 12px; }
 .bot-open { display: grid; gap: 10px; justify-items: start; }
 .bot-open > .panel { width: 100%; }
 /* The mail screen moves focus to its answer after sending; the region itself is not a control. */

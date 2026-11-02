@@ -1,0 +1,21 @@
+# 議事録の処理役・要約（α 2026-11-02）。本番ホストの利用者の systemd（~/.config/systemd/user/）に置く。
+#   systemctl --user daemon-reload && systemctl --user enable --now iyakusai-minutes-summarize
+# Claude Code CLI はホストにあるので、ホストの python3 で動かす（要約は標準ライブラリだけで動き、追加の取り込みは要らない）。
+[Unit]
+Description=iyakusai minutes worker (draft)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/iyakusai-minutes-worker
+EnvironmentFile=%h/iyakusai-minutes-worker/worker.env
+Environment=PYTHONIOENCODING=utf-8
+# EnvironmentFile は Environment= より強いので、受け持つ段階は起動の引数で決める。
+ExecStart=/usr/bin/env MINUTES_STAGES=summarize /usr/bin/python3 %h/iyakusai-minutes-worker/minutes_worker.py
+Nice=10
+MemoryMax=1G
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=default.target

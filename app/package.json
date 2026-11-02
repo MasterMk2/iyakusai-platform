@@ -16,7 +16,7 @@
     "reset-data": "node dist/server/reset.js",
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.client.json --noEmit && tsc -p tsconfig.test.json --noEmit",
-    "test:unit": "vitest run tests/unit tests/task-service/unit tests/rental tests/discord-auth tests/mailbox tests/contacts",
+    "test:unit": "vitest run tests/unit tests/task-service/unit tests/rental tests/discord-auth tests/mailbox tests/contacts tests/minutes",
     "test:api": "vitest run tests/api tests/task-service/api",
     "test": "vitest run",
     "test:e2e": "playwright test",

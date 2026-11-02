@@ -6,6 +6,8 @@ import type { InboxResponse } from '../../shared/line.js';
 import { MAIL_ATTACHMENTS_MAX, MAIL_BODY_MAX, MAIL_SUBJECT_MAX, REAUTH_REQUIRED, type MailSendOptions, type MailStatusResponse } from '../../shared/mailbox.js';
 import { registerContactRoutes } from '../contacts/routes.js';
 import { ContactsStore } from '../contacts/store.js';
+import { registerMinutesRoutes } from '../minutes/routes.js';
+import { MinutesStore } from '../minutes/store.js';
 import { DomainError, notFound, type User } from '../domain/types.js';
 import { HttpError } from '../http/http-error.js';
 import { registerLineRoutes } from '../http/line-routes.js';
@@ -37,6 +39,8 @@ export interface MailboxRuntime {
   transport?: MailTransport;
   /** Replaces the contacts file next to mail.sqlite3 (tests). */
   contacts?: ContactsStore;
+  /** Replaces the minutes file in the mail folder (tests). */
+  minutes?: MinutesStore;
   /** Replace LINE's HTTP (the receiver and the Messaging API) or its push connector (tests). */
   lineFetch?: Fetch;
   lineConnector?: LinePushConnector;
@@ -170,6 +174,23 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
     }
   }
   registerContactRoutes(app, contacts, { requireUser: deps.requireUser, session: deps.session, people: deps.people, discordUserIdOf: deps.discordUserIdOf, clock: deps.clock, parse: deps.parse });
+
+  // Meeting minutes (α, 2026-11-02), when minutes.json is next to the mail configuration: their own file in the
+  // mail folder, with the same people and sign-in as the contacts. A file that cannot be opened turns off the
+  // minutes only (503).
+  if (rt.config.minutes) {
+    let minutes: MinutesStore | null = rt.minutes ?? null;
+    if (!minutes) {
+      try {
+        const opened = new MinutesStore(rt.config.minutes.dataDir);
+        minutes = opened;
+        app.addHook('onClose', async () => opened.close());
+      } catch {
+        minutes = null;
+      }
+    }
+    registerMinutesRoutes(app, rt.config.minutes, minutes, { requireUser: deps.requireUser, session: deps.session, people: deps.people, discordUserIdOf: deps.discordUserIdOf, clock: deps.clock, ...(deps.now ? { now: deps.now } : {}), parse: deps.parse });
+  }
 
   // The official LINE account (2026-10-28), when line.json is next to the mail configuration. It shares the mail
   // screens' sign-in, trial list and idle limit, and shows in the same inbox. A state file that cannot be read
