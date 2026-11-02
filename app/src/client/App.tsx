@@ -32,7 +32,8 @@ import { useLoader } from './useLoader';
 const PROXY_ERRORS = new Set(['untrusted_proxy', 'unauthenticated', 'invalid_identity', 'unknown_identity']);
 
 export interface Route {
-  view: 'home' | 'mail' | 'admin' | 'tasks' | 'bot' | 'settings' | 'contacts';
+  /** `line` is the official LINE tab (2026-11-03), apart from the mail tab. */
+  view: 'home' | 'mail' | 'line' | 'admin' | 'tasks' | 'bot' | 'settings' | 'contacts';
   mailboxId: string | null;
   lineAccountId: string | null;
   /** Selected email thread (`thread=`) or LINE conversation (`conv=`); at most one is set. */
@@ -105,12 +106,19 @@ export function parseHash(hash: string): Route {
     return { ...EMPTY_ROUTE, view: 'tasks', taskWorkspaceId: params.get('ws'), taskId: params.get('task'), taskNew: params.get('new') === '1', taskRemaining: params.get('remaining') === '1', taskFocus: parseFocus(params.get('focus')) };
   }
   const mailCompose = !threadId && !conversationId && params.get('compose') === '1';
-  if (parts[0] === 'mailbox' && parts[1]) return { ...EMPTY_ROUTE, mailboxId: decodeURIComponent(parts[1]), threadId, conversationId, inboxFilter, mailCompose };
-  if (parts[0] === 'line' && parts[1]) {
+  if (parts[0] === 'mailbox' && parts[1]) return { ...EMPTY_ROUTE, mailboxId: decodeURIComponent(parts[1]), threadId, inboxFilter, mailCompose };
+  if (parts[0] === 'line') {
     const lineBroadcast = !threadId && !conversationId && params.get('broadcast') === '1';
-    return { ...EMPTY_ROUTE, lineAccountId: decodeURIComponent(parts[1]), threadId, conversationId, inboxFilter, lineBroadcast };
+    return { ...EMPTY_ROUTE, view: 'line', lineAccountId: parts[1] ? decodeURIComponent(parts[1]) : null, conversationId, inboxFilter, lineBroadcast };
   }
-  return { ...EMPTY_ROUTE, threadId, conversationId, inboxFilter, mailCompose };
+  // An older link to a LINE conversation from the shared inbox (`#/all?conv=`) opens the LINE tab.
+  if (conversationId) return { ...EMPTY_ROUTE, view: 'line', conversationId, inboxFilter };
+  return { ...EMPTY_ROUTE, threadId, inboxFilter, mailCompose };
+}
+
+/** The official LINE tab: also a route that names a LINE account or conversation (callers spread EMPTY_ROUTE). */
+function isLineRoute(route: Route): boolean {
+  return route.view === 'line' || (route.view === 'mail' && (route.lineAccountId !== null || route.conversationId !== null || route.lineBroadcast));
 }
 
 export function toHash(route: Route): string {
@@ -137,16 +145,17 @@ export function toHash(route: Route): string {
     if (route.taskFocus) q.set('focus', route.taskFocus);
     return q.size > 0 ? `#/tasks?${q.toString()}` : '#/tasks';
   }
-  const base = route.mailboxId
-    ? `#/mailbox/${encodeURIComponent(route.mailboxId)}`
-    : route.lineAccountId
-      ? `#/line/${encodeURIComponent(route.lineAccountId)}`
-      : '#/all';
   const q = new URLSearchParams();
+  if (isLineRoute(route)) {
+    const base = route.lineAccountId ? `#/line/${encodeURIComponent(route.lineAccountId)}` : '#/line';
+    if (route.conversationId) q.set('conv', route.conversationId);
+    else if (route.lineBroadcast) q.set('broadcast', '1');
+    if (route.inboxFilter) q.set('filter', route.inboxFilter);
+    return q.size > 0 ? `${base}?${q.toString()}` : base;
+  }
+  const base = route.mailboxId ? `#/mailbox/${encodeURIComponent(route.mailboxId)}` : '#/all';
   if (route.threadId) q.set('thread', route.threadId);
-  else if (route.conversationId) q.set('conv', route.conversationId);
-  else if (route.mailCompose && !route.lineAccountId) q.set('compose', '1');
-  else if (route.lineBroadcast && route.lineAccountId) q.set('broadcast', '1');
+  else if (route.mailCompose) q.set('compose', '1');
   if (route.inboxFilter) q.set('filter', route.inboxFilter);
   return q.size > 0 ? `${base}?${q.toString()}` : base;
 }
@@ -374,7 +383,7 @@ export function App() {
           : null;
 
   useEffect(() => {
-    const names: Record<Route['view'], string> = { home: 'ホーム', tasks: 'タスク', bot: 'Bot', mail: 'メール', admin: '設定', settings: '設定', contacts: '連絡先' };
+    const names: Record<Route['view'], string> = { home: 'ホーム', tasks: 'タスク', bot: 'Bot', mail: 'メール', line: '公式LINE', admin: '設定', settings: '設定', contacts: '連絡先' };
     document.title = user ? `${names[route.view]}｜医薬祭 委員会アプリ` : '医薬祭 委員会アプリ';
   }, [route.view, user]);
 
@@ -411,12 +420,14 @@ export function App() {
     { key: 'rental', label: '物品貸出', labelBreaks: ['物品', '貸出'], href: '/rental' },
     // The tab is "メール", not "メールボックス": mail is sent from here too. The mailboxes inside it are each a "受信箱".
     { key: 'inbox', label: 'メール', href: '#/all', onSelect: () => navigate(EMPTY_ROUTE) },
+    // The official LINE has its own tab (2026-11-03): its people, counts and sending differ from mail's.
+    { key: 'line', label: '公式LINE', labelBreaks: ['公式', 'LINE'], href: '#/line', onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'line' }) },
     // Contacts have their own tab, next to メール.
     { key: 'contacts', label: '連絡先', href: '#/contacts', onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'contacts' }) },
     { key: 'bot', label: 'Bot', href: '#/bot', onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'bot', botSection: 'ask' }) },
     { key: 'settings', label: '設定', href: '#/settings', onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'settings' }) },
   ];
-  const currentNav: NavKey = route.view === 'home' ? 'home' : route.view === 'tasks' ? 'tasks' : route.view === 'bot' ? 'bot' : route.view === 'contacts' ? 'contacts' : route.view === 'mail' ? 'inbox' : 'settings';
+  const currentNav: NavKey = route.view === 'home' ? 'home' : route.view === 'tasks' ? 'tasks' : route.view === 'bot' ? 'bot' : route.view === 'contacts' ? 'contacts' : route.view === 'line' ? 'line' : route.view === 'mail' ? 'inbox' : 'settings';
   // Contacts exist with the committee mailbox (Discord login), for every committee member.
   const contactsEnabled = !!committeeMail;
   const topNav = <GlobalNav items={navItems} current={currentNav} />;
@@ -442,6 +453,7 @@ export function App() {
             onOpenInbox={(filter) => navigate({ ...EMPTY_ROUTE, inboxFilter: filter ?? null })}
             onOpenMailbox={(mailboxId) => navigate({ ...EMPTY_ROUTE, mailboxId, inboxFilter: 'unhandled' })}
             onOpenThread={(threadId) => navigate({ ...EMPTY_ROUTE, threadId, inboxFilter: 'unhandled' })}
+            onOpenLine={(lineAccountId) => navigate({ ...EMPTY_ROUTE, view: 'line', lineAccountId: lineAccountId ?? null, inboxFilter: 'unhandled' })}
             onOpenBot={(section) => navigate({ ...EMPTY_ROUTE, view: 'bot', botSection: section ?? 'ask' })}
             onOpenContacts={
               contactsEnabled
@@ -558,49 +570,54 @@ export function App() {
 
   const mailboxList = mailboxes.data ?? [];
   const lineList = lineAccounts.data ?? [];
-  // The official account the viewer may send from: the broadcast button and screen (2026-11-02).
-  const sendableLine = lineList.find((a) => a.kind === 'official_account' && a.canReply && a.sending !== 'none') ?? null;
-  const broadcastAccount = route.lineAccountId ? (lineList.find((a) => a.id === route.lineAccountId && a.kind === 'official_account' && a.canReply && a.sending !== 'none') ?? null) : null;
+  // メール and 公式LINE are separate tabs (2026-11-03): each lists, opens and sends only its own kind.
+  const lineTab = isLineRoute(route);
+  const canSendFrom = (a: LineAccountSummary) => a.kind === 'official_account' && a.canReply && a.sending !== 'none';
+  // The official account the viewer may send from: the send button and screen (2026-11-02).
+  const sendableLine = lineList.find(canSendFrom) ?? null;
+  // With one account there is no "all" entry: the tab opens on that account.
+  const lineAccountId = route.lineAccountId ?? (lineList.length === 1 ? (lineList[0]?.id ?? null) : null);
+  const broadcastAccount = lineTab && route.lineBroadcast ? (lineList.find((a) => a.id === (lineAccountId ?? sendableLine?.id) && canSendFrom(a)) ?? null) : null;
   // The synthetic inbox sends administrators to the access screen; the committee mailbox is read by everyone.
   const isAdminView = !committeeMail && (route.view === 'admin' || user.canManageAccess);
-  const composing = !isAdminView && canSendMail && route.mailCompose && !route.lineAccountId;
-  const inboxDetail = !isAdminView && (!!(route.threadId ?? route.conversationId) || composing || (route.lineBroadcast && !!broadcastAccount));
+  const composing = !lineTab && !isAdminView && canSendMail && route.mailCompose;
+  const inboxDetail = !isAdminView && (lineTab ? !!route.conversationId || !!broadcastAccount : !!route.threadId || composing);
   // One message in two mailboxes counts once in the committee total; the per-mailbox counts would count it twice.
-  const allUnhandled = committeeMail?.unhandledTotal ?? mailboxList.reduce((n, m) => n + m.unhandledCount, 0) + lineList.reduce((n, a) => n + a.unhandledCount, 0);
-  const scopeKey = route.mailboxId ? `m:${route.mailboxId}` : route.lineAccountId ? `l:${route.lineAccountId}` : 'all';
-  const scopeAddress = route.mailboxId ? (mailboxList.find((m) => m.id === route.mailboxId)?.address ?? null) : null;
-  // Below 1200px the mailbox column folds into this choice above the list (same entries and counts).
-  const scopeSwitcher = isAdminView ? null : (
+  const mailUnhandled = committeeMail?.unhandledTotal ?? mailboxList.reduce((n, m) => n + m.unhandledCount, 0);
+  const lineUnhandled = lineList.reduce((n, a) => n + a.unhandledCount, 0);
+  const allMailTitle = committeeMail ? 'すべての受信箱' : 'すべての許可された受信箱';
+  const scopeKey = lineTab ? (lineAccountId ? `l:${lineAccountId}` : 'line') : route.mailboxId ? `m:${route.mailboxId}` : 'all';
+  const scopeAddress = !lineTab && route.mailboxId ? (mailboxList.find((m) => m.id === route.mailboxId)?.address ?? null) : null;
+  // Below 1200px the side column folds into this choice above the list (same entries and counts).
+  const scopeSwitcher = isAdminView ? null : lineTab ? (
+    lineList.length > 1 ? (
+      <label className="scope-switcher">
+        <span className="sr-only">表示する LINE アカウント</span>
+        <select value={scopeKey} onChange={(e) => navigate({ ...EMPTY_ROUTE, view: 'line', lineAccountId: e.target.value.startsWith('l:') ? e.target.value.slice(2) : null })}>
+          <option value="line">
+            すべての LINE{lineUnhandled > 0 ? `（未対応 ${lineUnhandled}）` : ''}
+          </option>
+          {lineList.map((a) => (
+            <option key={a.id} value={`l:${a.id}`}>
+              {a.name}
+              {a.unhandledCount > 0 ? `（未対応 ${a.unhandledCount}）` : ''}
+            </option>
+          ))}
+        </select>
+      </label>
+    ) : null
+  ) : (
     <label className="scope-switcher">
       <span className="sr-only">表示する受信箱</span>
-      <select
-        value={scopeKey}
-        onChange={(e) => {
-          const kind = e.target.value.slice(0, 2);
-          const id = e.target.value.slice(2);
-          navigate(
-            kind === 'm:'
-              ? { ...EMPTY_ROUTE, mailboxId: id }
-              : kind === 'l:'
-                ? { ...EMPTY_ROUTE, lineAccountId: id }
-                : { ...EMPTY_ROUTE },
-          );
-        }}
-      >
+      <select value={scopeKey} onChange={(e) => navigate(e.target.value.startsWith('m:') ? { ...EMPTY_ROUTE, mailboxId: e.target.value.slice(2) } : { ...EMPTY_ROUTE })}>
         <option value="all">
-          {committeeMail ? 'すべての受信箱' : 'すべての許可された受信箱'}
-          {allUnhandled > 0 ? `（未対応 ${allUnhandled}）` : ''}
+          {allMailTitle}
+          {mailUnhandled > 0 ? `（未対応 ${mailUnhandled}）` : ''}
         </option>
         {mailboxList.map((m) => (
           <option key={m.id} value={`m:${m.id}`}>
             {m.name}
             {m.unhandledCount > 0 ? `（未対応 ${m.unhandledCount}）` : ''}
-          </option>
-        ))}
-        {lineList.map((a) => (
-          <option key={a.id} value={`l:${a.id}`}>
-            LINE: {a.name}
-            {a.unhandledCount > 0 ? `（未対応 ${a.unhandledCount}）` : ''}
           </option>
         ))}
       </select>
@@ -636,96 +653,77 @@ export function App() {
     );
   }
 
-  return (
-    <div className="app">
-      {bar}
-      {topNav}
-      <div className={`layout inbox-layout ${inboxDetail ? 'has-detail' : ''}`}>
-        <div className="sidebar">
-        {/* Sending apart from the mailboxes: a new-mail button above the list reads as part of the inbox. */}
-        {(canSendMail || sendableLine) && !isAdminView && (
-          <section className="sidebar-send" aria-labelledby="sidebar-send-title">
-            <h2 className="sidebar-title" id="sidebar-send-title">
-              送信
-            </h2>
-            <div className="send-entries">
-              {canSendMail && (
+  if (lineTab && !isAdminView && lineAccounts.data !== null && lineList.length === 0) {
+    return (
+      <div className="app">
+        {bar}
+        {topNav}
+        <div className="layout home-layout">
+          <main className="main" aria-labelledby="line-unavailable-title" data-testid="line-unavailable">
+            <h2 id="line-unavailable-title">公式LINE</h2>
+            <p className="status error" role="alert">
+              このサーバーには、あなたが見られる公式LINE のアカウントがありません。
+            </p>
+          </main>
+        </div>
+      </div>
+    );
+  }
+
+  const adminHint = <p className="hint">{proxyMode ? '権限管理者' : 'デモ管理者'}は権限管理とモック同期だけを行えます。メール本文は閲覧できません。</p>;
+
+  if (lineTab) {
+    const lineName = lineAccountId ? (lineList.find((a) => a.id === lineAccountId)?.name ?? null) : null;
+    const openSend = () => sendableLine && navigate({ ...EMPTY_ROUTE, view: 'line', lineAccountId: sendableLine.id, lineBroadcast: true });
+    return (
+      <div className="app">
+        {bar}
+        {topNav}
+        <div className={`layout inbox-layout ${inboxDetail ? 'has-detail' : ''}`}>
+          <div className="sidebar">
+            {sendableLine && !isAdminView && (
+              <section className="sidebar-send" aria-labelledby="sidebar-send-title">
+                <h2 className="sidebar-title" id="sidebar-send-title">
+                  送信
+                </h2>
                 <button
                   type="button"
-                  className={`send-entry ${composing ? 'active' : ''}`}
-                  aria-current={composing ? 'page' : undefined}
-                  onClick={() => {
-                    setComposeTo(null);
-                    navigate({ ...route, threadId: null, conversationId: null, mailCompose: true });
-                  }}
-                  data-testid="compose-new"
-                >
-                  メールを送信
-                </button>
-              )}
-              {sendableLine && (
-                <button
-                  type="button"
-                  className={`send-entry ${route.lineBroadcast ? 'active' : ''}`}
-                  aria-current={route.lineBroadcast ? 'page' : undefined}
-                  onClick={() => navigate({ ...EMPTY_ROUTE, lineAccountId: sendableLine.id, lineBroadcast: true })}
+                  className={`send-entry ${broadcastAccount ? 'active' : ''}`}
+                  aria-current={broadcastAccount ? 'page' : undefined}
+                  onClick={openSend}
                   data-testid="line-broadcast-side"
                 >
                   公式LINEを送信
                 </button>
-              )}
-            </div>
-            <p className="hint">メールは委員会のアドレスから、公式LINE は選んだ相手（1 人でも複数でも）に送ります。</p>
-          </section>
-        )}
-        <nav aria-label="受信箱">
-          <h2 className="sidebar-title">受信箱</h2>
-          {isAdminView ? (
-            <p className="hint">{proxyMode ? '権限管理者' : 'デモ管理者'}は権限管理とモック同期だけを行えます。メール本文は閲覧できません。</p>
-          ) : (
-            <>
-              <button
-                type="button"
-                className={`nav-item ${route.view === 'mail' && route.mailboxId === null && route.lineAccountId === null && !composing ? 'active' : ''}`}
-                aria-current={route.mailboxId === null && route.lineAccountId === null && !composing ? 'page' : undefined}
-                onClick={() => navigate({ ...EMPTY_ROUTE })}
-              >
-                <span className="mailbox-name">{committeeMail ? 'すべての受信箱' : 'すべての許可された受信箱'}</span>
-                {allUnhandled > 0 && <span className="count-badge" aria-label={`未対応 ${allUnhandled} 件`}>{allUnhandled}</span>}
-              </button>
-              <LoadStatus loader={mailboxes} what="受信箱" compact />
-              {mailboxes.data && mailboxList.length === 0 && <p className="empty">閲覧を許可された受信箱はありません。</p>}
-              <ul className="mailbox-list">
-                {mailboxList.map((m) => (
-                  <li key={m.id}>
+                <p className="hint">選んだ相手（1 人でも複数でも）に送ります。</p>
+              </section>
+            )}
+            <nav aria-label="公式LINE のアカウント">
+              <h2 className="sidebar-title">公式LINE</h2>
+              {isAdminView ? (
+                adminHint
+              ) : (
+                <>
+                  <LoadStatus loader={lineAccounts} what="LINE アカウント" compact />
+                  {lineList.length > 1 && (
                     <button
                       type="button"
-                      className={`nav-item ${route.mailboxId === m.id && !composing ? 'active' : ''}`}
-                      aria-current={route.mailboxId === m.id && !composing ? 'page' : undefined}
-                      title={`${m.name}（${m.address}）`}
-                      onClick={() => navigate({ ...EMPTY_ROUTE, mailboxId: m.id })}
-                      data-mailbox-id={m.id}
+                      className={`nav-item ${lineAccountId === null && !broadcastAccount ? 'active' : ''}`}
+                      aria-current={lineAccountId === null && !broadcastAccount ? 'page' : undefined}
+                      onClick={() => navigate({ ...EMPTY_ROUTE, view: 'line' })}
                     >
-                      <span className="mailbox-name">{m.name}</span>
-                      {/* Committee mail: every member edits the handling; the grant only adds notes (said in the detail). */}
-                      {!committeeMail && <span className="mailbox-meta">{m.access === 'edit' ? '編集可' : '閲覧のみ'}</span>}
-                      {m.unhandledCount > 0 && <span className="count-badge" aria-label={`未対応 ${m.unhandledCount} 件`}>{m.unhandledCount}</span>}
+                      <span className="mailbox-name">すべての LINE</span>
+                      {lineUnhandled > 0 && <span className="count-badge" aria-label={`未対応 ${lineUnhandled} 件`}>{lineUnhandled}</span>}
                     </button>
-                  </li>
-                ))}
-              </ul>
-              <LoadStatus loader={lineAccounts} what="LINE アカウント" compact />
-              {lineList.length > 0 && (
-                <>
-                  <h3 className="nav-heading">LINE</h3>
+                  )}
                   <ul className="mailbox-list" aria-label="LINE アカウント">
                     {lineList.map((a) => (
                       <li key={a.id}>
                         <button
                           type="button"
-                          className={`nav-item ${route.lineAccountId === a.id ? 'active' : ''}`}
-                          aria-current={route.lineAccountId === a.id ? 'page' : undefined}
-                          onClick={() => navigate({ ...EMPTY_ROUTE, lineAccountId: a.id })}
+                          className={`nav-item ${lineAccountId === a.id && !broadcastAccount ? 'active' : ''}`}
+                          aria-current={lineAccountId === a.id && !broadcastAccount ? 'page' : undefined}
+                          onClick={() => navigate({ ...EMPTY_ROUTE, view: 'line', lineAccountId: a.id })}
                           data-line-account-id={a.id}
                         >
                           <span className="mailbox-name">{a.name}</span>
@@ -740,9 +738,136 @@ export function App() {
                   </ul>
                 </>
               )}
+            </nav>
+          </div>
+          {isAdminView ? (
+            <main className="main">
+              <AdminPanel user={user} onChanged={bump} demoControls={demoMode} />
+            </main>
+          ) : (
+            <>
+              <section className="list-pane" aria-label="会話の一覧">
+                {/* Below 1200px the side column is folded: sending shows here, marked apart from the list below. */}
+                {sendableLine && (
+                  <section className="list-compose" aria-labelledby="list-send-title">
+                    <h2 className="list-compose-label" id="list-send-title">
+                      送信
+                    </h2>
+                    <button type="button" className="secondary" onClick={openSend} data-testid="line-broadcast-open">
+                      公式LINEを送信
+                    </button>
+                  </section>
+                )}
+                <ThreadList
+                  key={scopeKey}
+                  mailboxId={null}
+                  lineAccountId={lineAccountId}
+                  source="line"
+                  initialFilter={route.inboxFilter}
+                  onFiltersChanged={() => {
+                    if (route.inboxFilter) navigate({ ...route, inboxFilter: null });
+                  }}
+                  switcher={scopeSwitcher}
+                  allTitle="すべての LINE"
+                  onReauthRequired={bump}
+                  mailboxName={lineName}
+                  selectedId={route.conversationId}
+                  refresh={refresh}
+                  onChanged={bump}
+                  onSelect={(selection) =>
+                    navigate(
+                      selection.kind === 'conversation'
+                        ? { ...route, conversationId: selection.id, lineBroadcast: false }
+                        : { ...EMPTY_ROUTE, threadId: selection.id },
+                    )
+                  }
+                />
+              </section>
+              <section className="detail-pane" aria-label="会話の詳細">
+                {inboxDetail && (
+                  <button type="button" className="back-link" onClick={() => navigate({ ...route, conversationId: null, lineBroadcast: false })}>
+                    ← 一覧に戻る
+                  </button>
+                )}
+                {broadcastAccount ? (
+                  <LineBroadcast key={broadcastAccount.id} accountId={broadcastAccount.id} refresh={refresh} onSent={bump} onClose={() => navigate({ ...route, lineBroadcast: false })} />
+                ) : route.conversationId ? (
+                  <LineConversation key={route.conversationId} conversationId={route.conversationId} refresh={refresh} onChanged={bump} caseTasks={caseTasks} />
+                ) : (
+                  <div className="detail-placeholder">
+                    <h2>会話を選択</h2>
+                    <p>一覧から選ぶと、やりとりと対応状況・担当・ラベル・内部メモがここに出ます。{sendableLine ? '新しく送るときは「公式LINEを送信」から。' : ''}</p>
+                  </div>
+                )}
+              </section>
             </>
           )}
-        </nav>
+        </div>
+      </div>
+    );
+  }
+
+  const openCompose = () => {
+    setComposeTo(null);
+    navigate({ ...route, threadId: null, mailCompose: true });
+  };
+  return (
+    <div className="app">
+      {bar}
+      {topNav}
+      <div className={`layout inbox-layout ${inboxDetail ? 'has-detail' : ''}`}>
+        <div className="sidebar">
+          {/* Sending apart from the mailboxes: a new-mail button above the list reads as part of the inbox. */}
+          {canSendMail && !isAdminView && (
+            <section className="sidebar-send" aria-labelledby="sidebar-send-title">
+              <h2 className="sidebar-title" id="sidebar-send-title">
+                送信
+              </h2>
+              <button type="button" className={`send-entry ${composing ? 'active' : ''}`} aria-current={composing ? 'page' : undefined} onClick={openCompose} data-testid="compose-new">
+                メールを送信
+              </button>
+              <p className="hint">委員会のアドレスから送ります。</p>
+            </section>
+          )}
+          <nav aria-label="受信箱">
+            <h2 className="sidebar-title">受信箱</h2>
+            {isAdminView ? (
+              adminHint
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className={`nav-item ${route.view === 'mail' && route.mailboxId === null && !composing ? 'active' : ''}`}
+                  aria-current={route.mailboxId === null && !composing ? 'page' : undefined}
+                  onClick={() => navigate({ ...EMPTY_ROUTE })}
+                >
+                  <span className="mailbox-name">{allMailTitle}</span>
+                  {mailUnhandled > 0 && <span className="count-badge" aria-label={`未対応 ${mailUnhandled} 件`}>{mailUnhandled}</span>}
+                </button>
+                <LoadStatus loader={mailboxes} what="受信箱" compact />
+                {mailboxes.data && mailboxList.length === 0 && <p className="empty">閲覧を許可された受信箱はありません。</p>}
+                <ul className="mailbox-list">
+                  {mailboxList.map((m) => (
+                    <li key={m.id}>
+                      <button
+                        type="button"
+                        className={`nav-item ${route.mailboxId === m.id && !composing ? 'active' : ''}`}
+                        aria-current={route.mailboxId === m.id && !composing ? 'page' : undefined}
+                        title={`${m.name}（${m.address}）`}
+                        onClick={() => navigate({ ...EMPTY_ROUTE, mailboxId: m.id })}
+                        data-mailbox-id={m.id}
+                      >
+                        <span className="mailbox-name">{m.name}</span>
+                        {/* Committee mail: every member edits the handling; the grant only adds notes (said in the detail). */}
+                        {!committeeMail && <span className="mailbox-meta">{m.access === 'edit' ? '編集可' : '閲覧のみ'}</span>}
+                        {m.unhandledCount > 0 && <span className="count-badge" aria-label={`未対応 ${m.unhandledCount} 件`}>{m.unhandledCount}</span>}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </nav>
         </div>
         {isAdminView ? (
           <main className="main">
@@ -752,73 +877,46 @@ export function App() {
           <>
             <section className="list-pane" aria-label="スレッド一覧">
               {/* Below 1200px the side column is folded: sending shows here, marked apart from the mailbox list below. */}
-              {(canSendMail || sendableLine) && (
+              {canSendMail && (
                 <section className="list-compose" aria-labelledby="list-send-title">
                   <h2 className="list-compose-label" id="list-send-title">
                     送信
                   </h2>
-                  {canSendMail && (
-                    <button
-                      type="button"
-                      className="secondary"
-                      onClick={() => {
-                        setComposeTo(null);
-                        navigate({ ...route, threadId: null, conversationId: null, mailCompose: true });
-                      }}
-                      data-testid="compose-new-list"
-                    >
-                      メールを送信
-                    </button>
-                  )}
-                  {sendableLine && (
-                    <button
-                      type="button"
-                      className="secondary"
-                      onClick={() => navigate({ ...EMPTY_ROUTE, lineAccountId: sendableLine.id, lineBroadcast: true })}
-                      data-testid="line-broadcast-open"
-                    >
-                      公式LINEを送信
-                    </button>
-                  )}
+                  <button type="button" className="secondary" onClick={openCompose} data-testid="compose-new-list">
+                    メールを送信
+                  </button>
                 </section>
               )}
               <ThreadList
                 key={scopeKey}
                 mailboxId={route.mailboxId}
                 mailboxAddress={scopeAddress}
+                lineAccountId={null}
+                source="email"
                 initialFilter={route.inboxFilter}
                 onFiltersChanged={() => {
                   // The list's own filters replace a home link's (filter=), so a reload shows what is on screen.
                   if (route.inboxFilter) navigate({ ...route, inboxFilter: null });
                 }}
                 switcher={scopeSwitcher}
-                lineAccountId={route.lineAccountId}
                 allTitle={committeeMail ? 'すべての受信箱' : undefined}
                 onReauthRequired={bump}
-                mailboxName={
-                  route.mailboxId
-                    ? (mailboxList.find((m) => m.id === route.mailboxId)?.name ?? null)
-                    : route.lineAccountId
-                      ? (lineList.find((a) => a.id === route.lineAccountId)?.name ?? null)
-                      : null
-                }
-                selectedId={route.threadId ?? route.conversationId}
+                mailboxName={route.mailboxId ? (mailboxList.find((m) => m.id === route.mailboxId)?.name ?? null) : null}
+                selectedId={route.threadId}
                 refresh={refresh}
                 onChanged={bump}
                 onSelect={(selection) =>
-                  navigate({
-                    ...route,
-                    threadId: selection.kind === 'thread' ? selection.id : null,
-                    conversationId: selection.kind === 'conversation' ? selection.id : null,
-                    mailCompose: false,
-                    lineBroadcast: false,
-                  })
+                  navigate(
+                    selection.kind === 'thread'
+                      ? { ...route, threadId: selection.id, mailCompose: false }
+                      : { ...EMPTY_ROUTE, view: 'line', conversationId: selection.id },
+                  )
                 }
               />
             </section>
             <section className="detail-pane" aria-label="スレッド詳細">
               {inboxDetail && (
-                <button type="button" className="back-link" onClick={() => navigate({ ...route, threadId: null, conversationId: null, mailCompose: false })}>
+                <button type="button" className="back-link" onClick={() => navigate({ ...route, threadId: null, mailCompose: false })}>
                   ← 一覧に戻る
                 </button>
               )}
@@ -867,16 +965,6 @@ export function App() {
                       : null
                   }
                 />
-              ) : route.lineBroadcast && broadcastAccount ? (
-                <LineBroadcast
-                  key={broadcastAccount.id}
-                  accountId={broadcastAccount.id}
-                  refresh={refresh}
-                  onSent={bump}
-                  onClose={() => navigate({ ...route, lineBroadcast: false })}
-                />
-              ) : route.conversationId ? (
-                <LineConversation key={route.conversationId} conversationId={route.conversationId} refresh={refresh} onChanged={bump} caseTasks={caseTasks} />
               ) : (
                 <div className="detail-placeholder">
                   <h2>受信内容を選択</h2>

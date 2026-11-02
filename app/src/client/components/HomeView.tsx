@@ -46,6 +46,7 @@ export function HomeView({
   onOpenInbox,
   onOpenMailbox,
   onOpenThread,
+  onOpenLine,
   onOpenBot,
   onOpenContacts,
 }: {
@@ -65,6 +66,8 @@ export function HomeView({
   onOpenInbox: (filter?: InboxFilter) => void;
   onOpenMailbox?: (mailboxId: string) => void;
   onOpenThread?: (threadId: string) => void;
+  /** The official LINE tab, on one account or on all of them. */
+  onOpenLine?: (accountId?: string) => void;
   onOpenBot: (section?: 'candidates' | 'remind') => void;
   /** Committee contacts (a search, or the whole list when empty); absent where there are none. */
   onOpenContacts?: (query: string) => void;
@@ -104,7 +107,8 @@ export function HomeView({
   const loadUnhandled = useCallback(
     (signal: AbortSignal) => {
       void refresh;
-      return mailOpen ? api<InboxResponse>('GET', `/api/inbox?status=unhandled&page=1&pageSize=${UNHANDLED_ROWS}`, undefined, signal) : Promise.resolve(null);
+      // Mail only: the official LINE has its own tab and its own count above (2026-11-03).
+      return mailOpen ? api<InboxResponse>('GET', `/api/inbox?status=unhandled&source=email&page=1&pageSize=${UNHANDLED_ROWS}`, undefined, signal) : Promise.resolve(null);
     },
     [mailOpen, refresh],
   );
@@ -127,6 +131,8 @@ export function HomeView({
     if (t.deadlines.today > 0) items.push({ key: 'today', label: '今日が期限のタスク', n: t.deadlines.today, tone: 'warning', onOpen: scrollTo('home-tasks'), testId: 'attention-task-today' });
   }
   if (mailOpen && mailTotal !== null && mailTotal > 0) items.push({ key: 'mail', label: '未対応のメール', n: mailTotal, tone: 'error', onOpen: () => onOpenInbox('unhandled'), testId: 'attention-mail' });
+  const lineTotal = lineAccounts.reduce((n, a) => n + a.unhandledCount, 0);
+  if (mailOpen && onOpenLine && lineTotal > 0) items.push({ key: 'line', label: '未対応の公式LINE', n: lineTotal, tone: 'error', onOpen: () => onOpenLine(), testId: 'attention-line' });
   if (b) {
     if (b.pendingCandidates > 0) items.push({ key: 'cand', label: '承認待ちのタスク候補', n: b.pendingCandidates, tone: 'warning', onOpen: () => onOpenBot('candidates'), testId: 'attention-candidates' });
     if (b.reminders.overdue > 0) items.push({ key: 'remind', label: '期限超過のリマインド', n: b.reminders.overdue, tone: 'error', onOpen: () => onOpenBot('remind'), testId: 'attention-reminders' });
@@ -180,6 +186,7 @@ export function HomeView({
               onOpenInbox={onOpenInbox}
               onOpenMailbox={onOpenMailbox}
               onOpenThread={onOpenThread}
+              onOpenLine={onOpenLine}
             />
           )}
           {tasks?.enabled && <TaskSummaryCard context={tasks} loader={taskSummary} onOpenTasks={onOpenTasks} />}
@@ -326,6 +333,7 @@ function InboxCard({
   onOpenInbox,
   onOpenMailbox,
   onOpenThread,
+  onOpenLine,
 }: {
   mailboxes: MailboxSummary[];
   lineAccounts: LineAccountSummary[];
@@ -335,12 +343,14 @@ function InboxCard({
   onOpenInbox: (filter?: InboxFilter) => void;
   onOpenMailbox?: (mailboxId: string) => void;
   onOpenThread?: (threadId: string) => void;
+  onOpenLine?: (accountId?: string) => void;
 }) {
   // Only mailboxes with something to do, most first; a mailbox with none is left out.
   const boxes = [...mailboxes.map((m) => ({ id: m.id, name: m.name, kind: 'メール', unhandled: m.unhandledCount, mail: true })), ...lineAccounts.map((a) => ({ id: a.id, name: a.name, kind: 'LINE', unhandled: a.unhandledCount, mail: false }))]
     .filter((x) => x.unhandled > 0)
     .sort((a, b) => b.unhandled - a.unhandled);
-  const total = unhandledTotal ?? boxes.reduce((n, x) => n + x.unhandled, 0);
+  // The title counts mail only; LINE rows below open the 公式LINE tab.
+  const total = unhandledTotal ?? boxes.reduce((n, x) => n + (x.mail ? x.unhandled : 0), 0);
   const items = unhandled.data?.items ?? [];
   return (
     <Card
@@ -396,6 +406,10 @@ function InboxCard({
                     {x.mail && onOpenMailbox ? (
                       <button type="button" className="link-button" onClick={() => onOpenMailbox(x.id)}>
                         {x.name}
+                      </button>
+                    ) : !x.mail && onOpenLine ? (
+                      <button type="button" className="link-button" onClick={() => onOpenLine(x.id)}>
+                        LINE: {x.name}
                       </button>
                     ) : (
                       <span>

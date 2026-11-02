@@ -1287,8 +1287,8 @@ button.task-tree-toggle:focus-visible { outline-offset: -3px; }
 .contact-multi-item { display: grid; gap: 2px; }
 .contact-form .edit-field .field-error, .contact-multi-item .field-error { margin: 0; }
 
-/* Seven tabs (連絡先 added 2026-10-26) on a 320px phone are about 45px each: without the side padding a
-   three-letter label (連絡先) stays on one line. */
+/* Eight tabs (公式LINE added 2026-11-03) on a 320px phone are 40px each: without the side padding and at
+   13px a three-letter label (連絡先) stays on one line. */
 @media (max-width: 340px) {
-  .global-nav a { padding-left: 0; padding-right: 0; }
+  .global-nav a { padding-left: 0; padding-right: 0; font-size: 13px; }
 }

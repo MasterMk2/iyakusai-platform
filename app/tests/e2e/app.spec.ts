@@ -332,7 +332,7 @@ test('common tabs and the home screen; on a phone the list and the opened thread
   // Same tabs in the same order on every screen; the current one is marked. Every module tab is always shown
   // (the tasks and rental screens say why they cannot be used here); the rental tab is a separate page.
   const tabs = page.getByRole('navigation', { name: '機能' });
-  await expect(tabs.getByRole('link')).toHaveText(['ホーム', 'タスク', '物品貸出', 'メール', '連絡先', 'Bot', '設定']);
+  await expect(tabs.getByRole('link')).toHaveText(['ホーム', 'タスク', '物品貸出', 'メール', '公式LINE', '連絡先', 'Bot', '設定']);
   await expect(tabs.getByRole('link', { name: 'メール', exact: true })).toHaveAttribute('aria-current', 'page');
   await tabs.getByRole('link', { name: 'ホーム' }).click();
   await expect(page).toHaveTitle('ホーム｜医薬祭 委員会アプリ');

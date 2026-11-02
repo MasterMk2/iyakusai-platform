@@ -88,7 +88,8 @@ const filters = {
 };
 const threadQuery = z.strictObject({ ...filters, ...page });
 const inboxQuery = z.strictObject({ ...filters, ...page, source: z.enum(['all', 'email', 'line']).default('all'), lineAccountId: shortId.optional() });
-const labelQuery = z.strictObject({ mailboxId: shortId.optional(), lineAccountId: shortId.optional() });
+// `source` narrows the labels to one tab's kind (2026-11-03: メール and 公式LINE are separate tabs).
+const labelQuery = z.strictObject({ source: z.enum(['all', 'email', 'line']).default('all'), mailboxId: shortId.optional(), lineAccountId: shortId.optional() });
 const triageBody = z
   .strictObject({
     expectedVersion: z.number().int().min(1),
@@ -324,8 +325,8 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
     const user = reader(request, false);
     const q = deps.parse(labelQuery, request.query);
     if (q.lineAccountId !== undefined && !line) throw notFound();
-    const mail = q.lineAccountId === undefined ? service.labelFacets(user, q.mailboxId) : [];
-    if (!line || q.mailboxId !== undefined) return mail;
+    const mail = q.lineAccountId === undefined && q.source !== 'line' ? service.labelFacets(user, q.mailboxId) : [];
+    if (!line || q.mailboxId !== undefined || q.source === 'email') return mail;
     const counts = new Map(mail.map((f) => [f.label, f.count]));
     for (const f of lineLabelFacets(line.store.current, user, q.lineAccountId)) counts.set(f.label, (counts.get(f.label) ?? 0) + f.count);
     return [...counts.entries()].map(([label, count]) => ({ label, count })).sort((a, b) => a.label.localeCompare(b.label, 'ja'));

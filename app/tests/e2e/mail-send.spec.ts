@@ -122,7 +122,7 @@ test('reply to all keeps the other recipients; new mail checks addresses and car
   await all.getByRole('button', { name: '閉じる' }).click();
   await expect(all).toBeHidden();
 
-  await page.getByRole('button', { name: '新しいメールを書く' }).click();
+  await page.getByRole('button', { name: 'メールを送信' }).click();
   await expect(page).toHaveURL(/compose=1/);
   const compose = page.getByRole('region', { name: '新しいメール' });
   await compose.getByLabel('差出人').selectOption('sponsorship');
@@ -155,7 +155,7 @@ test('new mail can name a reply-to address other than From; it shows when checki
   await page.setViewportSize({ width: 1280, height: 900 });
   const { sent } = await mailbox(page);
   await page.goto('/#/all?thread=th_0000000000000001');
-  await page.getByRole('button', { name: '新しいメールを書く' }).click();
+  await page.getByRole('button', { name: 'メールを送信' }).click();
   const compose = page.getByRole('region', { name: '新しいメール' });
   await compose.getByLabel('差出人').selectOption('sponsorship');
   await compose.getByLabel('宛先', { exact: true }).fill('株式会社 合成 ご担当者様 <company@partner.example>');
@@ -211,12 +211,12 @@ test('sending has its own place apart from the mailboxes: the side column on a w
   await expect(send).toBeVisible();
   await expect(send).toContainText('委員会のアドレスから送ります。');
   // One way in on a wide screen, outside the mailbox list.
-  await expect(page.getByRole('button', { name: '新しいメールを書く' })).toHaveCount(1);
-  await expect(page.getByRole('navigation', { name: '受信箱' }).getByRole('button', { name: '新しいメールを書く' })).toHaveCount(0);
-  await expect(page.getByRole('region', { name: 'スレッド一覧' }).getByRole('button', { name: '新しいメールを書く' })).toHaveCount(0);
-  await send.getByRole('button', { name: '新しいメールを書く' }).click();
+  await expect(page.getByRole('button', { name: 'メールを送信' })).toHaveCount(1);
+  await expect(page.getByRole('navigation', { name: '受信箱' }).getByRole('button', { name: 'メールを送信' })).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'スレッド一覧' }).getByRole('button', { name: 'メールを送信' })).toHaveCount(0);
+  await send.getByRole('button', { name: 'メールを送信' }).click();
   // While writing, the send entry is the current place, not a mailbox.
-  await expect(send.getByRole('button', { name: '新しいメールを書く' })).toHaveAttribute('aria-current', 'page');
+  await expect(send.getByRole('button', { name: 'メールを送信' })).toHaveAttribute('aria-current', 'page');
   await expect(page.getByRole('navigation', { name: '受信箱' }).getByRole('button', { name: /すべての受信箱/ })).not.toHaveAttribute('aria-current', 'page');
   await expect(page.getByRole('region', { name: '新しいメール' })).toContainText('送ったメールは、差出人の受信箱に「完了」で残ります。');
   mkdirSync('.tmp', { recursive: true });
@@ -226,9 +226,9 @@ test('sending has its own place apart from the mailboxes: the side column on a w
   await page.goto('/#/all');
   const narrow = page.getByRole('region', { name: 'スレッド一覧' }).getByRole('region', { name: '送信' });
   await expect(narrow).toBeVisible();
-  await expect(page.getByRole('button', { name: '新しいメールを書く' })).toHaveCount(1);
+  await expect(page.getByRole('button', { name: 'メールを送信' })).toHaveCount(1);
   await page.screenshot({ path: '.tmp/mail-send-entry-390.png' });
-  await narrow.getByRole('button', { name: '新しいメールを書く' }).click();
+  await narrow.getByRole('button', { name: 'メールを送信' }).click();
   await expect(page.getByRole('region', { name: '新しいメール' })).toBeVisible();
 });
 
@@ -273,7 +273,7 @@ test('without a send grant there is no reply or new mail button', async ({ page 
   await page.goto('/#/all?thread=th_0000000000000001');
   await expect(page.getByRole('heading', { name: '合成メールの問い合わせ' })).toBeVisible();
   await expect(page.getByRole('button', { name: '返信', exact: true })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: '新しいメールを書く' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'メールを送信' })).toHaveCount(0);
 });
 
 test('a reply drafted by the Bot from the thread opens as the reply, and the checks find its blanks', async ({ page }) => {

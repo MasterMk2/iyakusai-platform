@@ -132,6 +132,8 @@ function Item({ item, selectedId, filtered, showSource, showMailbox, onSelect }:
 export function ThreadList(props: {
   mailboxId: string | null;
   lineAccountId: string | null;
+  /** Which tab the list belongs to (2026-11-03: メール and 公式LINE are separate tabs); unset lists both. */
+  source?: 'email' | 'line';
   mailboxName: string | null;
   /** Address of the selected mailbox, shown under its name. */
   mailboxAddress?: string | null;
@@ -151,7 +153,7 @@ export function ThreadList(props: {
   /** A status was set from the list (reloads the list, the open thread and the counts). */
   onChanged?: () => void;
 }) {
-  const { mailboxId, lineAccountId, refresh } = props;
+  const { mailboxId, lineAccountId, source, refresh } = props;
   const [draft, setDraft] = useState<Filters>(() => initialFilters(props.initialFilter));
   const [applied, setApplied] = useState<Filters>(() => initialFilters(props.initialFilter));
   const [page, setPage] = useState(1);
@@ -162,8 +164,9 @@ export function ThreadList(props: {
     const params = new URLSearchParams();
     if (mailboxId) params.set('mailboxId', mailboxId);
     if (lineAccountId) params.set('lineAccountId', lineAccountId);
+    else if (source && !mailboxId) params.set('source', source);
     return params;
-  }, [mailboxId, lineAccountId]);
+  }, [mailboxId, lineAccountId, source]);
 
   const loadThreads = useCallback(
     (signal: AbortSignal) => {
@@ -235,7 +238,8 @@ export function ThreadList(props: {
   const data = threads.data;
   const filtered = Object.values(applied).some(Boolean);
   const title = mailboxId || lineAccountId ? (props.mailboxName ?? (lineAccountId ? 'LINE アカウント' : '受信箱')) : (props.allTitle ?? 'すべての許可された受信箱');
-  const showSource = data?.lineEnabled === true && !mailboxId && !lineAccountId;
+  const showSource = data?.lineEnabled === true && !mailboxId && !lineAccountId && !source;
+  const lineOnly = source === 'line' || !!lineAccountId;
   const pages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
 
   return (
@@ -247,13 +251,13 @@ export function ThreadList(props: {
         </div>
         {props.switcher}
       </header>
-      <form className="list-tools filters" onSubmit={submit} role="search" aria-label="メール検索">
+      <form className="list-tools filters" onSubmit={submit} role="search" aria-label={lineOnly ? '公式LINE の検索' : 'メール検索'}>
         <div className="search-row">
           <input
             type="search"
             className="list-search"
             aria-label="検索語"
-            placeholder="件名・差出人・本文で検索"
+            placeholder={lineOnly ? '相手の名前・本文で検索' : '件名・差出人・本文で検索'}
             value={draft.q}
             onChange={(e) => setDraft({ ...draft, q: e.target.value })}
           />
@@ -305,7 +309,7 @@ export function ThreadList(props: {
         </div>
       </form>
       {formError && <p className="status error" role="alert">{formError}</p>}
-      <LoadStatus loader={threads} what="スレッド一覧" />
+      <LoadStatus loader={threads} what={lineOnly ? '会話の一覧' : 'スレッド一覧'} />
       {data && (
         <>
           <div className="list-bar">
@@ -328,7 +332,7 @@ export function ThreadList(props: {
               </select>
             </label>
           </div>
-          {data.counts.line > 0 && (
+          {showSource && data.counts.line > 0 && (
             <p className="hint" data-testid="source-counts">
               内訳: メール {data.counts.email} 件 ／ LINE {data.counts.line} 件
             </p>
@@ -337,13 +341,13 @@ export function ThreadList(props: {
             <div className="empty list-empty">
               {filtered ? (
                 <>
-                  <p>条件に一致するスレッドはありません。</p>
+                  <p>条件に一致する{lineOnly ? '会話' : 'スレッド'}はありません。</p>
                   <button type="button" className="secondary" onClick={clear}>
                     条件をクリア
                   </button>
                 </>
               ) : (
-                <p>この範囲に表示できるメールはありません。</p>
+                <p>この範囲に表示できる{lineOnly ? '会話' : 'メール'}はありません。</p>
               )}
             </div>
           )}
