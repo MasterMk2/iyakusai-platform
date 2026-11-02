@@ -78,6 +78,14 @@ export type StoredLineContent =
   | { kind: 'unavailable'; reason: 'e2ee' | 'missing' }
   | { kind: 'unsent' };
 
+/** A row of the official account's own chat history (the admin screen's export, 2026-11-02). Display only. */
+export interface LineHistoryInfo {
+  /** The committee member who sent an outgoing row (display name from the export), or null. */
+  staff: string | null;
+  /** An automatic answer (greeting etc.) of the account. */
+  autoReply: boolean;
+}
+
 export interface LineMessage {
   id: string;
   accountId: string;
@@ -92,7 +100,9 @@ export interface LineMessage {
   content: StoredLineContent;
   /** Hash of the normalized content for conflict detection; null once unsent. */
   fingerprint: string | null;
-  provenance: { source: 'legacy_export' | 'event_feed'; batchId: string; cursor: string };
+  provenance: { source: 'legacy_export' | 'event_feed' | 'oa_history'; batchId: string; cursor: string };
+  /** Rows of the official account's history file (provenance 'oa_history'). */
+  history?: LineHistoryInfo;
 }
 
 export interface ProcessedEvent {
@@ -117,6 +127,9 @@ export interface LineGrant {
   reply: boolean;
 }
 
+/** Where a send was prepared: the app's screen, or a Discord thread through the Bot (2026-11-02). */
+export type SendChannel = 'app' | 'discord';
+
 export interface ReplyDraft {
   id: string;
   conversationId: string;
@@ -125,6 +138,10 @@ export interface ReplyDraft {
   body: string;
   version: number;
   updatedAt: string;
+  /** An uploaded image sent after the text (2026-11-02). */
+  imageId?: string | null;
+  /** Absent: 'app'. A Discord draft never replaces the same person's draft on the screen. */
+  via?: SendChannel;
 }
 
 export interface ReplyConsent {
@@ -140,6 +157,8 @@ export interface ReplyConsent {
   createdAt: string;
   expiresAt: string;
   consumedByIntentId: string | null;
+  imageId?: string | null;
+  via?: SendChannel;
 }
 
 export type AttemptOutcome =
@@ -186,6 +205,54 @@ export interface OutboxIntent {
   statusReason: string | null;
   retryNotBefore: string | null;
   attempts: OutboxAttempt[];
+  /** The image sent after the text: its public URLs (fixed at creation, as the body). */
+  image?: OutboxImage | null;
+  /** Absent: 'app'. */
+  via?: SendChannel;
+  /** One of the intents of a broadcast (multicast): one intent per recipient, the retry key per request. */
+  broadcastId?: string;
+}
+
+export interface OutboxImage {
+  mediaId: string;
+  originalUrl: string;
+  previewUrl: string;
+}
+
+/** An image uploaded for sending (original + preview), public for 7 days under unguessable names. */
+export interface LineMedia {
+  id: string;
+  uploaderId: string;
+  accountId: string;
+  createdAt: string;
+  original: { file: string; type: 'image/jpeg' | 'image/png'; bytes: number };
+  preview: { file: string; type: 'image/jpeg' | 'image/png'; bytes: number };
+}
+
+/** One broadcast (multicast) to several 1:1 conversations (2026-11-02). */
+export interface LineBroadcast {
+  id: string;
+  operationId: string;
+  actorId: string;
+  accountId: string;
+  createdAt: string;
+  body: string;
+  image: OutboxImage | null;
+  /** The intents, one per recipient, in request order; requests of at most 500 each share a retry key. */
+  intentIds: string[];
+}
+
+/** The confirmation of a broadcast: the exact recipients, body and image the sender saw. */
+export interface BroadcastConsent {
+  tokenHash: string;
+  actorId: string;
+  accountId: string;
+  conversationIds: string[];
+  bodyHash: string;
+  imageId: string | null;
+  createdAt: string;
+  expiresAt: string;
+  consumedByBroadcastId: string | null;
 }
 
 export interface LineAuditRecord {
@@ -227,6 +294,12 @@ export interface LineState {
   outbox: OutboxIntent[];
   audit: LineAuditRecord[];
   seq: number;
+  /** Images for sending (2026-11-02). Absent in older files. */
+  media?: LineMedia[];
+  broadcasts?: LineBroadcast[];
+  broadcastConsents?: BroadcastConsent[];
+  /** The official account's history file: the modification time last imported (ms), to skip unchanged files. */
+  historyImport?: { mtimeMs: number; size: number } | null;
 }
 
 export function nextLineId(state: LineState, prefix: string): string {

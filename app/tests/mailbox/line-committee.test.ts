@@ -75,7 +75,7 @@ describe('line.json', () => {
     const c = lineConfig('/data/mailbox', {}, true);
     expect(c.account).toEqual({ id: 'oa', name: '合成 公式LINE', botUserId: null });
     expect(c.receiver).toEqual({ url: 'http://receiver.example.invalid:8788', pullToken: PULL, pollSeconds: 30, settleSeconds: 60 });
-    expect(c.send).toEqual({ accessToken: ACCESS, monthlyLimit: 200, allowGroups: false, apiBase: 'https://api.line.me' });
+    expect(c.send).toEqual({ accessToken: ACCESS, monthlyLimit: 200, allowGroups: false, apiBase: 'https://api.line.me', publicBaseUrl: null });
     expect(c.dataFile).toBe(path.join('/data/mailbox', 'line-state.json'));
     expect(lineConfig('/d').send).toBeNull();
   });

@@ -28,6 +28,7 @@ import { registerTaskRoutes, type TaskRuntime } from '../tasks/routes.js';
 import { registerAssistantRoutes, type AssistantRuntime } from '../assistant/routes.js';
 import { HttpError } from './http-error.js';
 import { registerLineRoutes, type LineRuntime } from './line-routes.js';
+import { DISCORD_LINE_PATHS } from '../line/discord.js';
 
 export const SESSION_COOKIE = 'smm_demo_persona';
 
@@ -309,7 +310,8 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   } else if (auth.mode === 'discord') {
     // The Bot data source path is always exempt from the browser Origin gate, so that without a key it answers 404 (no such route) like any unknown path.
     const serverToServerPaths = [...(mailbox ? [INGEST_PATH] : []), ...(options.rental?.driveSyncKey ? [SYNC_ACK_PATH] : []), BOT_DATASOURCE_PATH];
-    discordApi = installDiscordAuth(app, options.discord!, { listenPort: options.listenPort, isAllowedLoopbackHost: isAllowedHost, sessionUser, serverToServerPaths });
+    // The Bot's internal LINE routes (2026-11-02): reached over the internal network only, refused through the proxy.
+    discordApi = installDiscordAuth(app, options.discord!, { listenPort: options.listenPort, isAllowedLoopbackHost: isAllowedHost, sessionUser, serverToServerPaths, internalPaths: DISCORD_LINE_PATHS });
   } else {
     // Every request (including reads and static files) must address the loopback
     // server by a loopback name, so a DNS-rebinding origin cannot reach the API at all.
@@ -407,6 +409,8 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
         clock,
         now: () => Date.parse(clock()),
         parse,
+        publicOrigin: auth.mode === 'discord' ? auth.publicOrigin : null,
+        fromTrustedProxy: (request) => discordApi!.fromTrustedProxy(request),
       })
     : null;
 

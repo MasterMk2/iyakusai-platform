@@ -3,6 +3,8 @@ import type { LineAccountSummary, LineConversationDetail, LineInboxItem, LineMes
 import { normalizeForSearch } from '../domain/queries.js';
 import type { AppState, User } from '../domain/types.js';
 import { canEditLine, canReadLine, canReplyLine, canTriageLine, lineGrant, permittedConversations, readableConversation } from './access.js';
+import { shadowedHistory } from './history.js';
+import { MEDIA_PATH } from './media.js';
 import { evaluateTarget, outboxView, targetView } from './reply.js';
 import type { LineAccount, LineConversation, LineMessage, LineState } from './types.js';
 
@@ -35,11 +37,14 @@ function accountOf(state: LineState, accountId: string) {
   return account;
 }
 
-/** Stable timeline order: send time, then ID, regardless of arrival order. */
+/**
+ * Stable timeline order: send time, then ID, regardless of arrival order. A history row that the webhook (or this
+ * app's own send) already shows is left out, whichever of the two arrived first (2026-11-02).
+ */
 export function messagesOf(state: LineState, conv: LineConversation): LineMessage[] {
-  return state.messages
-    .filter((m) => m.conversationId === conv.id)
-    .sort((a, b) => a.sentAt.localeCompare(b.sentAt) || a.id.localeCompare(b.id));
+  const own = state.messages.filter((m) => m.conversationId === conv.id);
+  const hidden = shadowedHistory(own, state.outbox, conv);
+  return own.filter((m) => !hidden.has(m.id)).sort((a, b) => a.sentAt.localeCompare(b.sentAt) || a.id.localeCompare(b.id));
 }
 
 function searchableText(m: LineMessage): string {
@@ -145,17 +150,35 @@ export function lineTriageView(state: LineState, mail: LinePeople, user: User, c
 }
 
 function messageView(m: LineMessage): LineMessageView {
-  return { id: m.id, direction: m.direction, senderLabel: m.senderLabel, sentAt: m.sentAt, content: m.content, provenance: m.provenance.source };
+  return {
+    id: m.id,
+    direction: m.direction,
+    senderLabel: m.senderLabel,
+    sentAt: m.sentAt,
+    content: m.content,
+    provenance: m.provenance.source,
+    ...(m.history ? { history: { staff: m.history.staff, autoReply: m.history.autoReply } } : {}),
+  };
 }
 
-export function lineConversationDetail(state: LineState, mail: LinePeople, user: User, conversationId: string, now: string, inFlight: ReadonlySet<string>): LineConversationDetail {
+export function lineConversationDetail(
+  state: LineState,
+  mail: LinePeople,
+  user: User,
+  conversationId: string,
+  now: string,
+  inFlight: ReadonlySet<string>,
+  imagesEnabled = false,
+): LineConversationDetail {
   const conv = readableConversation(state, user, conversationId);
   const account = accountOf(state, conv.accountId);
   const names = namesFrom(mail);
   const nowMs = Date.parse(now);
   const canReply = canReplyLine(state, user, conv.accountId);
   const check = evaluateTarget(state, conv, nowMs);
-  const draft = state.drafts.find((d) => d.conversationId === conv.id && d.authorId === user.id);
+  // The screen's own draft; a draft made from Discord stays there.
+  const draft = state.drafts.find((d) => d.conversationId === conv.id && d.authorId === user.id && (d.via ?? 'app') === 'app');
+  const draftImage = draft?.imageId ? (state.media ?? []).find((m) => m.id === draft.imageId) : undefined;
   return {
     conversationId: conv.id,
     account: { id: account.id, name: account.name, kind: account.kind },
@@ -174,7 +197,18 @@ export function lineConversationDetail(state: LineState, mail: LinePeople, user:
       available: canReply && (check.ok || check.countPending === true),
       canReply,
       reason: !check.ok && !check.countPending ? check.reason : canReply ? null : 'この LINE アカウントで返信する権限がありません（閲覧・対応情報の権限とは別です）。',
-      draft: canReply && draft ? { id: draft.id, version: draft.version, body: draft.body, updatedAt: draft.updatedAt } : null,
+      draft:
+        canReply && draft
+          ? {
+              id: draft.id,
+              version: draft.version,
+              body: draft.body,
+              updatedAt: draft.updatedAt,
+              imageId: draft.imageId ?? null,
+              imagePreviewUrl: draftImage ? `${MEDIA_PATH}/${draftImage.preview.file}` : null,
+            }
+          : null,
+      imagesEnabled: canReply && imagesEnabled,
     },
     outbox: state.outbox
       .filter((o) => o.conversationId === conv.id)

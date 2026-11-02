@@ -12,7 +12,21 @@ export interface LinePushRequest {
   to: string;
   targetType: 'user' | 'group' | 'room';
   text: string;
+  /** An image after the text (2026-11-02): public HTTPS URLs LINE fetches. One request, one message per recipient. */
+  image?: { originalUrl: string; previewUrl: string } | null;
 }
+
+/** A multicast (2026-11-02): the same messages to at most 500 users, one retry key per request. */
+export interface LineMulticastRequest {
+  retryKey: string;
+  accountId: string;
+  /** Stored, verified user IDs. Never taken from a client. */
+  to: string[];
+  text: string;
+  image?: { originalUrl: string; previewUrl: string } | null;
+}
+
+export const MULTICAST_MAX = 500;
 
 /**
  * Result classes mirror the documented push semantics:
@@ -38,6 +52,8 @@ export interface LineQuota {
 export interface LinePushConnector {
   readonly kind: 'mock' | 'messaging_api';
   push(request: LinePushRequest): Promise<LinePushOutcome>;
+  /** Absent: broadcasting is not possible through this connector. */
+  multicast?(request: LineMulticastRequest): Promise<LinePushOutcome>;
   /** LINE's own count for the month, or null when it could not be read. */
   quota?(): Promise<LineQuota | null>;
   /** Members of a group or room the account is in, or null (not a member, or not readable). */
@@ -88,10 +104,19 @@ export class MockLinePushConnector implements LinePushConnector {
 
   async push(request: LinePushRequest): Promise<LinePushOutcome> {
     await Promise.resolve();
-    const textHash = createHash('sha256').update(request.text).digest('hex');
+    const textHash = createHash('sha256').update(`${request.text}|${request.image?.originalUrl ?? ''}`).digest('hex');
     const fingerprint = `${request.accountId}|${request.targetType}|${request.to}|${textHash}`;
     const outcome = this.decide(request.retryKey, fingerprint);
     this.calls.push({ retryKey: request.retryKey, to: request.to, textHash, outcome: outcome.kind });
+    return outcome;
+  }
+
+  async multicast(request: LineMulticastRequest): Promise<LinePushOutcome> {
+    await Promise.resolve();
+    const textHash = createHash('sha256').update(`${request.text}|${request.image?.originalUrl ?? ''}`).digest('hex');
+    const to = request.to.join(',');
+    const outcome = this.decide(request.retryKey, `${request.accountId}|multicast|${to}|${textHash}`);
+    this.calls.push({ retryKey: request.retryKey, to, textHash, outcome: outcome.kind });
     return outcome;
   }
 

@@ -18,16 +18,44 @@ const CONTROL = /[\u0000-\u001f\u007f]/;
 export interface LineOaConfig {
   account: { id: string; name: string; botUserId: string | null };
   receiver: { url: string; pullToken: string; pollSeconds: number; settleSeconds: number };
-  /** Null: read-only (no push). */
-  send: { accessToken: string; monthlyLimit: number; allowGroups: boolean; apiBase: string } | null;
+  /**
+   * Null: read-only (no push). `publicBaseUrl` (2026-11-02): where LINE fetches sent images (the app's public
+   * origin); null here means SMM_PUBLIC_ORIGIN is used, and without either images cannot be sent.
+   */
+  send: { accessToken: string; monthlyLimit: number; allowGroups: boolean; apiBase: string; publicBaseUrl: string | null } | null;
   /** Where the conversations, grants and send records are kept (line-state.json in the mail folder). */
   dataFile: string;
+  /** Images for sending (line-media/ in the mail folder). */
+  mediaDir: string;
+  /** The official account's own chat history (JSONL, contract A of 2026-11-02), or null. */
+  history: { file: string } | null;
+  /** Replies from Discord threads through the Bot (contract C of 2026-11-02), or null (no internal routes). */
+  discord: { key: string; threadMapFile: string } | null;
 }
 
-const KNOWN = new Set(['version', 'account', 'receiver', 'send']);
+const KNOWN = new Set(['version', 'account', 'receiver', 'send', 'history', 'discord']);
 const ACCOUNT_KNOWN = new Set(['id', 'name', 'botUserId']);
 const RECEIVER_KNOWN = new Set(['url', 'pullTokenFile', 'pollSeconds', 'settleSeconds']);
-const SEND_KNOWN = new Set(['accessTokenFile', 'monthlyLimit', 'allowGroups', 'apiBase']);
+const SEND_KNOWN = new Set(['accessTokenFile', 'monthlyLimit', 'allowGroups', 'apiBase', 'publicBaseUrl']);
+const HISTORY_KNOWN = new Set(['file']);
+const DISCORD_KNOWN = new Set(['enabled', 'keyFile', 'threadMapFile']);
+
+/** An https origin, optionally with a path prefix (no query, no credentials, no trailing slash). */
+export function publicBaseUrlOf(value: unknown, where: string): string {
+  let url: URL;
+  try {
+    url = new URL(String(value));
+  } catch {
+    throw new ConfigError(`${where} は https:// で始まる公開 URL で指定してください。`);
+  }
+  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) throw new ConfigError(`${where} は https:// で始まる公開 URL（クエリなし）で指定してください。`);
+  return `${url.origin}${url.pathname.replace(/\/+$/, '')}`;
+}
+
+const filePath = (value: unknown, where: string): string => {
+  if (typeof value !== 'string' || !value.trim() || CONTROL.test(value)) throw new ConfigError(`${where} はファイルのパスで指定してください。`);
+  return resolve(value);
+};
 
 export const LINE_CONFIG_FILE = 'line.json';
 
@@ -64,7 +92,7 @@ function integer(value: unknown, fallback: number, min: number, max: number, whe
 }
 
 /** Validates the document; the secrets are read by the caller (tests pass them directly). */
-export function validateLineConfig(raw: unknown, dataDir: string, secrets: { pullToken: string; accessToken: string | null }): LineOaConfig {
+export function validateLineConfig(raw: unknown, dataDir: string, secrets: { pullToken: string; accessToken: string | null; discordKey?: string | null }): LineOaConfig {
   const c = object(raw, 'line.json', KNOWN);
   if (c.version !== 1) throw new ConfigError('line.json の version は 1 でなければなりません。');
   const a = object(c.account, 'line.json の account', ACCOUNT_KNOWN);
@@ -91,7 +119,31 @@ export function validateLineConfig(raw: unknown, dataDir: string, secrets: { pul
     if (typeof apiBase !== 'string' || !/^https:\/\/[a-z0-9.-]+(:\d+)?$/.test(apiBase)) throw new ConfigError('send.apiBase は https://ホスト名 の形で指定してください。');
     if (!secrets.accessToken) throw new ConfigError('send.accessTokenFile（チャネルアクセストークン）がありません。');
     // By default the free plan's 200 messages a month; a group counts once per member.
-    send = { accessToken: secrets.accessToken, monthlyLimit: integer(s.monthlyLimit, 200, 1, 100_000, 'send.monthlyLimit'), allowGroups: s.allowGroups === true, apiBase };
+    send = {
+      accessToken: secrets.accessToken,
+      monthlyLimit: integer(s.monthlyLimit, 200, 1, 100_000, 'send.monthlyLimit'),
+      allowGroups: s.allowGroups === true,
+      apiBase,
+      publicBaseUrl: s.publicBaseUrl === undefined ? null : publicBaseUrlOf(s.publicBaseUrl, 'send.publicBaseUrl'),
+    };
+  }
+
+  let history: LineOaConfig['history'] = null;
+  if (c.history !== undefined) {
+    const h = object(c.history, 'line.json の history', HISTORY_KNOWN);
+    history = { file: filePath(h.file, 'history.file') };
+  }
+
+  let discord: LineOaConfig['discord'] = null;
+  if (c.discord !== undefined) {
+    const d = object(c.discord, 'line.json の discord', DISCORD_KNOWN);
+    if (d.enabled !== undefined && typeof d.enabled !== 'boolean') throw new ConfigError('discord.enabled は true / false で指定してください。');
+    const threadMapFile = filePath(d.threadMapFile, 'discord.threadMapFile');
+    if (d.enabled === true) {
+      if (!send) throw new ConfigError('discord を使うには send（公式LINE の送信）の設定が要ります。');
+      if (!secrets.discordKey) throw new ConfigError('discord.keyFile（Bot との鍵）がありません。');
+      discord = { key: secrets.discordKey, threadMapFile };
+    }
   }
 
   return {
@@ -105,6 +157,9 @@ export function validateLineConfig(raw: unknown, dataDir: string, secrets: { pul
     },
     send,
     dataFile: join(dataDir, 'line-state.json'),
+    mediaDir: join(dataDir, 'line-media'),
+    history,
+    discord,
   };
 }
 
@@ -123,5 +178,7 @@ export function loadLineConfig(mailConfigFile: string, dataDir: string): LineOaC
   const send = doc.send && typeof doc.send === 'object' ? (doc.send as Record<string, unknown>) : null;
   const pullToken = readSecret(receiver.pullTokenFile, 'receiver.pullTokenFile（受け口の読み出し用トークン）');
   const accessToken = send ? readSecret(send.accessTokenFile, 'send.accessTokenFile（チャネルアクセストークン）') : null;
-  return validateLineConfig(raw, dataDir, { pullToken, accessToken });
+  const discord = doc.discord && typeof doc.discord === 'object' ? (doc.discord as Record<string, unknown>) : null;
+  const discordKey = discord?.enabled === true ? readSecret(discord.keyFile, 'discord.keyFile（Bot との鍵）') : null;
+  return validateLineConfig(raw, dataDir, { pullToken, accessToken, discordKey });
 }

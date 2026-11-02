@@ -48,6 +48,11 @@ interface Deps {
   sessionUser: (user: User) => SessionUser;
   /** Further signed server-to-server routes (no browser Origin), each verified by its own handler. */
   serverToServerPaths?: readonly string[];
+  /**
+   * Routes for containers on the internal network only (the Bot's LINE routes, 2026-11-02), each checking its own
+   * key. They skip the proxy, Host and Origin checks, and a request through the trusted proxy (the internet) gets 404.
+   */
+  internalPaths?: readonly string[];
 }
 
 const fail = (error: string, message: string) => ({ error, message });
@@ -168,8 +173,19 @@ export function installDiscordAuth(app: FastifyInstance, rt: DiscordAuthRuntime,
   }
 
   // ---- gate: transport, Host, Origin and CSRF (before any handler or body parsing)
+  const fromTrustedProxy = (request: FastifyRequest) => {
+    const remote = normalizeAddress(request.raw.socket.remoteAddress);
+    return remote !== null && rt.trustedProxies.has(remote);
+  };
+
   app.addHook('onRequest', async (request, reply) => {
     const path = request.url.split('?')[0] ?? '';
+    // The matched route too (the router decodes percent-escapes), so an escaped path cannot slip past.
+    if (deps.internalPaths?.some((p) => p === path || p === request.routeOptions.url)) {
+      if (fromTrustedProxy(request)) return reply.code(404).header('Cache-Control', 'no-store').send(fail('not_found', 'API が見つかりません。'));
+      if (request.method !== 'POST') return reply.code(404).header('Cache-Control', 'no-store').send(fail('not_found', 'API が見つかりません。'));
+      return;
+    }
     if (production) {
       const remote = normalizeAddress(request.raw.socket.remoteAddress);
       const trusted = remote !== null && rt.trustedProxies.has(remote);
@@ -443,6 +459,8 @@ export function installDiscordAuth(app: FastifyInstance, rt: DiscordAuthRuntime,
 
   return {
     currentUser: (request: FastifyRequest): User | null => users.get(request)?.user ?? null,
+    /** The request came through a trusted reverse proxy (by the socket address, never a forwarded header). */
+    fromTrustedProxy,
     /** This request's sign-in (session key, password time, Discord ID); server-side only. */
     currentSession: (request: FastifyRequest): SessionIdentity | null => users.get(request)?.identity ?? null,
     /** Discord ID of an active account, from stored data (never for authorization by itself). */

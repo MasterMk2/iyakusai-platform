@@ -307,6 +307,18 @@ html { scroll-padding-top: 64px; }
 .line-preview h5 { margin: 0 0 4px; font-size: 14px; }
 .line-preview dl { display: grid; grid-template-columns: 80px 1fr; gap: 2px 8px; font-size: 14px; margin: 0; }
 .line-preview dd { margin: 0; }
+/* Official LINE sending additions (2026-11-02): history rows, images, broadcast. */
+.history-badge { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); font-size: 12px; }
+.line-image-picker { display: flex; flex-direction: column; gap: 4px; }
+.line-image-picker .button-like { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; cursor: pointer; }
+.line-image-picker input[type='file'] { max-width: 100%; }
+.line-image { margin: 0; display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+.line-image img, .line-image-thumb { max-width: min(240px, 100%); max-height: 240px; border-radius: 6px; border: 1px solid var(--border); object-fit: contain; }
+.broadcast-recipients { border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; margin: 8px 0; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.broadcast-list { list-style: none; padding: 0; margin: 0; max-height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; font-size: 14px; }
+.broadcast-list label { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+.line-broadcast textarea { width: 100%; box-sizing: border-box; }
+.line-broadcast .line-preview dl { grid-template-columns: 7.5em 1fr; }
 .notices { font-size: 14px; color: var(--amber); margin: 6px 0; padding-left: 18px; }
 .confirm-check { display: flex; gap: 6px; align-items: center; font-size: 14px; font-weight: 600; }
 .line-outbox ul { list-style: none; padding: 0; margin: 0; }

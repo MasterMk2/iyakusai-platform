@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { LINE_LIMITS, type LineConversationDetail, type LineDraftView, type LinePreviewResponse, type LineSendResponse } from '../../shared/line';
 import { api, fmtDate, toFailure } from '../api';
+import { LineImagePicker, type PickedImage } from './LineImagePicker';
 
 /**
  * Manual reply: save draft -> server preview with a short-lived confirmation ->
@@ -10,6 +11,8 @@ import { api, fmtDate, toFailure } from '../api';
 export function LineReplyPanel({ detail, onSent }: { detail: LineConversationDetail; onSent: () => void }) {
   const [saved, setSaved] = useState<LineDraftView | null>(detail.reply.draft);
   const [body, setBody] = useState(detail.reply.draft?.body ?? '');
+  const initialImage = detail.reply.draft?.imageId && detail.reply.draft.imagePreviewUrl ? { id: detail.reply.draft.imageId, previewUrl: detail.reply.draft.imagePreviewUrl, expiresAt: '' } : null;
+  const [image, setImage] = useState<PickedImage | null>(initialImage);
   const [preview, setPreview] = useState<LinePreviewResponse | null>(null);
   const [operationId, setOperationId] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState(false);
@@ -29,8 +32,17 @@ export function LineReplyPanel({ detail, onSent }: { detail: LineConversationDet
     );
   }
 
+  function chooseImage(next: PickedImage | null) {
+    setImage(next);
+    discardPreview();
+  }
+
   function edit(value: string) {
     setBody(value);
+    discardPreview();
+  }
+
+  function discardPreview() {
     if (preview) {
       // The confirmation covered the previous text only.
       setPreview(null);
@@ -46,8 +58,12 @@ export function LineReplyPanel({ detail, onSent }: { detail: LineConversationDet
     setEditedAfterPreview(false);
     try {
       let draft = saved;
-      if (!draft || draft.body !== body.trim()) {
-        draft = await api<LineDraftView>('PUT', `/api/line/conversations/${detail.conversationId}/reply/draft`, { body, expectedVersion: saved?.version ?? null });
+      if (!draft || draft.body !== body.trim() || (draft.imageId ?? null) !== (image?.id ?? null)) {
+        draft = await api<LineDraftView>('PUT', `/api/line/conversations/${detail.conversationId}/reply/draft`, {
+          body,
+          expectedVersion: saved?.version ?? null,
+          ...(detail.reply.imagesEnabled || image ? { imageId: image?.id ?? null } : {}),
+        });
         setSaved(draft);
         setBody(draft.body);
       }
@@ -80,6 +96,7 @@ export function LineReplyPanel({ detail, onSent }: { detail: LineConversationDet
       setConfirmed(false);
       setSaved(null);
       setBody('');
+      setImage(null);
       setMessage({ kind: 'ok', text: `${res.outbox.mock ? '模擬送信の結果' : '送信の結果'}: ${res.outbox.statusLabel}。${res.outbox.statusNote}` });
       onSent();
     } catch (err) {
@@ -103,13 +120,18 @@ export function LineReplyPanel({ detail, onSent }: { detail: LineConversationDet
     <section className="line-reply" aria-label="LINE で返信">
       <h4>{mock ? 'LINE で返信（手動・模擬送信）' : 'LINE で返信'}</h4>
       <p className="hint">
-        手動の返信だけを扱います。自動返信や一斉送信はしません。送信前に送信先と本文を確認し、確認した内容だけを 1 回送ります。
+        手動の返信だけを扱います（自動返信はしません。複数の相手には公式LINE の画面の「一斉送信」から）。送信前に送信先と本文を確認し、確認した内容だけを 1 回送ります。
       </p>
       <textarea aria-label="返信本文" rows={4} value={body} onChange={(e) => edit(e.target.value)} disabled={busy} placeholder="返信本文を入力" />
       <span className={`counter ${length > LINE_LIMITS.replyMaxLength ? 'over' : ''}`}>
         {length} / {LINE_LIMITS.replyMaxLength}
       </span>
-      {editedAfterPreview && <p className="status warning">本文を変更したため、送信前にもう一度確認が必要です。</p>}
+      {detail.reply.imagesEnabled ? (
+        <LineImagePicker accountId={detail.account.id} image={image} onChange={chooseImage} disabled={busy} />
+      ) : (
+        detail.sending === 'live' && <p className="hint">このサーバーでは画像を送れません（公開 URL が設定されていません）。</p>
+      )}
+      {editedAfterPreview && <p className="status warning">本文または画像を変更したため、送信前にもう一度確認が必要です。</p>}
       {!preview && (
         <div className="actions">
           <button type="button" onClick={() => void prepare()} disabled={busy || length === 0}>
@@ -138,6 +160,14 @@ export function LineReplyPanel({ detail, onSent }: { detail: LineConversationDet
                 {preview.body}
               </pre>
             </dd>
+            {preview.image && (
+              <>
+                <dt>画像</dt>
+                <dd>
+                  <img className="line-image-thumb" src={preview.image.previewUrl} alt="送る画像" data-testid="preview-image" />
+                </dd>
+              </>
+            )}
             <dt>確認の期限</dt>
             <dd>{fmtDate(preview.expiresAt)}</dd>
           </dl>

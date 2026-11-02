@@ -1,6 +1,8 @@
 import { committeeLineState } from './committee.js';
 import type { LinePushConnector } from './connector.js';
 import { LineFeed } from './feed.js';
+import { LineHistoryImporter } from './history.js';
+import { LineMediaFiles } from './media.js';
 import { MessagingApiConnector, type Fetch } from './messaging-api.js';
 import type { LineOaConfig } from './oa-config.js';
 import { LineStore } from './store.js';
@@ -12,6 +14,10 @@ export interface CommitteeLine {
   store: LineStore;
   connector: LinePushConnector;
   feed: LineFeed;
+  /** The official account's history file (2026-11-02), when line.json has "history". */
+  history: LineHistoryImporter | null;
+  /** Images for sending (2026-11-02). */
+  media: LineMediaFiles;
 }
 
 /** A connector that never sends: LINE is read-only without a channel access token. */
@@ -42,5 +48,8 @@ export function openCommitteeLine(cfg: LineOaConfig, opts: { fetch?: Fetch; conn
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
     ...(opts.now ? { now: opts.now } : {}),
   });
-  return { store, connector, feed };
+  const history = cfg.history
+    ? new LineHistoryImporter({ store, accountId: account.id, file: cfg.history.file, pollSeconds: cfg.receiver.pollSeconds, ...(opts.now ? { now: opts.now } : {}) })
+    : null;
+  return { store, connector, feed, history, media: new LineMediaFiles(cfg.mediaDir) };
 }

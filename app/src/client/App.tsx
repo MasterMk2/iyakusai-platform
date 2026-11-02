@@ -13,6 +13,7 @@ import { DiscordBar } from './components/DiscordBar';
 import { DiscordLogin } from './components/DiscordLogin';
 import { HomeView } from './components/HomeView';
 import { LoadStatus } from './components/LoadStatus';
+import { LineBroadcast } from './components/LineBroadcast';
 import { LineConversation } from './components/LineConversation';
 import { MailCompose, newDraft } from './components/MailCompose';
 import { MailReauth } from './components/MailReauth';
@@ -48,6 +49,8 @@ export interface Route {
   inboxFilter: InboxFilter | null;
   /** Committee mailbox: writing new mail (`compose=1`) instead of a thread. */
   mailCompose: boolean;
+  /** Official LINE: the broadcast screen (`broadcast=1`) instead of a conversation (2026-11-02). */
+  lineBroadcast: boolean;
   /** Bot tab: the sub-view (`#/bot/<section>`) and an opened job (`?job=`). */
   botSection: BotSection | null;
   botJobId: string | null;
@@ -70,6 +73,7 @@ const EMPTY_ROUTE: Route = {
   taskFocus: null,
   inboxFilter: null,
   mailCompose: false,
+  lineBroadcast: false,
   botSection: null,
   botJobId: null,
   contactId: null,
@@ -102,7 +106,10 @@ export function parseHash(hash: string): Route {
   }
   const mailCompose = !threadId && !conversationId && params.get('compose') === '1';
   if (parts[0] === 'mailbox' && parts[1]) return { ...EMPTY_ROUTE, mailboxId: decodeURIComponent(parts[1]), threadId, conversationId, inboxFilter, mailCompose };
-  if (parts[0] === 'line' && parts[1]) return { ...EMPTY_ROUTE, lineAccountId: decodeURIComponent(parts[1]), threadId, conversationId, inboxFilter };
+  if (parts[0] === 'line' && parts[1]) {
+    const lineBroadcast = !threadId && !conversationId && params.get('broadcast') === '1';
+    return { ...EMPTY_ROUTE, lineAccountId: decodeURIComponent(parts[1]), threadId, conversationId, inboxFilter, lineBroadcast };
+  }
   return { ...EMPTY_ROUTE, threadId, conversationId, inboxFilter, mailCompose };
 }
 
@@ -139,6 +146,7 @@ export function toHash(route: Route): string {
   if (route.threadId) q.set('thread', route.threadId);
   else if (route.conversationId) q.set('conv', route.conversationId);
   else if (route.mailCompose && !route.lineAccountId) q.set('compose', '1');
+  else if (route.lineBroadcast && route.lineAccountId) q.set('broadcast', '1');
   if (route.inboxFilter) q.set('filter', route.inboxFilter);
   return q.size > 0 ? `${base}?${q.toString()}` : base;
 }
@@ -550,10 +558,13 @@ export function App() {
 
   const mailboxList = mailboxes.data ?? [];
   const lineList = lineAccounts.data ?? [];
+  // The official account the viewer may send from: the broadcast button and screen (2026-11-02).
+  const sendableLine = lineList.find((a) => a.kind === 'official_account' && a.canReply && a.sending !== 'none') ?? null;
+  const broadcastAccount = route.lineAccountId ? (lineList.find((a) => a.id === route.lineAccountId && a.kind === 'official_account' && a.canReply && a.sending !== 'none') ?? null) : null;
   // The synthetic inbox sends administrators to the access screen; the committee mailbox is read by everyone.
   const isAdminView = !committeeMail && (route.view === 'admin' || user.canManageAccess);
   const composing = !isAdminView && canSendMail && route.mailCompose && !route.lineAccountId;
-  const inboxDetail = !isAdminView && (!!(route.threadId ?? route.conversationId) || composing);
+  const inboxDetail = !isAdminView && (!!(route.threadId ?? route.conversationId) || composing || (route.lineBroadcast && !!broadcastAccount));
   // One message in two mailboxes counts once in the committee total; the per-mailbox counts would count it twice.
   const allUnhandled = committeeMail?.unhandledTotal ?? mailboxList.reduce((n, m) => n + m.unhandledCount, 0) + lineList.reduce((n, a) => n + a.unhandledCount, 0);
   const scopeKey = route.mailboxId ? `m:${route.mailboxId}` : route.lineAccountId ? `l:${route.lineAccountId}` : 'all';
@@ -652,6 +663,23 @@ export function App() {
             <p className="hint">委員会のアドレスから送ります。</p>
           </section>
         )}
+        {sendableLine && !isAdminView && (
+          <section className="sidebar-send" aria-labelledby="sidebar-line-send-title">
+            <h2 className="sidebar-title" id="sidebar-line-send-title">
+              公式LINE
+            </h2>
+            <button
+              type="button"
+              className={`send-entry ${route.lineBroadcast ? 'active' : ''}`}
+              aria-current={route.lineBroadcast ? 'page' : undefined}
+              onClick={() => navigate({ ...EMPTY_ROUTE, lineAccountId: sendableLine.id, lineBroadcast: true })}
+              data-testid="line-broadcast-side"
+            >
+              一斉送信
+            </button>
+            <p className="hint">選んだ相手にまとめて送ります。</p>
+          </section>
+        )}
         <nav aria-label="受信箱">
           <h2 className="sidebar-title">受信箱</h2>
           {isAdminView ? (
@@ -744,6 +772,21 @@ export function App() {
                   </button>
                 </section>
               )}
+              {broadcastAccount && (
+                <section className="list-compose" aria-labelledby="list-broadcast-title">
+                  <h2 className="list-compose-label" id="list-broadcast-title">
+                    送信
+                  </h2>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => navigate({ ...route, threadId: null, conversationId: null, lineBroadcast: true })}
+                    data-testid="line-broadcast-open"
+                  >
+                    一斉送信
+                  </button>
+                </section>
+              )}
               <ThreadList
                 key={scopeKey}
                 mailboxId={route.mailboxId}
@@ -773,6 +816,7 @@ export function App() {
                     threadId: selection.kind === 'thread' ? selection.id : null,
                     conversationId: selection.kind === 'conversation' ? selection.id : null,
                     mailCompose: false,
+                    lineBroadcast: false,
                   })
                 }
               />
@@ -827,6 +871,14 @@ export function App() {
                         }
                       : null
                   }
+                />
+              ) : route.lineBroadcast && broadcastAccount ? (
+                <LineBroadcast
+                  key={broadcastAccount.id}
+                  accountId={broadcastAccount.id}
+                  refresh={refresh}
+                  onSent={bump}
+                  onClose={() => navigate({ ...route, lineBroadcast: false })}
                 />
               ) : route.conversationId ? (
                 <LineConversation key={route.conversationId} conversationId={route.conversationId} refresh={refresh} onChanged={bump} caseTasks={caseTasks} />

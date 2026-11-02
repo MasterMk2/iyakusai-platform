@@ -1,4 +1,4 @@
-import type { LinePushConnector, LinePushOutcome, LinePushRequest, LineQuota } from './connector.js';
+import { MULTICAST_MAX, type LineMulticastRequest, type LinePushConnector, type LinePushOutcome, type LinePushRequest, type LineQuota } from './connector.js';
 
 // The Messaging API push adapter (2026-10-28). One text message per request, with the intent's retry key as
 // X-Line-Retry-Key so an explicit retry of the same intent is answered 409 (accepted earlier) instead of a
@@ -31,6 +31,13 @@ async function messageOf(res: Response): Promise<string> {
   }
 }
 
+/** The text, then the image (LINE counts the request once per recipient, up to 5 bubbles). */
+function messagesOf(request: { text: string; image?: { originalUrl: string; previewUrl: string } | null }): unknown[] {
+  const messages: unknown[] = [{ type: 'text', text: request.text }];
+  if (request.image) messages.push({ type: 'image', originalContentUrl: request.image.originalUrl, previewImageUrl: request.image.previewUrl });
+  return messages;
+}
+
 export class MessagingApiConnector implements LinePushConnector {
   readonly kind = 'messaging_api' as const;
 
@@ -50,12 +57,22 @@ export class MessagingApiConnector implements LinePushConnector {
   }
 
   async push(request: LinePushRequest): Promise<LinePushOutcome> {
+    return this.send('/v2/bot/message/push', request.retryKey, { to: request.to, messages: messagesOf(request) });
+  }
+
+  /** The same messages to up to 500 users in one request (2026-11-02). */
+  async multicast(request: LineMulticastRequest): Promise<LinePushOutcome> {
+    if (request.to.length < 1 || request.to.length > MULTICAST_MAX) return { kind: 'rejected', httpStatus: 400, reason: 'invalid' };
+    return this.send('/v2/bot/message/multicast', request.retryKey, { to: request.to, messages: messagesOf(request) });
+  }
+
+  private async send(path: string, retryKey: string, body: unknown): Promise<LinePushOutcome> {
     let res: Response;
     try {
-      res = await this.request('/v2/bot/message/push', {
+      res = await this.request(path, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Line-Retry-Key': request.retryKey },
-        body: JSON.stringify({ to: request.to, messages: [{ type: 'text', text: request.text }] }),
+        headers: { 'Content-Type': 'application/json', 'X-Line-Retry-Key': retryKey },
+        body: JSON.stringify(body),
       });
     } catch (err) {
       if (isTimeout(err)) return { kind: 'unknown', reason: 'timeout' };

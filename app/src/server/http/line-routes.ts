@@ -1,14 +1,19 @@
+import multipart from '@fastify/multipart';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { HANDLING_STATUSES, LIMITS, type ApiError } from '../../shared/api.js';
-import { MOCK_PUSH_OUTCOMES, type LineIngestReport, type LineSendResponse } from '../../shared/line.js';
+import { MOCK_PUSH_OUTCOMES, type BroadcastSendResponse, type LineIngestReport, type LineMediaResponse, type LineSendResponse, type OutboxView } from '../../shared/line.js';
 import { DomainError, type User } from '../domain/types.js';
 import { replyableConversation } from '../line/access.js';
+import { beginBroadcast, broadcastOptions, broadcastSummary, previewBroadcast, recordBroadcastAttempt } from '../line/broadcast.js';
 import { lineCommitteeAccess, setLineCommitteeGrant } from '../line/committee.js';
 import { MockLinePushConnector, type LinePushConnector, type LinePushOutcome } from '../line/connector.js';
+import { registerDiscordLineRoutes, type DiscordLineOptions } from '../line/discord.js';
 import { MAX_LINE_BATCH } from '../line/fixtures.js';
+import { expireMedia, MEDIA_FILE, MEDIA_PATH, mediaExpired, mediaExpiresAt, mediaOfFile, ORIGINAL_MAX_BYTES, registerMedia, checkUploader, storeUpload, type LineMediaFiles } from '../line/media.js';
+import { sha256 } from '../line/normalize.js';
 import { lineAccountSummaries, lineConversationDetail, type LinePeople } from '../line/queries.js';
-import { beginRetry, beginSend, discardDraft, observeMemberCount, previewReply, pushRequestOf, recordAttempt, saveDraft, type PreviewQuota } from '../line/reply.js';
+import { beginRetry, beginSend, checkLineQuota, discardDraft, observeMemberCount, previewReply, pushRequestOf, recordAttempt, saveDraft, type PreviewQuota, type SendContext } from '../line/reply.js';
 import { releaseLineBatches } from '../line/seed.js';
 import type { LineStore } from '../line/store.js';
 import { addLineNote, getOutbox, lineAccessMatrix, lineAssigneeCandidates, lineAuditLog, setLineGrant, updateLineTriage } from '../line/triage.js';
@@ -38,7 +43,15 @@ export interface LineRouteContext {
    * /api/line/admin/access instead of the synthetic /api/admin/line routes, and LINE's own facts (member count,
    * this month's messages) read just before a preview.
    */
-  committee?: { people: () => User[] };
+  committee?: {
+    people: () => User[];
+    /** Where LINE fetches sent images (send.publicBaseUrl or SMM_PUBLIC_ORIGIN, https only); null: no images. */
+    imageBaseUrl?: string | null;
+    /** The image files (line-media/ in the mail folder). Absent: no images. */
+    media?: LineMediaFiles;
+    /** Replies from Discord threads through the Bot (contract C). Absent: no internal routes. */
+    discord?: DiscordLineOptions | null;
+  };
 }
 
 const convParams = z.strictObject({ conversationId: z.string().regex(/^lc_[0-9a-f]{16}$/) });
@@ -57,7 +70,6 @@ const triageBody = z
   })
   .refine((b) => b.status !== undefined || b.assigneeId !== undefined || b.labels !== undefined, { message: '変更内容がありません' });
 const noteBody = z.strictObject({ body: z.string().max(LIMITS.noteMaxLength * 2) });
-const draftBody = z.strictObject({ body: bodyText, expectedVersion: version.nullable() });
 const previewBody = z.strictObject({ draftId, draftVersion: version });
 // No recipient, method or "confirmed" flag is accepted from the client: strict schemas reject them.
 const sendBody = z.strictObject({
@@ -68,6 +80,16 @@ const sendBody = z.strictObject({
   body: bodyText,
 });
 const retryBody = z.strictObject({ expectedAttempts: z.number().int().min(1).max(100) });
+const mediaId = z.string().regex(/^lmd_[0-9a-f]{16}$/);
+const draftBodyWithImage = z.strictObject({ body: bodyText, expectedVersion: version.nullable(), imageId: mediaId.nullable().optional() });
+const accountParams = z.strictObject({ accountId: shortId });
+const mediaParams = z.strictObject({ file: z.string().regex(MEDIA_FILE) });
+const broadcastPreviewBody = z.strictObject({
+  recipients: z.union([z.literal('all'), z.array(z.string().regex(/^lc_[0-9a-f]{16}$/)).min(1).max(5000)]),
+  body: bodyText,
+  imageId: mediaId.nullable(),
+});
+const broadcastSendBody = z.strictObject({ consentId: z.string().regex(/^[A-Za-z0-9_-]{43}$/), operationId: z.uuid(), body: bodyText });
 const lineGrantBody = z.strictObject({
   userId: shortId,
   accountId: shortId,
@@ -83,16 +105,30 @@ const committeeGrantBody = z
   .refine((b) => (b.edit === undefined) !== (b.send === undefined), { message: 'edit か send のどちらか 1 つを指定してください' })
   .refine((b) => (b.userId === undefined) !== (b.department === undefined), { message: 'userId か department のどちらか 1 つを指定してください' });
 
-export function registerLineRoutes(app: FastifyInstance, ctx: LineRouteContext): { busy: () => boolean; reset: (now: string) => void } {
+export interface LineRoutesHandle {
+  busy: () => boolean;
+  reset: (now: string) => void;
+  /** Removes expired images (7 days) and stray files; the committee calls it every hour. */
+  sweepMedia: () => void;
+}
+
+const RESULT_NOT_SAVED = '送信要求の結果を保存できませんでした。結果不明として扱います。再試行は同じ再送キーを使うため二重には送られません。';
+
+export function registerLineRoutes(app: FastifyInstance, ctx: LineRouteContext): LineRoutesHandle {
   const { line, mail, clock, parse, requireUser } = ctx;
   const store = line.store;
   // Intents whose connector call is running in this process.
   const inFlight = new Set<string>();
+  const imageBaseUrl = ctx.committee?.media ? (ctx.committee.imageBaseUrl ?? null) : null;
+  const sendContext = (via: SendContext['via'] = 'app'): SendContext => ({ imageBaseUrl, via });
 
   const view = (user: User, intentId: string) => getOutbox(store.current, mail.current, user, intentId, clock(), inFlight.has(intentId));
 
-  /** Calls the connector for an attempt that is already persisted, then records the result. */
-  async function runAttempt(user: User, intentId: string, attemptNo: number, reply: FastifyReply): Promise<LineSendResponse | FastifyReply> {
+  /**
+   * Calls the connector for an attempt that is already persisted, then records the result. The same for the
+   * screen and for Discord (contract C): `saved: false` when the result could not be stored (shown as unknown).
+   */
+  async function attempt(user: User, intentId: string, attemptNo: number): Promise<{ saved: true; outbox: OutboxView } | { saved: false; intentId: string }> {
     const intent = store.current.outbox.find((o) => o.id === intentId);
     if (!intent) throw new DomainError('not_found', '対象が見つからないか、閲覧権限がありません。');
     inFlight.add(intentId);
@@ -108,17 +144,18 @@ export function registerLineRoutes(app: FastifyInstance, ctx: LineRouteContext):
       } catch {
         // The intent stays persisted as pending (shown as unknown); only an explicit
         // retry with the same retry key is possible, which the platform deduplicates.
-        inFlight.delete(intentId);
-        return reply.code(503).send({
-          error: 'result_not_saved',
-          message: '送信要求の結果を保存できませんでした。結果不明として扱います。再試行は同じ再送キーを使うため二重には送られません。',
-          details: { intentId },
-        } satisfies ApiError);
+        return { saved: false, intentId };
       }
     } finally {
       inFlight.delete(intentId);
     }
-    return { replayed: false, outbox: view(user, intentId) };
+    return { saved: true, outbox: view(user, intentId) };
+  }
+
+  async function runAttempt(user: User, intentId: string, attemptNo: number, reply: FastifyReply): Promise<LineSendResponse | FastifyReply> {
+    const r = await attempt(user, intentId, attemptNo);
+    if (!r.saved) return reply.code(503).send({ error: 'result_not_saved', message: RESULT_NOT_SAVED, details: { intentId } } satisfies ApiError);
+    return { replayed: false, outbox: r.outbox };
   }
 
   app.get('/api/line/accounts', async (request) => {
@@ -129,7 +166,7 @@ export function registerLineRoutes(app: FastifyInstance, ctx: LineRouteContext):
   app.get('/api/line/conversations/:conversationId', async (request) => {
     const user = requireUser(request);
     const { conversationId } = parse(convParams, request.params);
-    return lineConversationDetail(store.current, mail.current, user, conversationId, clock(), inFlight);
+    return lineConversationDetail(store.current, mail.current, user, conversationId, clock(), inFlight, imageBaseUrl !== null);
   });
 
   app.get('/api/line/conversations/:conversationId/assignees', async (request) => {
@@ -155,8 +192,8 @@ export function registerLineRoutes(app: FastifyInstance, ctx: LineRouteContext):
   app.put('/api/line/conversations/:conversationId/reply/draft', async (request) => {
     const user = requireUser(request);
     const { conversationId } = parse(convParams, request.params);
-    const body = parse(draftBody, request.body);
-    return store.transact((s) => saveDraft(s, user, conversationId, body, clock()));
+    const body = parse(draftBodyWithImage, request.body);
+    return store.transact((s) => saveDraft(s, user, conversationId, body, clock(), sendContext()));
   });
 
   app.delete('/api/line/conversations/:conversationId/reply/draft', async (request) => {
@@ -171,7 +208,7 @@ export function registerLineRoutes(app: FastifyInstance, ctx: LineRouteContext):
     const { conversationId } = parse(convParams, request.params);
     const body = parse(previewBody, request.body);
     const quota = ctx.committee ? await observeBeforePreview(user, conversationId) : null;
-    return store.transact((s) => previewReply(s, user, conversationId, body, clock(), quota));
+    return store.transact((s) => previewReply(s, user, conversationId, body, clock(), quota, sendContext()));
   });
 
   app.post('/api/line/conversations/:conversationId/reply/send', async (request, reply) => {
@@ -179,7 +216,7 @@ export function registerLineRoutes(app: FastifyInstance, ctx: LineRouteContext):
     const { conversationId } = parse(convParams, request.params);
     const body = parse(sendBody, request.body);
     // Persist the immutable intent first. If this throws (validation or save failure), nothing is sent.
-    const started = store.transact((s) => beginSend(s, user, conversationId, body, clock()));
+    const started = store.transact((s) => beginSend(s, user, conversationId, body, clock(), sendContext()));
     if (started.replay) return { replayed: true, outbox: view(user, started.intentId) } satisfies LineSendResponse;
     return runAttempt(user, started.intentId, started.attemptNo, reply);
   });
@@ -198,6 +235,168 @@ export function registerLineRoutes(app: FastifyInstance, ctx: LineRouteContext):
     if (started.kind === 'blocked') throw new DomainError('conflict', started.message, { outbox: view(user, intentId) });
     return runAttempt(user, started.intentId, started.attemptNo, reply);
   });
+
+  // ---- broadcast (2026-11-02): several 1:1 conversations at once, through multicast
+
+  /** LINE's own count of the month, read just before a confirmation (live push only). */
+  async function lineQuota(accountId: string): Promise<PreviewQuota | null> {
+    const account = store.current.accounts.find((a) => a.id === accountId);
+    if (line.connector.kind !== 'messaging_api' || account?.outbound !== 'push') return null;
+    return (await line.connector.quota?.()) ?? null;
+  }
+
+  app.get('/api/line/accounts/:accountId/broadcast', async (request) => {
+    const user = requireUser(request);
+    const { accountId } = parse(accountParams, request.params);
+    return broadcastOptions(store.current, user, accountId, Date.parse(clock()), sendContext());
+  });
+
+  app.post('/api/line/accounts/:accountId/broadcast/preview', async (request) => {
+    const user = requireUser(request);
+    const { accountId } = parse(accountParams, request.params);
+    const body = parse(broadcastPreviewBody, request.body);
+    if (!line.connector.multicast) throw new DomainError('validation', 'このサーバーでは一斉送信ができません。');
+    // Permission first (nothing is asked of LINE for someone who may not send), then LINE's count.
+    broadcastOptions(store.current, user, accountId, Date.parse(clock()), sendContext());
+    const quota = await lineQuota(accountId);
+    return store.transact((s) => previewBroadcast(s, user, accountId, body, clock(), quota, sendContext()));
+  });
+
+  app.post('/api/line/broadcast/send', async (request, reply) => {
+    const user = requireUser(request);
+    const body = parse(broadcastSendBody, request.body);
+    const multicast = line.connector.multicast?.bind(line.connector);
+    if (!multicast) throw new DomainError('validation', 'このサーバーでは一斉送信ができません。');
+    // LINE's count again: a broadcast is many messages, and the admin screen or the Bot may have sent meanwhile.
+    const pending = (store.current.broadcastConsents ?? []).find((c) => c.tokenHash === sha256(body.consentId) && c.actorId === user.id && c.consumedByBroadcastId === null);
+    if (pending) checkLineQuota(await lineQuota(pending.accountId), pending.conversationIds.length);
+    const started = store.transact((s) => beginBroadcast(s, user, body, clock(), sendContext()));
+    const b = store.current.broadcasts!.find((x) => x.id === started.broadcastId)!;
+    let saved = true;
+    for (const r of started.requests) {
+      for (const id of r.intentIds) inFlight.add(id);
+      try {
+        let result: LinePushOutcome;
+        try {
+          result = await multicast({ retryKey: r.retryKey, accountId: b.accountId, to: r.to, text: b.body, ...(b.image ? { image: { originalUrl: b.image.originalUrl, previewUrl: b.image.previewUrl } } : {}) });
+        } catch {
+          result = { kind: 'unknown', reason: 'server_error' };
+        }
+        try {
+          store.transact((s) => recordBroadcastAttempt(s, r.intentIds, result, clock()));
+        } catch {
+          saved = false;
+        }
+      } finally {
+        for (const id of r.intentIds) inFlight.delete(id);
+      }
+    }
+    const summary = broadcastSummary(store.current, started.broadcastId, inFlight);
+    if (!saved) return reply.code(503).send({ error: 'result_not_saved', message: RESULT_NOT_SAVED, details: { broadcastId: started.broadcastId } } satisfies ApiError);
+    const parts = (Object.entries(summary.statuses) as [keyof typeof summary.statuses, number][]).filter(([, n]) => n > 0);
+    const label = { pending: '処理中', accepted: '受付済み', failed: '失敗', unknown: '結果不明', manual_review: '要確認' } as const;
+    return {
+      broadcastId: started.broadcastId,
+      replayed: started.replay,
+      count: summary.count,
+      statuses: summary.statuses,
+      message: `${summary.count} 人への一斉送信：${parts.map(([k, n]) => `${label[k]} ${n} 人`).join('・')}。「受付済み」は LINE が受け付けたという意味で、届いた・読まれたの意味ではありません。`,
+    } satisfies BroadcastSendResponse;
+  });
+
+  // ---- images (2026-11-02): uploaded by a sender, public without sign-in for 7 days under a random name
+
+  const mediaFiles = ctx.committee?.media ?? null;
+  function sweepMedia(): void {
+    if (!mediaFiles) return;
+    const nowMs = Date.parse(clock());
+    let gone: string[] = [];
+    if ((store.current.media ?? []).some((m) => mediaExpired(m, nowMs))) {
+      try {
+        gone = store.transact((s) => expireMedia(s, nowMs));
+      } catch {
+        return;
+      }
+    }
+    mediaFiles.remove(gone);
+    mediaFiles.sweep(new Set((store.current.media ?? []).flatMap((m) => [m.original.file, m.preview.file])), nowMs);
+  }
+
+  if (mediaFiles && imageBaseUrl) {
+    const files = mediaFiles;
+    void app.register(async (scope) => {
+      await scope.register(multipart, { limits: { fileSize: ORIGINAL_MAX_BYTES, files: 2, fields: 1, fieldSize: 100, parts: 3 } });
+      // Two files ("original" and "preview") and the account ("accountId").
+      scope.post('/api/line/media', { bodyLimit: ORIGINAL_MAX_BYTES + 2 * 1024 * 1024 }, async (request, reply) => {
+        const user = requireUser(request);
+        if (!request.isMultipart()) throw new DomainError('validation', 'multipart/form-data 形式で送信してください。');
+        let accountId: string | null = null;
+        const parts: Record<string, Buffer> = {};
+        try {
+          for await (const part of request.parts()) {
+            if (part.type === 'field' && part.fieldname === 'accountId' && typeof part.value === 'string') accountId = part.value;
+            else if (part.type === 'file' && (part.fieldname === 'original' || part.fieldname === 'preview') && !parts[part.fieldname]) {
+              parts[part.fieldname] = await part.toBuffer();
+            } else if (part.type === 'file') {
+              await part.toBuffer();
+            }
+          }
+        } catch (err) {
+          const code = (err as { code?: unknown } | null)?.code;
+          if (code === 'FST_REQ_FILE_TOO_LARGE' || code === 'FST_FILES_LIMIT' || code === 'FST_PARTS_LIMIT') throw new DomainError('validation', '画像が大きすぎます（原寸 10 MB・プレビュー 1 MB まで）。', { field: 'image' });
+          throw new DomainError('validation', '画像を読み取れませんでした。もう一度選んでください。', { field: 'image' });
+        }
+        const account = parse(shortId, accountId);
+        // The sender's right first, so a stranger cannot fill the disk; the files are kept only after the checks.
+        checkUploader(store.current, user, account, Date.parse(clock()));
+        const stored = storeUpload(files, parts.original ?? Buffer.alloc(0), parts.preview ?? Buffer.alloc(0));
+        let media;
+        try {
+          media = store.transact((s) => registerMedia(s, user, account, stored, clock()));
+        } catch (err) {
+          files.remove([stored.original.file, stored.preview.file]);
+          throw err;
+        }
+        return reply.code(201).send({ id: media.id, previewUrl: `${MEDIA_PATH}/${media.preview.file}`, expiresAt: mediaExpiresAt(media) } satisfies LineMediaResponse);
+      });
+    });
+
+    // Public: LINE's servers fetch the files with no sign-in. The name is the secret; the type is the checked one.
+    app.get(`${MEDIA_PATH}/:file`, async (request, reply) => {
+      const parsed = mediaParams.safeParse(request.params);
+      const notFoundReply = () => reply.code(404).header('Cache-Control', 'no-store').type('text/plain; charset=utf-8').send('Not Found');
+      if (!parsed.success) return notFoundReply();
+      const media = mediaOfFile(store.current, parsed.data.file);
+      const nowMs = Date.parse(clock());
+      if (!media) return notFoundReply();
+      if (mediaExpired(media, nowMs)) {
+        sweepMedia();
+        return notFoundReply();
+      }
+      const entry = media.original.file === parsed.data.file ? media.original : media.preview;
+      const data = files.read(entry.file);
+      if (!data) return notFoundReply();
+      const left = Math.max(0, Math.floor((Date.parse(mediaExpiresAt(media)) - nowMs) / 1000));
+      return reply
+        .header('Content-Type', entry.type)
+        .header('X-Content-Type-Options', 'nosniff')
+        .header('Cache-Control', `public, max-age=${Math.min(left, 86_400)}, immutable`)
+        .header('Content-Disposition', 'inline')
+        .send(data);
+    });
+  }
+
+  // ---- Discord (contract C): the Bot's internal routes, the same draft/confirm/send as the screen
+  if (ctx.committee?.discord) {
+    registerDiscordLineRoutes(app, {
+      options: ctx.committee.discord,
+      store,
+      clock,
+      sendContext: () => sendContext('discord'),
+      observeBeforePreview: (user, conversationId) => observeBeforePreview(user, conversationId),
+      attempt,
+    });
+  }
 
   /**
    * LINE's own facts just before a preview: whether the account is in the group and how many members it has (the
@@ -282,5 +481,6 @@ export function registerLineRoutes(app: FastifyInstance, ctx: LineRouteContext):
       store.replace(line.seed(now));
       if (line.connector instanceof MockLinePushConnector) line.connector.reset();
     },
+    sweepMedia,
   };
 }

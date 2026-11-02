@@ -25,7 +25,7 @@ export function conversationIdFor(accountId: string, target: LineTarget): string
   return `lc_${sha256(key).slice(0, 16)}`;
 }
 
-export function messageIdFor(accountId: string, source: 'event' | 'legacy', externalId: string): string {
+export function messageIdFor(accountId: string, source: 'event' | 'legacy' | 'history', externalId: string): string {
   return `lm_${sha256(`${accountId}|${source}|${externalId}`).slice(0, 16)}`;
 }
 
@@ -35,7 +35,7 @@ export function emptyReport(): LineIngestReport {
 
 const TYPE_LABEL: Record<MessagingTarget['type'], string> = { user: 'LINE 利用者', group: 'LINE グループ', room: 'LINE トークルーム' };
 
-function ensureConversation(state: LineState, accountId: string, target: LineTarget, title: string, named = false): LineConversation {
+export function ensureConversation(state: LineState, accountId: string, target: LineTarget, title: string, named = false): LineConversation {
   const id = conversationIdFor(accountId, target);
   let conv = state.conversations.find((c) => c.id === id);
   // A name from the receiver (the person's LINE display name) replaces the masked ID, and a newer name an older one.
@@ -231,7 +231,7 @@ export function applyLegacyBatch(state: LineState, batchId: string, accountId: s
   return report;
 }
 
-function recordImport(state: LineState, batchId: string, r: LineIngestReport, now: string, unsentIds: string[]): void {
+export function recordImport(state: LineState, batchId: string, r: LineIngestReport, now: string, unsentIds: string[]): void {
   state.audit.push({
     id: nextLineId(state, 'laudit'),
     at: now,
