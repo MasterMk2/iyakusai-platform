@@ -103,15 +103,15 @@ export function LineBroadcast({ accountId, refresh, onSent, onClose }: { account
   return (
     <div className="thread-detail line-broadcast" data-testid="line-broadcast">
       <h2 className="thread-title">
-        一斉送信
+        公式LINEを送信
         <span className="source-badge source-line">LINE</span>
         {o && <span className="mailbox-badge">{o.account.name}</span>}
       </h2>
-      <LoadStatus loader={options} what="一斉送信の宛先" />
+      <LoadStatus loader={options} what="公式LINE の宛先" />
       {o && (
         <>
           <p className="hint">
-            同じ文（と画像 1 枚）を、選んだ 1:1 の相手にまとめて送ります。宛先にできるのは、利用者 ID が分かっていて友だち解除・ブロックされていない相手です。月の通数は 1 人 1 通ずつ数えます（今月このアプリから {o.monthUsed} 通
+            文（と画像 1 枚）を、選んだ 1:1 の相手に送ります。1 人だけでも、複数まとめてでも送れます。宛先にできるのは、利用者 ID が分かっていて友だち解除・ブロックされていない相手です。月の通数は 1 人 1 通ずつ数えます（今月このアプリから {o.monthUsed} 通
             {o.monthlyLimit !== null ? `／上限 ${o.monthlyLimit} 通` : ''}）。
           </p>
           {o.mock && <p className="status info">模擬モードです。実際の LINE には送信されません。</p>}
@@ -156,7 +156,7 @@ export function LineBroadcast({ accountId, refresh, onSent, onClose }: { account
             )}
           </fieldset>
           <textarea
-            aria-label="一斉送信の本文"
+            aria-label="公式LINE の本文"
             rows={5}
             value={body}
             onChange={(e) => {
@@ -194,7 +194,7 @@ export function LineBroadcast({ accountId, refresh, onSent, onClose }: { account
           )}
           {preview && (
             <div className="line-preview" data-testid="broadcast-preview">
-              <h5>一斉送信の確認</h5>
+              <h5>送信内容の確認</h5>
               <dl>
                 <dt>送信元</dt>
                 <dd>{preview.account.name}</dd>

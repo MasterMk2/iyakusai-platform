@@ -643,41 +643,39 @@ export function App() {
       <div className={`layout inbox-layout ${inboxDetail ? 'has-detail' : ''}`}>
         <div className="sidebar">
         {/* Sending apart from the mailboxes: a new-mail button above the list reads as part of the inbox. */}
-        {canSendMail && !isAdminView && (
+        {(canSendMail || sendableLine) && !isAdminView && (
           <section className="sidebar-send" aria-labelledby="sidebar-send-title">
             <h2 className="sidebar-title" id="sidebar-send-title">
               送信
             </h2>
-            <button
-              type="button"
-              className={`send-entry ${composing ? 'active' : ''}`}
-              aria-current={composing ? 'page' : undefined}
-              onClick={() => {
-                setComposeTo(null);
-                navigate({ ...route, threadId: null, conversationId: null, mailCompose: true });
-              }}
-              data-testid="compose-new"
-            >
-              新しいメールを書く
-            </button>
-            <p className="hint">委員会のアドレスから送ります。</p>
-          </section>
-        )}
-        {sendableLine && !isAdminView && (
-          <section className="sidebar-send" aria-labelledby="sidebar-line-send-title">
-            <h2 className="sidebar-title" id="sidebar-line-send-title">
-              公式LINE
-            </h2>
-            <button
-              type="button"
-              className={`send-entry ${route.lineBroadcast ? 'active' : ''}`}
-              aria-current={route.lineBroadcast ? 'page' : undefined}
-              onClick={() => navigate({ ...EMPTY_ROUTE, lineAccountId: sendableLine.id, lineBroadcast: true })}
-              data-testid="line-broadcast-side"
-            >
-              一斉送信
-            </button>
-            <p className="hint">選んだ相手にまとめて送ります。</p>
+            <div className="send-entries">
+              {canSendMail && (
+                <button
+                  type="button"
+                  className={`send-entry ${composing ? 'active' : ''}`}
+                  aria-current={composing ? 'page' : undefined}
+                  onClick={() => {
+                    setComposeTo(null);
+                    navigate({ ...route, threadId: null, conversationId: null, mailCompose: true });
+                  }}
+                  data-testid="compose-new"
+                >
+                  メールを送信
+                </button>
+              )}
+              {sendableLine && (
+                <button
+                  type="button"
+                  className={`send-entry ${route.lineBroadcast ? 'active' : ''}`}
+                  aria-current={route.lineBroadcast ? 'page' : undefined}
+                  onClick={() => navigate({ ...EMPTY_ROUTE, lineAccountId: sendableLine.id, lineBroadcast: true })}
+                  data-testid="line-broadcast-side"
+                >
+                  公式LINEを送信
+                </button>
+              )}
+            </div>
+            <p className="hint">メールは委員会のアドレスから、公式LINE は選んだ相手（1 人でも複数でも）に送ります。</p>
           </section>
         )}
         <nav aria-label="受信箱">
@@ -754,37 +752,34 @@ export function App() {
           <>
             <section className="list-pane" aria-label="スレッド一覧">
               {/* Below 1200px the side column is folded: sending shows here, marked apart from the mailbox list below. */}
-              {canSendMail && !route.lineAccountId && (
+              {(canSendMail || sendableLine) && (
                 <section className="list-compose" aria-labelledby="list-send-title">
                   <h2 className="list-compose-label" id="list-send-title">
                     送信
                   </h2>
-                  <button
-                    type="button"
-                    className="secondary"
-                    onClick={() => {
-                      setComposeTo(null);
-                      navigate({ ...route, threadId: null, conversationId: null, mailCompose: true });
-                    }}
-                    data-testid="compose-new-list"
-                  >
-                    新しいメールを書く
-                  </button>
-                </section>
-              )}
-              {broadcastAccount && (
-                <section className="list-compose" aria-labelledby="list-broadcast-title">
-                  <h2 className="list-compose-label" id="list-broadcast-title">
-                    送信
-                  </h2>
-                  <button
-                    type="button"
-                    className="secondary"
-                    onClick={() => navigate({ ...route, threadId: null, conversationId: null, lineBroadcast: true })}
-                    data-testid="line-broadcast-open"
-                  >
-                    一斉送信
-                  </button>
+                  {canSendMail && (
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => {
+                        setComposeTo(null);
+                        navigate({ ...route, threadId: null, conversationId: null, mailCompose: true });
+                      }}
+                      data-testid="compose-new-list"
+                    >
+                      メールを送信
+                    </button>
+                  )}
+                  {sendableLine && (
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => navigate({ ...EMPTY_ROUTE, lineAccountId: sendableLine.id, lineBroadcast: true })}
+                      data-testid="line-broadcast-open"
+                    >
+                      公式LINEを送信
+                    </button>
+                  )}
                 </section>
               )}
               <ThreadList

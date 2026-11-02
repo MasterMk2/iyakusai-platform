@@ -1147,7 +1147,8 @@ button.task-tree-toggle:focus-visible { outline-offset: -3px; }
    column is folded (below 1200px). */
 .sidebar-send { margin: 0 0 14px; padding: 0 0 14px; border-bottom: 1px solid var(--line); }
 .sidebar-send .hint { margin: 4px 8px 0; font-size: 13px; }
-.send-entry { width: 100%; background: var(--surface); color: var(--blue); border: 1px solid var(--blue); justify-content: flex-start; }
+.send-entries { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 6px; }
+.send-entry { width: 100%; background: var(--surface); color: var(--blue); border: 1px solid var(--blue); justify-content: center; }
 .send-entry:hover:not(:disabled) { background: var(--hover-strong); color: var(--blue-dark); border-color: var(--blue-dark); }
 .send-entry.active, .send-entry.active:hover:not(:disabled) { background: var(--info-bg); color: var(--navy); border-color: var(--blue); box-shadow: inset 3px 0 var(--blue); }
 .list-compose { display: none; }
