@@ -18,19 +18,19 @@ function userName(state: AppState, userId: string): string {
   return state.users.find((user) => user.id === userId)?.displayName ?? '（不明な利用者）';
 }
 
-function assigneeSummary(state: AppState, task: Task): UserSummary | null {
-  if (task.assigneeId === null) return null;
+function userSummary(state: AppState, task: Task, userId: string): UserSummary {
   return {
-    id: task.assigneeId,
-    displayName: userName(state, task.assigneeId),
-    active: activeMembership(state, task.assigneeId, task.workspaceId) !== undefined,
+    id: userId,
+    displayName: userName(state, userId),
+    active: activeMembership(state, userId, task.workspaceId) !== undefined,
   };
 }
 
 export function toTaskView(state: AppState, task: Task, today: string): TaskView {
   return {
     ...structuredClone(task),
-    assignee: assigneeSummary(state, task),
+    assignee: task.assigneeId === null ? null : userSummary(state, task, task.assigneeId),
+    creator: userSummary(state, task, task.createdBy),
     overdue: isOverdue(task.deadline, task.status, today),
     missingRequirements: REQUIREMENT_FIELDS.filter((field) => task.requirements[field].trim() === ''),
   };

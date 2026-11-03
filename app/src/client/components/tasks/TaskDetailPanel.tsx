@@ -185,6 +185,8 @@ export function TaskDetailPanel({
   const parentTask = nested && task?.parentId ? (nested.tasks.find((t) => t.id === task.parentId) ?? null) : null;
   const childTasks = nested && task ? nested.tasks.filter((t) => t.parentId === task.id).sort(childOrder) : [];
   const openChildren = openCount(childTasks);
+  // The creator (起票者): from the Task service, else (an older one) the history's first entry; never a bare ID.
+  const creatorName = task?.creator?.displayName ?? history.data?.find((h) => h.action === 'created')?.actorName ?? null;
 
   return (
     <div className="task-detail" data-testid="task-detail">
@@ -229,6 +231,14 @@ export function TaskDetailPanel({
                   <dt>部局</dt>
                   <dd>
                     <TagChips labels={task.tagLabels} />
+                  </dd>
+                </div>
+              )}
+              {creatorName && (
+                <div>
+                  <dt>起票</dt>
+                  <dd data-testid="task-creator">
+                    {creatorName}（{fmtDate(task.createdAt)}）
                   </dd>
                 </div>
               )}

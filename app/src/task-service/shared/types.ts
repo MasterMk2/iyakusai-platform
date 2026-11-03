@@ -115,6 +115,7 @@ export interface UserSummary {
 
 export interface TaskView extends Task {
   assignee: UserSummary | null;
+  creator: UserSummary;
   overdue: boolean;
   missingRequirements: RequirementField[];
 }
