@@ -23,7 +23,7 @@ def _haiku_how(mode: str) -> str:
 def build_help_embed(ai_enabled: bool, haiku_enabled: bool = False,
                      haiku_mode: str = "react", video_enabled: bool = False,
                      tasks_enabled: bool = False, assistant_enabled: bool = False,
-                     image_enabled: bool = False) -> discord.Embed:
+                     image_enabled: bool = False, roles_enabled: bool = False) -> discord.Embed:
     e = discord.Embed(
         title="IyakusaiBot の使い方",
         description=(
@@ -124,6 +124,12 @@ def build_help_embed(ai_enabled: bool, haiku_enabled: bool = False,
                            "返答は自分にだけ見えます。詳しくは `/todo help`。\n"
                            "-# 委員なら全員が全部局を見て変更できます。通知は送りません"),
                     inline=False)
+    if roles_enabled:
+        e.add_field(name="🏷 /roles — ロールの付与状況",
+                    value=("指定なしでロールごとの人数、`ロール:` でそのロールの人、`人:` でその人のロールを表示します。\n"
+                           "「会計課は誰?」のように `/ask` で聞いても答えられます。\n"
+                           "-# 返答は自分にだけ見えます"),
+                    inline=False)
     # 統合アプリの「Bot」タブは、[assistant] enabled の構成でだけ出す(2026-10-14)
     if assistant_enabled:
         e.add_field(
@@ -142,7 +148,7 @@ def build_help_embed(ai_enabled: bool, haiku_enabled: bool = False,
 class Help(commands.Cog):
     def __init__(self, bot: commands.Bot, ai_enabled: bool, haiku_enabled: bool = False,
                  haiku_mode: str = "react", video_enabled: bool = False, tasks_enabled: bool = False,
-                 assistant_enabled: bool = False, image_enabled: bool = False):
+                 assistant_enabled: bool = False, image_enabled: bool = False, roles_enabled: bool = False):
         self.bot = bot
         self.ai_enabled = ai_enabled
         self.haiku_enabled = haiku_enabled
@@ -151,10 +157,12 @@ class Help(commands.Cog):
         self.tasks_enabled = tasks_enabled
         self.assistant_enabled = assistant_enabled
         self.image_enabled = image_enabled
+        self.roles_enabled = roles_enabled
 
     @app_commands.command(name="help", description="このBotの使い方を表示する")
     async def help_(self, itx: discord.Interaction):
         await itx.response.send_message(
             embed=build_help_embed(self.ai_enabled, self.haiku_enabled, self.haiku_mode, self.video_enabled,
-                                   self.tasks_enabled, self.assistant_enabled, self.image_enabled),
+                                   self.tasks_enabled, self.assistant_enabled, self.image_enabled,
+                                   self.roles_enabled),
             ephemeral=True)
