@@ -498,7 +498,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     const people = discordApi ? discordPeople(discordApi) : statePeople(store);
     registerRolloverRoutes(app, rolloverRuntime({
       store: options.rollover.store,
-      organizations: committeeMail?.organizations ?? options.rollover.organizations,
+      organizations: committeeMail?.organizations ?? (demo ? options.demoBooks?.organizations : null) ?? options.rollover.organizations,
       calendar: options.calendar?.store ?? null,
       decisions: options.decisions ?? null,
       tasks: options.tasks ?? null,

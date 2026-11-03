@@ -370,16 +370,20 @@ export async function composeServer(config: ServerConfig, overrides: ComposeOver
     if (dayof && config.auth.mode === 'demo') seedDayOfDemo(dayof, decisions, initial.users.find((u) => u.canManageAccess)?.id ?? initial.users[0]?.id ?? 'system', now);
   }
 
+  // Contacts, organizations and payments on synthetic data next to the demo data file (2026-11-03); null if they cannot be opened.
+  const demoBooks = config.auth.mode === 'demo' ? openDemoBooks(path.dirname(config.dataFile), initial.users, now) : null;
+
   // Year rollover (2026-11-04): rollover.sqlite3 in the mail folder (Discord login; the backup covers it), or beside the
-  // demo data file with a synthetic organizations ledger of its own (the demo has no committee mailbox). Off in the
-  // other modes. A file that cannot be opened turns the rollover off only.
+  // demo data file (the demo has no committee mailbox). The demo's rollover uses the demo books' organizations ledger
+  // (the same organizations.sqlite3; buildApp passes it), and opens one of its own only when those could not be opened.
+  // Off in the other modes. A file that cannot be opened turns the rollover off only.
   let rollover: { store: RolloverStore; organizations: OrganizationsStore | null } | null = null;
   const rolloverDir = config.mailbox ? config.mailbox.dataDir : config.auth.mode === 'demo' ? path.dirname(config.dataFile) : null;
   if (rolloverDir) {
     let organizations: OrganizationsStore | null = null;
     try {
       const rolloverStore = new RolloverStore(rolloverDir);
-      if (!config.mailbox) {
+      if (!config.mailbox && !demoBooks) {
         try {
           organizations = new OrganizationsStore(rolloverDir);
           seedRolloverDemo(organizations, defaultSourceYear(jstDate(new Date(now))), now);
@@ -412,8 +416,7 @@ export async function composeServer(config: ServerConfig, overrides: ComposeOver
     calendar,
     botDatasourceKey: config.botDatasourceKey,
     decisions,
-    // Contacts, organizations and payments on synthetic data next to the demo data file (2026-11-03); null if they cannot be opened.
-    demoBooks: config.auth.mode === 'demo' ? openDemoBooks(path.dirname(config.dataFile), initial.users, now) : null,
+    demoBooks,
     dayof,
     rollover,
     ...(discord ? { discord } : {}),
