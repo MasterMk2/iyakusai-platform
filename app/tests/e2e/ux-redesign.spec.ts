@@ -214,11 +214,11 @@ test('task detail: the status saves on one press; a field shows its save button 
   await detail.getByRole('region', { name: '状態' }).getByRole('button', { name: '保留', exact: true }).click();
   await expect(detail.getByTestId('task-version')).toHaveText(String(version + 2));
   expect(world.tasks.find((t) => t.id === 'T-101')!.status).toBe('blocked');
-  // A member is asked before completing (only officers can reopen).
+  // Since 2026-11-03 a member may reopen, so completing asks nothing and a done task offers reopening.
   await detail.getByRole('region', { name: '状態' }).getByRole('button', { name: '完了', exact: true }).click();
-  await expect(detail.getByRole('button', { name: '完了にする' })).toBeFocused();
-  await detail.getByRole('button', { name: 'やめる' }).click();
-  expect(world.tasks.find((t) => t.id === 'T-101')!.status).toBe('blocked');
+  await expect(detail.getByTestId('task-version')).toHaveText(String(version + 3));
+  expect(world.tasks.find((t) => t.id === 'T-101')!.status).toBe('done');
+  await expect(detail.getByRole('region', { name: '状態' }).getByRole('button', { name: '再開する（未着手に戻す）' })).toBeVisible();
   await shot(page, 'task-detail-1440');
 });
 
@@ -535,9 +535,9 @@ test('completing a project with open children says they stay open', async ({ pag
   const world = await installWorld(page, { nested: true });
   await page.goto('/#/tasks?ws=dept-gaimu');
   const row = taskRow(page, 'T-101');
+  // Since 2026-11-03 a member may reopen, so there is no question first; the notice says the children stay open.
   await row.getByRole('button', { name: '完了', exact: true }).click();
-  await expect(row.locator('.task-done-confirm')).toContainText('未完了の子タスクが 2 件あります（子タスクは完了になりません）。');
-  await row.getByRole('button', { name: '完了にする' }).click();
+  await expect(row.locator('.task-done-confirm')).toHaveCount(0);
   await expect(taskList(page).getByRole('status').filter({ hasText: 'を完了にしました。未完了の子タスクが 2 件あります' })).toBeVisible();
   expect(world.tasks.find((t) => t.id === 'T-101')!.status).toBe('done');
   expect(world.tasks.find((t) => t.id === 'T-108')!.status).toBe('in_progress');

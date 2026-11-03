@@ -3,8 +3,8 @@ import { TASK_STATUSES, TASK_STATUS_LABELS, type TaskStatus, type TaskView } fro
 
 /**
  * Status buttons under a task list row (2026-10-24), like the mail list's: one click saves.
- * A done task cannot be moved by an ordinary edit; only officers reopen it, back to to-do,
- * so a done row offers just "再開する" and only to them. Members confirm a completion in the row.
+ * A done task cannot be moved by an ordinary edit; it is reopened, back to to-do, so a done row offers just
+ * "再開する" to those who may reopen (every editor since 2026-11-03). Others confirm a completion in the row.
  */
 export function TaskStatusButtons({
   task,
@@ -67,7 +67,7 @@ function DoneConfirm({ disabled, openChildren, onConfirm, onCancel }: { disabled
   return (
     <div className="task-done-confirm">
       {openChildren > 0 && <p className="meta-warn">{openChildrenText(openChildren)}</p>}
-      <p>完了にすると、戻せるのは役員（委員長・副委員長・役員会）だけです。完了にしますか？</p>
+      <p>完了にすると、ここからは戻せません。完了にしますか？</p>
       <div className="actions">
         <button type="button" ref={confirm} disabled={disabled} onClick={onConfirm}>
           完了にする

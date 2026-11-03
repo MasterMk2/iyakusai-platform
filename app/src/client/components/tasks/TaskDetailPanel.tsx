@@ -49,7 +49,7 @@ export function TaskDetailPanel({
   taskId: string;
   departments?: Department[];
   canEditRole: (workspaceId: string) => boolean;
-  /** Officers may reopen a done task (back to to-do). */
+  /** May reopen a done task (back to to-do). Every editor since 2026-11-03. */
   canReopen?: boolean;
   /** Bumped when the list changes this task (its status buttons), so the detail follows. */
   refreshKey?: number;
@@ -156,7 +156,7 @@ export function TaskDetailPanel({
 
   function chooseStatus(status: TaskStatus, confirmed = false) {
     if (!task || saving.status || status === task.status) return;
-    // Only officers can reopen a done task, so a member confirms a completion first (as on the list).
+    // Someone who cannot reopen a done task confirms a completion first (as on the list).
     if (status === 'done' && !canReopen && !confirmed) {
       setMessage(null);
       setConfirmDone(true);
@@ -264,7 +264,7 @@ export function TaskDetailPanel({
             <section className="detail-section" aria-label="状態">
               <h3 className="section-label">状態<span className="hint">押すとすぐ保存</span></h3>
               {task.status === 'done' && !canReopen ? (
-                <p className="hint">完了しています。再開できるのは役員（委員長・副委員長・役員会）だけです。</p>
+                <p className="hint">完了しています。この画面からは再開できません。</p>
               ) : (
                 <TaskStatusButtons
                   task={task}

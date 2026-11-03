@@ -82,11 +82,11 @@ async function syntheticWorkspace(page: Page, options: { role?: 'viewer' | 'edit
     const write = /^\/api\/tasks\/(UX-\d{3})(\/reopen)?$/.exec(path);
     const i = write ? tasks.findIndex(t => t.id === write[1]) : -1;
     const conflict = { error: 'version_conflict', message: '他の委員が更新しました。' };
-    // Reopening, as the Task service does it: officers only, done tasks only, back to to-do.
+    // Reopening, as the Task service does it: anyone who can edit (2026-11-03), done tasks only, back to to-do.
     if (write?.[2] && i >= 0 && request.method() === 'POST') {
       const body = request.postDataJSON() as { expectedVersion: number; operationId: string };
       taskWrites.push(`reopen ${write[1]} {}`);
-      if (role !== 'admin') return respond({ error: 'forbidden', message: '再開できるのは役員だけです。' }, 403);
+      if (role === 'viewer') return respond({ error: 'forbidden', message: '閲覧だけの委員は変更できません。' }, 403);
       if (body.expectedVersion !== tasks[i]!.version) return respond(conflict, 409);
       if (tasks[i]!.status !== 'done') return respond({ error: 'invalid_transition', message: '再開できるのは完了したタスクだけです。' }, 400);
       tasks[i] = { ...tasks[i]!, status: 'todo', version: tasks[i]!.version + 1 };
@@ -282,7 +282,7 @@ const taskRow = (page: Page, id: string) => page.getByRole('region', { name: '�
 const rowButtons = (page: Page, id: string) => taskRow(page, id).getByRole('group', { name: /」の状態$/ });
 
 for (const width of [375, 1440]) {
-  test(`a member changes task status from the list and confirms before completing at ${width}px`, async ({ page }) => {
+  test(`a member changes task status from the list and completes, undoes and reopens like an officer at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 1000 });
     const state = await syntheticWorkspace(page);
     const lists = listRequests(page);
@@ -295,28 +295,22 @@ for (const width of [375, 1440]) {
     await expect(pane.getByRole('status').filter({ hasText: '「掲示物の最終版を確認する」を進行中にしました。' })).toBeVisible();
     await expect(rowButtons(page, 'UX-002').getByRole('button', { name: '進行中', exact: true })).toHaveAttribute('aria-pressed', 'true');
     await expect(taskRow(page, 'UX-002').locator('.row-line')).toContainText('進行中');
-    // A member cannot undo a completion, so the row asks first (no browser dialog); "やめる" changes nothing.
+    // Since 2026-11-03 a member may reopen too, so completing asks nothing and the notice offers undo.
     const buttons = rowButtons(page, 'UX-003');
     await buttons.getByRole('button', { name: '完了', exact: true }).click();
-    await expect(buttons).toContainText('完了にすると、戻せるのは役員（委員長・副委員長・役員会）だけです。');
-    await expect(buttons.getByRole('button', { name: '完了にする', exact: true })).toBeFocused();
-    await buttons.getByRole('button', { name: 'やめる', exact: true }).click();
-    await expect(buttons.getByRole('button', { name: '完了にする', exact: true })).toHaveCount(0);
-    await expect(buttons.getByRole('button', { name: '保留', exact: true })).toHaveAttribute('aria-pressed', 'true');
-    expect(state.taskWrites).toEqual(['patch UX-002 {"status":"in_progress"}']);
-    await buttons.getByRole('button', { name: '完了', exact: true }).click();
+    await expect(pane.getByRole('status').filter({ hasText: '「受付で使う予備資材をまとめる」を完了にしました。' })).toBeVisible();
+    await expect(pane.getByRole('button', { name: '完了にする', exact: true })).toHaveCount(0);
+    await expect(pane.getByRole('button', { name: '元に戻す', exact: true })).toBeVisible();
     await settleAndCheck(page);
     await page.evaluate(() => window.scrollTo(0, 0));
     mkdirSync('.tmp', { recursive: true });
     await page.screenshot({ path: `.tmp/ux-task-row-status-${width}.png`, fullPage: true, animations: 'disabled' });
-    await buttons.getByRole('button', { name: '完了にする', exact: true }).click();
-    await expect(pane.getByRole('status').filter({ hasText: '「受付で使う予備資材をまとめる」を完了にしました。' })).toBeVisible();
-    // A done row has no buttons for a member, and there is no undo.
-    await expect(rowButtons(page, 'UX-003')).toHaveCount(0);
-    await expect(rowButtons(page, 'UX-004')).toHaveCount(0);
-    await expect(pane.getByRole('button', { name: '元に戻す' })).toHaveCount(0);
+    // A done row offers a member reopening.
+    await expect(rowButtons(page, 'UX-003').getByRole('button')).toHaveText(['再開する（未着手に戻す）']);
+    await rowButtons(page, 'UX-004').getByRole('button', { name: '再開する（未着手に戻す）' }).click();
+    await expect(pane.getByRole('status').filter({ hasText: '「委員向け案内文を共有する」を再開しました（未着手）。' })).toBeVisible();
     expect(lists).toHaveLength(fetched);
-    expect(state.taskWrites).toEqual(['patch UX-002 {"status":"in_progress"}', 'patch UX-003 {"status":"done"}']);
+    expect(state.taskWrites).toEqual(['patch UX-002 {"status":"in_progress"}', 'patch UX-003 {"status":"done"}', 'reopen UX-004 {}']);
     await settleAndCheck(page);
     expect(state.unexpected).toEqual([]);
   });
