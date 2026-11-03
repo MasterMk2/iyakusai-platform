@@ -10,6 +10,7 @@ import {
   type CalendarEventView,
   type CalendarKind,
 } from '../../../shared/calendar';
+import { needsDateCheck } from '../../../shared/rollover';
 import { api, ApiFailure } from '../../api';
 
 // The form for one event: a new one (from a day, or a yearly one) or a change of an existing one. A change is saved
@@ -169,6 +170,7 @@ export function EventForm({
           <label htmlFor="cal-date">日付</label>
           <input id="cal-date" type="date" value={day} onChange={(e) => setDay(e.target.value)} required />
           {base?.yearly && <p className="hint">毎年の予定です。日付（月日）を変えると、すべての年の表示が変わります。</p>}
+          {base && needsDateCheck(base) && <p className="hint">前の年から写した予定です。この日付で合っているか確かめて、メモの先頭の行を消してから保存してください。</p>}
         </div>
       </div>
       <div className="cal-field-row">

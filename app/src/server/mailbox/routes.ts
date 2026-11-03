@@ -175,7 +175,7 @@ function sendFormError(err: unknown, send: MailSendConfig): never {
 const USE_RECORD_INTERVAL_MS = 60_000;
 const FORGET_USE_AFTER_MS = 15 * 86_400_000;
 
-export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, deps: MailboxRouteDeps): { service: MailboxService; cases: MailCaseSource } {
+export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, deps: MailboxRouteDeps): { service: MailboxService; cases: MailCaseSource; organizations: OrganizationsStore | null; line: CommitteeLine['store'] | null } {
   const service = new MailboxService(rt.store, rt.addresses, deps.people, rt.config.send?.mailboxIds ?? null, deps.clock);
   const sendConfig = rt.config.send;
   // EHLO says the app's public host (2026-11-03, review M6); the SMTP account itself is in the configuration.
@@ -542,5 +542,6 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
     readable: (user, messageId) => caseReader(user) && service.provenance(user, messageId) !== null,
     provenance: (user, messageId) => (caseReader(user) ? service.provenance(user, messageId) : null),
   };
-  return { service, cases };
+  // The year rollover (rollover/) reads these stores; it never opens a second copy of their files.
+  return { service, cases, organizations, line: line?.store ?? null };
 }

@@ -10,6 +10,7 @@ import { LoadStatus } from './LoadStatus';
 import { LoginActivityPanel } from './LoginActivityPanel';
 import { MailAccessPanel } from './MailAccessPanel';
 import { RentalAccessPanel } from './RentalAccessPanel';
+import { RolloverPanel } from './rollover/RolloverPanel';
 import { CardSettingsPanel } from './CardSettingsPanel';
 import { AccountingAccessPanel } from './payments/AccountingAccessPanel';
 import { DayOfSettingsPanel } from './dayof/DayOfSettingsPanel';
@@ -94,6 +95,7 @@ export function SettingsView({
       {user.canManageAccess && (committeeMail ? <MailAccessPanel /> : <AdminPanel user={user} onChanged={onChanged} demoControls={session.demoAuthentication === true} />)}
       {user.canManageAccess && committeeMail && committeeLine && <MailAccessPanel variant="line" />}
       {user.canManageAccess && discord && <LoginActivityPanel />}
+      {user.canManageAccess && <RolloverPanel />}
       {account?.composition === 'mock' && <MockDirectory onChanged={onChanged} />}
     </main>
   );

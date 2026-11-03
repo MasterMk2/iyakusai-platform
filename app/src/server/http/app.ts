@@ -38,6 +38,10 @@ import { attachmentDisposition } from './content-disposition.js';
 import { registerCalendarRoutes, type CalendarRuntime } from '../calendar/routes.js';
 import { HttpError } from './http-error.js';
 import { registerLineRoutes, type LineRuntime } from './line-routes.js';
+import { discordPeople, rolloverRuntime, statePeople } from '../rollover/compose.js';
+import { registerRolloverRoutes } from '../rollover/routes.js';
+import type { RolloverStore } from '../rollover/store.js';
+import type { OrganizationsStore } from '../organizations/store.js';
 import { DISCORD_LINE_PATHS } from '../line/discord.js';
 
 export const SESSION_COOKIE = 'smm_demo_persona';
@@ -76,6 +80,8 @@ export interface AppOptions {
   demoBooks?: DemoBooks | null;
   /** The festival-day board (dayof.sqlite3). Absent: its routes do not exist (404). */
   dayof?: DayOfStore | null;
+  /** The year rollover (rollover.sqlite3 beside the mail, or the demo's), with the demo's organizations file. Absent: no rollover routes. */
+  rollover?: { store: RolloverStore; organizations: OrganizationsStore | null } | null;
 }
 
 const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '[::1]']);
@@ -487,6 +493,26 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     clock,
     parse,
   });
+  // Year rollover (2026-11-04): access administrators only, on the settings screen (see rollover/routes.ts).
+  if (options.rollover) {
+    const people = discordApi ? discordPeople(discordApi) : statePeople(store);
+    registerRolloverRoutes(app, rolloverRuntime({
+      store: options.rollover.store,
+      organizations: committeeMail?.organizations ?? options.rollover.organizations,
+      calendar: options.calendar?.store ?? null,
+      decisions: options.decisions ?? null,
+      tasks: options.tasks ?? null,
+      people,
+      mail: committeeMail && mailbox ? { kind: 'committee', store: mailbox.store, mailboxes: mailbox.config.mailboxes } : { kind: 'synthetic', store },
+      line: committeeMail?.line && discordApi ? { kind: 'committee', store: committeeMail.line, people: () => discordApi!.listUsers() } : options.line ? { kind: 'synthetic', store: options.line.store, mail: store } : null,
+      rental: options.rental ? { store: options.rental.store, allMembersAdmin: options.rental.allMembersAdmin ?? false } : null,
+    }), {
+      requireUser,
+      isTemporary: (user, request) => isTemporaryStaffLoginId(user.id) || departmentsOfLabel(user.roleLabel).includes(TEMPORARY_STAFF_DEPARTMENT) || (!!discordApi && discordApi.currentSession(request)?.temporaryStaff === true),
+      clock,
+      parse,
+    });
+  }
   // Copy to Google Drive: signed requests of the committee's Apps Script, Discord login only (the gate lets its report through).
   if (options.rental?.driveSyncKey) {
     if (auth.mode !== 'discord') throw new ConfigError('物品の Drive 同期は discord モードでだけ使えます。');

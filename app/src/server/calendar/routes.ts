@@ -100,6 +100,8 @@ const myDepartmentsOf = (user: User): string[] => departmentsOfLabel(user.roleLa
 
 /** An event is for a person when it names one of their departments, or names none (committee-wide). */
 const isForDepartments = (departments: string[], mine: string[]) => departments.length === 0 || departments.some((d) => mine.includes(d));
+/** A yearly event copied by the year rollover shows from its own year on; the years before have its original. */
+const projectsInto = (row: CalendarEventRow, year: number) => row.copiedFrom === null || year >= Number(row.data.date.slice(0, 4));
 
 /**
  * `runtime` null: the calendar file could not be opened. The screen routes then answer 503 and the rest of the app
@@ -184,7 +186,7 @@ export function registerCalendarRoutes(app: FastifyInstance, runtime: CalendarRu
       if (!isForDepartments(row.data.departments, mine)) continue;
       for (let y = Number(from.slice(0, 4)); y <= Number(to.slice(0, 4)); y += 1) {
         const occurrence = occurrenceInYear(row.data.date, y);
-        if (occurrence >= from && occurrence <= to) push(row.id, row.data.title, occurrence);
+        if (occurrence >= from && occurrence <= to && projectsInto(row, y)) push(row.id, row.data.title, occurrence);
       }
     }
     const own = await ownTasks(owner);
@@ -246,7 +248,7 @@ export function registerCalendarRoutes(app: FastifyInstance, runtime: CalendarRu
     for (const row of store.yearly()) {
       for (let y = Number(from.slice(0, 4)); y <= Number(to.slice(0, 4)); y += 1) {
         const occurrence = occurrenceInYear(row.data.date, y);
-        if (occurrence >= from && occurrence <= to && occurrence !== row.data.date) events.push(view(row, user, occurrence, true));
+        if (occurrence >= from && occurrence <= to && occurrence !== row.data.date && projectsInto(row, y)) events.push(view(row, user, occurrence, true));
       }
     }
     return { events: sortByDateTime(events), departments: departmentChoices(), myDepartments: myDepartmentsOf(user), canAdminister: user.canManageAccess };
@@ -280,7 +282,7 @@ export function registerCalendarRoutes(app: FastifyInstance, runtime: CalendarRu
     for (const row of store.yearly()) {
       for (let y = Number(today.slice(0, 4)); y <= Number(horizon.slice(0, 4)); y += 1) {
         const occurrence = occurrenceInYear(row.data.date, y);
-        if (occurrence >= today && occurrence <= horizon && occurrence !== row.data.date) consider(row, occurrence);
+        if (occurrence >= today && occurrence <= horizon && occurrence !== row.data.date && projectsInto(row, y)) consider(row, occurrence);
       }
     }
     let tasks: UpcomingTasksState = 'ok';

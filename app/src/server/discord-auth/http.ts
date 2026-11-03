@@ -9,7 +9,7 @@ import { loggableLoginId, type LoginAudit } from './audit.js';
 import { attachRegistrationIssuer, BULK_ISSUER_PATH, ISSUER_PATH } from './bot-host.js';
 import type { DiscordAuthConfig } from './config.js';
 import type { NameRoster } from './names.js';
-import { ACCOUNT_FAILURES_PER_DAY, ACCOUNT_TRIES_PER_10_MIN, AccountError, type AccountIdentity, type DiscordAccountService, type SessionIdentity, type SignInRecord } from './service.js';
+import { ACCOUNT_FAILURES_PER_DAY, ACCOUNT_TRIES_PER_10_MIN, AccountError, type AccountIdentity, type DiscordAccountService, type SessionIdentity, type SignInRecord, type StoredAccount } from './service.js';
 import type { AccountStore } from './store.js';
 import { CardAuthError, DEVICE_DAYS } from './cards.js';
 import { staffRouteAllowed, temporaryStaffName } from './temporary-staff.js';
@@ -541,5 +541,16 @@ export function installDiscordAuth(app: FastifyInstance, rt: DiscordAuthRuntime,
       const identity = rt.service.identityByLoginId(initialLoginId);
       return identity && !identity.temporaryStaff ? `discord-${identity.discordUserId}` : null;
     },
+    /**
+     * A stored account in any status with its roster name (or the temporary staff name), for the year rollover's
+     * stocktaking of grants. Stored data only, never for authorization.
+     */
+    storedAccount: (initialLoginId: string): (StoredAccount & { name: string | null }) | null => {
+      const a = rt.service.storedAccount(initialLoginId);
+      if (!a) return null;
+      return { ...a, name: a.temporaryStaff ? temporaryStaffName(a.studentId) : rt.names.nameOf(a.discordUserId) };
+    },
+    /** A name roster file is set (without one, no account has a roster name). */
+    rosterConfigured: rt.names.configured,
   };
 }

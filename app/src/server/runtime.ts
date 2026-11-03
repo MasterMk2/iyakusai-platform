@@ -51,6 +51,11 @@ import { seedCalendarDemo } from './calendar/seed.js';
 import type { CalendarRuntime } from './calendar/routes.js';
 import { DayOfStore } from './dayof/store.js';
 import { seedDayOfDemo } from './dayof/seed.js';
+import { RolloverStore } from './rollover/store.js';
+import { seedRolloverDemo } from './rollover/seed.js';
+import { OrganizationsStore } from './organizations/store.js';
+import { defaultSourceYear } from '../shared/rollover.js';
+import { jstDate } from '../shared/calendar.js';
 
 // Server composition from a validated configuration (used by main.ts and by tests that exercise
 // the real production composition). Nothing here listens or installs signal handlers.
@@ -365,6 +370,30 @@ export async function composeServer(config: ServerConfig, overrides: ComposeOver
     if (dayof && config.auth.mode === 'demo') seedDayOfDemo(dayof, decisions, initial.users.find((u) => u.canManageAccess)?.id ?? initial.users[0]?.id ?? 'system', now);
   }
 
+  // Year rollover (2026-11-04): rollover.sqlite3 in the mail folder (Discord login; the backup covers it), or beside the
+  // demo data file with a synthetic organizations ledger of its own (the demo has no committee mailbox). Off in the
+  // other modes. A file that cannot be opened turns the rollover off only.
+  let rollover: { store: RolloverStore; organizations: OrganizationsStore | null } | null = null;
+  const rolloverDir = config.mailbox ? config.mailbox.dataDir : config.auth.mode === 'demo' ? path.dirname(config.dataFile) : null;
+  if (rolloverDir) {
+    let organizations: OrganizationsStore | null = null;
+    try {
+      const rolloverStore = new RolloverStore(rolloverDir);
+      if (!config.mailbox) {
+        try {
+          organizations = new OrganizationsStore(rolloverDir);
+          seedRolloverDemo(organizations, defaultSourceYear(jstDate(new Date(now))), now);
+        } catch {
+          organizations?.close();
+          organizations = null;
+        }
+      }
+      rollover = { store: rolloverStore, organizations };
+    } catch {
+      rollover = null;
+    }
+  }
+
   // Bot tab: the Bot host's signed assistant API, on the task API's host and key, with the same identity bridge.
   const assistant: AssistantRuntime | null =
     config.assistant.mode === 'on' && tasks
@@ -386,6 +415,7 @@ export async function composeServer(config: ServerConfig, overrides: ComposeOver
     // Contacts, organizations and payments on synthetic data next to the demo data file (2026-11-03); null if they cannot be opened.
     demoBooks: config.auth.mode === 'demo' ? openDemoBooks(path.dirname(config.dataFile), initial.users, now) : null,
     dayof,
+    rollover,
     ...(discord ? { discord } : {}),
     ...(account ? { account } : {}),
     ...(line ? { line } : {}),
@@ -397,6 +427,13 @@ export async function composeServer(config: ServerConfig, overrides: ComposeOver
   if (dayof) {
     const board = dayof;
     app.addHook('onClose', async () => board.close());
+  }
+  if (rollover) {
+    const opened = rollover;
+    app.addHook('onClose', async () => {
+      opened.store.close();
+      opened.organizations?.close();
+    });
   }
   return { app, account, hosted };
 }

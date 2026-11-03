@@ -11,6 +11,7 @@ import {
   type CalendarYearlyResponse,
 } from '../../../shared/calendar';
 import { isAssignedTo, TASK_STATUS_LABELS, type TaskView } from '../../../shared/tasks';
+import { needsDateCheck } from '../../../shared/rollover';
 import { api } from '../../api';
 import { useLoader } from '../../useLoader';
 import { EventForm } from './EventForm';
@@ -115,7 +116,7 @@ export function CalendarView({ tasks, tasksLoading, taskNote, userId, onOpenTask
 
   const eventItem = (e: CalendarEventView): Item => ({
     key: `e-${e.id}-${e.date}`,
-    label: `${CALENDAR_KIND_LABELS[e.kind]}${e.occurrence ? '（毎年）' : ''}`,
+    label: `${CALENDAR_KIND_LABELS[e.kind]}${e.occurrence ? '（毎年）' : ''}${needsDateCheck(e) ? '・日付を確かめる' : ''}`,
     title: e.title,
     time: e.time,
     done: false,
