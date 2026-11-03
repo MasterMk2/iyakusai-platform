@@ -58,6 +58,8 @@ export interface LinePushConnector {
   quota?(): Promise<LineQuota | null>;
   /** Members of a group or room the account is in, or null (not a member, or not readable). */
   memberCount?(target: { type: 'group' | 'room'; id: string }): Promise<number | null>;
+  /** Whether LINE returns this user's profile (false: blocked or deleted), or null when it could not be asked. */
+  profileReachable?(userId: string): Promise<boolean | null>;
 }
 
 const DEDUP_WINDOW_MS = 24 * 60 * 60 * 1000;

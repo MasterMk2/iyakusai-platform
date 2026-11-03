@@ -7,7 +7,7 @@ import { SAMPLE_USERS } from '../../src/server/connector/fixtures.js';
 import { BOT, LINE_SHOP, LINE_SUPPORT, LINE_USER, UNSENT_TEXT, mockLineId } from '../../src/server/line/fixtures.js';
 import { applyEventBatch, applyLegacyBatch } from '../../src/server/line/ingest.js';
 import { collectLineItems, lineConversationDetail, namesFrom } from '../../src/server/line/queries.js';
-import { beginSend, CONSENT_TTL_MS, discardDraft, evaluateTarget, MAX_CONSENTS, MAX_CONSENTS_PER_ACTOR, previewReply, RECENT_DM_WINDOW_MS, saveDraft } from '../../src/server/line/reply.js';
+import { beginSend, CONSENT_TTL_MS, discardDraft, evaluateTarget, MAX_CONSENTS, MAX_CONSENTS_PER_ACTOR, observeProfile, previewReply, RECENT_DM_WINDOW_MS, saveDraft } from '../../src/server/line/reply.js';
 import { createLineSeedState, releaseLineBatches } from '../../src/server/line/seed.js';
 import { isLineState, LineStore } from '../../src/server/line/store.js';
 import type { User } from '../../src/server/domain/types.js';
@@ -138,13 +138,25 @@ describe('LINE push eligibility (stored observations only)', () => {
     expect(evaluateTarget(s, conv(CONV.l2Unfollowed), now)).toMatchObject({ ok: false, reason: expect.stringContaining('友だち解除') });
     expect(evaluateTarget(s, conv(CONV.room), now)).toMatchObject({ ok: false, reason: expect.stringContaining('人数が確認できない') });
 
-    // A user who is not a known friend: eligible only within 7 days of their last 1:1 message.
+    // A user who is not a known friend: confirmed within 7 days of their last 1:1 message, unconfirmed after.
     const dm = mockLineId('U', 'c0d1');
     applyEventBatch(s, 'b', [envelope(990, 'message', { message: { id: '800000000200', type: 'text', text: '友だちではない利用者（合成）' } }, { userId: dm, timestamp: '2026-09-20T00:00:00.000Z' })], T0);
     const c = s.conversations.find((x) => x.target.kind === 'messaging_api' && x.target.id === dm)!;
     const sent = Date.parse('2026-09-20T00:00:00.000Z');
-    expect(evaluateTarget(s, c, sent + RECENT_DM_WINDOW_MS).ok).toBe(true);
-    expect(evaluateTarget(s, c, sent + RECENT_DM_WINDOW_MS + 1)).toMatchObject({ ok: false, reason: expect.stringContaining('7 日') });
+    expect(evaluateTarget(s, c, sent + RECENT_DM_WINDOW_MS)).toEqual({ ok: true, billableRecipients: 1 });
+    const late = sent + RECENT_DM_WINDOW_MS + 1;
+    expect(evaluateTarget(s, c, late)).toEqual({ ok: true, billableRecipients: 1, unconfirmed: true });
+
+    // LINE returned no profile (blocked or deleted): refused, until a newer message from them.
+    observeProfile(s, c.id, false, new Date(late).toISOString());
+    expect(evaluateTarget(s, c, late)).toMatchObject({ ok: false, reason: expect.stringContaining('プロフィールを返さなかった') });
+    observeProfile(s, c.id, true, new Date(late).toISOString());
+    expect(evaluateTarget(s, c, late)).toMatchObject({ ok: true, unconfirmed: true });
+    observeProfile(s, c.id, false, '2026-09-01T00:00:00.000Z');
+    expect(evaluateTarget(s, c, late)).toMatchObject({ ok: true, unconfirmed: true });
+    // Only 1:1 users carry the observation.
+    observeProfile(s, CONV.group, false, T0);
+    expect(conv(CONV.group).eligibility.profile).toBeUndefined();
 
     // Leaving the group revokes eligibility.
     applyEventBatch(s, 'b', [{ ...envelope(991, 'leave', {}), source: { type: 'group', groupId: (conv(CONV.group).target as { id: string }).id } }], T0);

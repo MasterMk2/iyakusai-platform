@@ -49,6 +49,12 @@ export interface Eligibility {
   lastUserMessageAt: string | null;
   memberCount: number | null;
   memberCountAt: string | null;
+  /**
+   * 1:1 only (2026-11-04): whether LINE returned the user's profile just before a preview. LINE answers it for
+   * friends and for users who messaged the account, never for users who blocked it or deleted their account; it
+   * cannot tell a friend from a non-friend (this account cannot read its friend list). Absent: never asked.
+   */
+  profile?: { reachable: boolean; at: string };
 }
 
 export interface LineHistoryRecord {
