@@ -956,6 +956,8 @@ button.task-tree-toggle:focus-visible { outline-offset: -3px; }
 .chip-remove { background: transparent; color: var(--muted); border: none; padding: 0 4px; min-height: 24px; min-width: 24px; }
 .body-toggle { display: flex; gap: 4px; margin: 12px 0 4px; }
 .mail-body { margin-top: 4px; }
+.mail-images p { margin: 0 0 4px; }
+.mail-images button { margin-left: 8px; min-height: 32px; padding: 2px 10px; }
 .mail-text { white-space: pre-wrap; overflow-wrap: anywhere; font-family: inherit; }
 .mail-body .mail-text { background: var(--surface); border: 0; padding: 0; margin: 14px 0 16px; font-size: 16px; line-height: 1.85; }
 /* White in the dark theme as well: see .bot-image img. */

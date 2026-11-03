@@ -8,6 +8,7 @@ import { NameRoster } from '../../src/server/discord-auth/names.js';
 import { StateStore } from '../../src/server/domain/store.js';
 import { buildApp } from '../../src/server/http/app.js';
 import { CommitteeAddresses } from '../../src/server/mailbox/addresses.js';
+import { syntheticPng } from '../../src/server/line/inbound-media.js';
 import { SIGN_IN_MAIL_SUBJECT, SIGN_IN_MAIL_TEXT } from '../../src/server/mailbox/restricted.js';
 import { MailboxStore } from '../../src/server/mailbox/store.js';
 import { seedState, TEST_HOST, TEST_PORT } from '../helpers.js';
@@ -23,6 +24,8 @@ let app: FastifyInstance;
 let key: Buffer;
 const ORIGIN = `http://${TEST_HOST}`;
 const HOUR = 3_600_000;
+/** Images on other servers, as the tests answer them (never the network). */
+let remote: (url: URL) => Promise<Buffer | null>;
 
 async function build(changes: Record<string, unknown> = {}) {
   key = randomBytes(32);
@@ -36,7 +39,7 @@ async function build(changes: Record<string, unknown> = {}) {
     clock: () => new Date(ctx.clock.now).toISOString(),
     auth: { mode: 'discord', publicOrigin: 'https://app.example.invalid', publicHost: 'app.example.invalid', trustedProxies: new Set() },
     discord: { service: ctx.service, store: ctx.store, config: ctx.config, names: new NameRoster(path.join(dir, 'names.json')), publicOrigin: null, publicHost: null, trustedProxies: new Set() },
-    mailbox: { store: mail, config, addresses: new CommitteeAddresses(config.mailboxes, config.domainAliases) },
+    mailbox: { store: mail, config, addresses: new CommitteeAddresses(config.mailboxes, config.domainAliases), remoteImages: (url) => remote(url) },
   });
 }
 
@@ -44,6 +47,7 @@ beforeEach(async () => {
   dir = mkdtempSync(path.join(tmpdir(), 'iyakusai-mailbox-http-'));
   writeFileSync(path.join(dir, 'names.json'), JSON.stringify({ version: 1, names: { [CHAIR]: '合成 委員長', [MEMBER]: '合成 太郎', [OTHER]: '合成 花子' } }));
   ctx = setup();
+  remote = async () => null;
 });
 afterEach(async () => {
   await app?.close();
@@ -298,6 +302,48 @@ describe('reading and handling mail', () => {
     expect((await call('PATCH', `${url}/triage`, { cookie: member.cookie, body: { expectedVersion: 2, labels: ['確認中'] } })).json).toMatchObject({ version: 3, assignee: { id: other.id, hasMailboxAccess: false }, labels: ['確認中'] });
     expect((await call('PATCH', `${url}/triage`, { cookie: member.cookie, body: { expectedVersion: 3, assigneeId: null } })).status).toBe(200);
     expect((await call('PATCH', `${url}/triage`, { cookie: member.cookie, body: { expectedVersion: 4, assigneeId: other.id } })).status).toBe(422);
+  });
+});
+
+describe('images in the HTML', () => {
+  beforeEach(() => build());
+
+  it("shows the mail's own images at once and those on other servers only when asked, as checked data: URIs", async () => {
+    const member = await signIn(MEMBER, '21000002');
+    const png = syntheticPng(8, 8);
+    const asked: string[] = [];
+    remote = async (url) => {
+      asked.push(url.href);
+      return url.pathname.endsWith('.png') ? png : Buffer.from('<svg onload="x()"></svg>');
+    };
+    const html = [
+      '<p>ロゴ</p><img src="cid:logo@partner.example" alt="ロゴ" width="120" height="40" onerror="x()">',
+      '<img src="cid:missing@partner.example">',
+      '<img src="https://img.partner.example/banner.png" alt="バナー">',
+      '<img src="https://img.partner.example/pixel.svg">',
+      '<img src="javascript:alert(1)">',
+    ].join('');
+    await put(rawMail({ messageId: 'img@partner.example', to: CONTACT, subject: '画像つき', html, attachments: [{ filename: 'logo.png', contentType: 'image/png', content: png, contentId: 'logo@partner.example' }] }));
+    const item = (await call('GET', '/api/inbox', { cookie: member.cookie })).json.items[0];
+    const receipt = (await call('GET', `/api/threads/${item.threadId}`, { cookie: member.cookie })).json.receipts[0];
+    expect(receipt).toMatchObject({ inlineImages: 1, remoteImages: 2 });
+    expect(receipt.sanitizedHtml).not.toContain('<img');
+
+    const own = await call('GET', `/api/receipts/${receipt.receiptId}/images`, { cookie: member.cookie });
+    expect(own.status).toBe(200);
+    expect(own.json).toMatchObject({ shown: 1, failed: 1, remote: false });
+    expect(own.json.sanitizedHtml).toContain(`<img src="data:image/png;base64,${png.toString('base64')}" alt="ロゴ" width="120" height="40" />`);
+    expect(own.json.sanitizedHtml).not.toMatch(/onerror|https:|javascript:|cid:/);
+    expect(asked).toEqual([]);
+
+    const all = await call('GET', `/api/receipts/${receipt.receiptId}/images?remote=1`, { cookie: member.cookie });
+    expect(all.json).toMatchObject({ shown: 2, failed: 2, remote: true });
+    expect(all.json.sanitizedHtml.match(/<img /g)).toHaveLength(2);
+    expect(all.json.sanitizedHtml).not.toMatch(/https:|svg|javascript:/);
+    expect(asked.sort()).toEqual(['https://img.partner.example/banner.png', 'https://img.partner.example/pixel.svg']);
+
+    expect((await call('GET', `/api/receipts/${receipt.receiptId}/images?remote=yes`, { cookie: member.cookie })).status).toBe(400);
+    expect((await call('GET', `/api/receipts/${receipt.receiptId}/images`)).status).toBe(401);
   });
 });
 

@@ -20,6 +20,7 @@ import { collectLineItems, lineLabelFacets, namesFrom } from '../line/queries.js
 import type { CommitteeAddresses } from './addresses.js';
 import type { OutgoingAttachment } from './compose.js';
 import type { MailboxConfig, MailSendConfig } from './config.js';
+import { fetchPublicImage, type RemoteImageFetch } from './images.js';
 import { attachMailIngest } from './ingest.js';
 import { MailSender } from './send.js';
 import { MailboxService, type People } from './service.js';
@@ -42,6 +43,8 @@ export interface MailboxRuntime {
   contacts?: ContactsStore;
   /** Replaces the minutes file in the mail folder (tests). */
   minutes?: MinutesStore;
+  /** Replaces fetching images on other servers for a mail's HTML (tests). */
+  remoteImages?: RemoteImageFetch;
   /** Replace LINE's HTTP (the receiver and the Messaging API) or its push connector (tests). */
   lineFetch?: Fetch;
   lineConnector?: LinePushConnector;
@@ -78,6 +81,7 @@ export interface MailCaseSource {
 const shortId = z.string().min(1).max(40).regex(/^[a-z0-9-]+$/);
 const messageParams = z.strictObject({ receiptId: z.string().regex(/^rc_[0-9a-f]{16}$/) });
 const threadParams = z.strictObject({ threadId: z.string().regex(/^th_[0-9a-f]{16}$/) });
+const imagesQuery = z.strictObject({ remote: z.enum(['1']).optional() });
 const attachmentParams = z.strictObject({ receiptId: z.string().regex(/^rc_[0-9a-f]{16}$/), attachmentId: z.string().regex(/^att\d{1,3}$/) });
 const page = { page: z.coerce.number().int().min(1).max(10_000).default(1), pageSize: z.coerce.number().int().min(1).max(LIMITS.pageSizeMax).default(20) };
 const filters = {
@@ -369,6 +373,14 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
     reply.header('Content-Disposition', attachmentDisposition(attachment.filename, 'attachment.bin'));
     reply.header('Content-Security-Policy', "default-src 'none'; sandbox");
     return reply.send(attachment.content);
+  });
+
+  // The mail's own images, and with ?remote=1 those on other servers (fetched here, never by the browser).
+  app.get('/api/receipts/:receiptId/images', async (request) => {
+    const user = reader(request, true);
+    const { receiptId } = deps.parse(messageParams, request.params);
+    const { remote } = deps.parse(imagesQuery, request.query);
+    return service.receiptImages(user, receiptId, remote === '1', rt.remoteImages ?? fetchPublicImage);
   });
 
   app.get('/api/receipts/:receiptId/assignees', async (request) => {

@@ -1,10 +1,11 @@
 import { mkdirSync } from 'node:fs';
 import type { Page } from '@playwright/test';
-import type { ReceiptView, TriageView } from '../../src/shared/api.js';
+import type { ReceiptImagesView, ReceiptView, TriageView } from '../../src/shared/api.js';
+import { syntheticPng } from '../../src/server/line/inbound-media.js';
 import { expect, test } from './fixtures.js';
 
 // Synthetic committee-mail responses exercise the production UI; HTTP tests cover authorization.
-async function mailbox(page: Page, edit = false) {
+async function mailbox(page: Page, edit = false, changes: Partial<ReceiptView> = {}, images?: (remote: boolean) => ReceiptImagesView) {
   const box = { id: 'contact', name: '問い合わせ', address: 'contact@committee.example' };
   const receipt: ReceiptView = {
     receiptId: 'rc_0000000000000001', threadId: 'th_0000000000000001', mailbox: box, mailboxes: [box],
@@ -13,7 +14,9 @@ async function mailbox(page: Page, edit = false) {
     from: { name: '取引先', address: 'sender@partner.example' }, to: [{ name: null, address: box.address }], cc: [],
     text: '合成テストの本文です。', hasHtml: false, sanitizedHtml: null, blockedRemoteResources: 0,
     attachments: [], triage: { version: 1, status: 'unhandled', assignee: null, labels: [] }, notes: [], history: [],
+    ...changes,
   };
+  const imageRequests: string[] = [];
   const patches: Record<string, unknown>[] = [];
   const statusPatches: Record<string, unknown>[] = [];
   let conflict = false;
@@ -43,6 +46,10 @@ async function mailbox(page: Page, edit = false) {
       receipt.triage = { ...receipt.triage, version: receipt.triage.version + changed, status: body.status };
       return respond({ threadId: receipt.threadId, statuses: [body.status], changed });
     }
+    if (images && path === `/api/receipts/${receipt.receiptId}/images`) {
+      imageRequests.push(new URL(route.request().url()).search);
+      return respond(images(new URL(route.request().url()).searchParams.get('remote') === '1'));
+    }
     if (path.endsWith('/assignees')) return respond([{ id: 'iy-000002', displayName: '合成 花子' }]);
     if (path.endsWith('/triage')) {
       const body = route.request().postDataJSON() as Record<string, unknown>;
@@ -65,7 +72,7 @@ async function mailbox(page: Page, edit = false) {
   await page.goto(`/#/all?thread=${receipt.threadId}`);
   const form = page.getByRole('form', { name: '対応情報の編集' });
   await expect(form).toBeVisible();
-  return { receipt, patches, statusPatches, form, conflictNext: () => { conflict = true; } };
+  return { receipt, patches, statusPatches, form, imageRequests, conflictNext: () => { conflict = true; } };
 }
 
 test('member labels and assigns mail, clears both, and keeps notes restricted', async ({ page }) => {
@@ -159,4 +166,28 @@ test('mailbox editor retains the status and internal-note controls', async ({ pa
   await form.getByRole('button', { name: '保存', exact: true }).click();
   await expect(form.getByText('保存しました。')).toBeVisible();
   expect(patches[0]).toEqual({ expectedVersion: 2, labels: ['済'] });
+});
+
+test("shows the mail's own images at once and those on other servers after the button", async ({ page }) => {
+  const png = (n: number) => `<img src="data:image/png;base64,${syntheticPng(160 + n, 60).toString('base64')}" alt="画像${n}" />`;
+  const blocked = '<span class="blocked-image"></span>';
+  const { imageRequests } = await mailbox(
+    page,
+    false,
+    { hasHtml: true, sanitizedHtml: `<p>ロゴ</p>${blocked}<p>バナー</p>${blocked}`, blockedRemoteResources: 2, inlineImages: 1, remoteImages: 1 },
+    (remote) => ({ sanitizedHtml: `<p>ロゴ</p>${png(1)}<p>バナー</p>${remote ? png(2) : blocked}`, shown: remote ? 2 : 1, failed: 0, remote }),
+  );
+  const frame = page.frameLocator('iframe.html-frame');
+  await expect(frame.locator('img')).toHaveCount(1);
+  expect(await frame.locator('img').first().evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth)).toBe(161);
+  await expect(frame.locator('.blocked-image')).toHaveCount(1);
+  await expect(page.getByText('メールに含まれる画像は表示しています。外部の画像（1 件）は読み込んでいません。')).toBeVisible();
+  expect(imageRequests).toEqual(['']);
+
+  await page.getByRole('button', { name: '外部の画像を表示' }).click();
+  await expect(frame.locator('img')).toHaveCount(2);
+  await expect(page.getByText('外部の画像はアプリのサーバーが取得して表示しています')).toBeVisible();
+  expect(imageRequests).toEqual(['', '?remote=1']);
+  mkdirSync('.tmp', { recursive: true });
+  await page.screenshot({ path: '.tmp/mail-images.png', fullPage: true });
 });

@@ -218,10 +218,25 @@ export interface ReceiptView {
   /** Sanitized HTML; render only inside a sandboxed iframe. */
   sanitizedHtml: string | null;
   blockedRemoteResources: number;
+  /**
+   * Committee mail: images in the HTML the mail carries itself (cid:, shown from its attachments) and images on
+   * other servers (shown only when the reader asks). Absent in the synthetic test version.
+   */
+  inlineImages?: number;
+  remoteImages?: number;
   attachments: AttachmentView[];
   triage: TriageView;
   notes: NoteView[];
   history: HistoryView[];
+}
+
+/** GET /api/receipts/:id/images: the sanitized HTML with the images it could show as data: URIs. */
+export interface ReceiptImagesView {
+  sanitizedHtml: string;
+  /** Images shown, and images that could not be (missing, not an image, too large, or not reachable). */
+  shown: number;
+  failed: number;
+  remote: boolean;
 }
 
 export interface ThreadStatusResponse {
