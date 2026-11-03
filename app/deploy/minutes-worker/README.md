@@ -1,0 +1,62 @@
+# 議事録の処理役（α 2026-11-02）
+
+統合アプリの「Bot › 議事録」で取り込んだ録音を、本番ホストの上で文字起こし（faster-whisper）し、要約（Claude Code CLI、ツール無効）して下書きにする常駐プログラム。設計は共有ドライブの `_目録/設計/議事録自動化_20261102/設計書.md`。
+
+- アプリには**こちらから聞きに行く**（30 秒ごと）。アプリから処理役は呼ばない。
+- やりとりは svc-auth/v1 の署名付き（クライアント `iyakusai-minutes-worker`）。鍵はアプリの `minutes.json` の `workerKeyFile` と同じ値。
+- 音声はこのホストの中だけで扱う（外部の文字起こしサービスには送らない）。Claude に渡すのは文字起こしのテキストだけ。
+- 同じ `minutes_worker.py` を 2 つの service で動かす（2026-11-02 の本番ホストの確認で決めた形）。
+  - **文字起こし** `iyakusai-minutes-transcribe`：本番ホストには `python3-venv` も pip も無いので、ホストには何も入れず、`python:3.12-slim` の使い捨てコンテナで動かす（CPU 10 コア分・メモリ 6GB・優先度最低・1 件ずつ）。
+  - **要約** `iyakusai-minutes-summarize`：Claude Code CLI がホストにあるので、ホストの `python3` で動かす（標準ライブラリだけで動く）。タスク候補のスクリーニングと同じ CLI・同じログイン（`CLAUDE_CONFIG_DIR`）を使う。
+
+## 置き方（本番ホスト。委員長の承認を得てから）
+
+1. アプリ側：鍵を作り、`mailbox.json` と同じフォルダに `minutes.json` を置いて、アプリを起動し直す。
+
+   ```sh
+   umask 077; head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > <compose のフォルダ>/config/minutes-worker.key
+   cat > <compose のフォルダ>/config/minutes.json <<'EOF'
+   { "version": 1, "workerKeyFile": "/config/minutes-worker.key", "audioRetentionDays": 14 }
+   EOF
+   ```
+
+   アプリの中から見たパス（`/config/...`）で書く。`minutes.json` が無ければ議事録は無効のままで、今までと同じ。
+
+2. 処理役：
+
+   ```sh
+   mkdir -p ~/iyakusai-minutes-worker/models && cd ~/iyakusai-minutes-worker
+   cp <このフォルダ>/minutes_worker.py <このフォルダ>/test_minutes_worker.py <このフォルダ>/requirements.txt .
+   install -m 600 <compose のフォルダ>/config/minutes-worker.key ./minutes-worker.key   # 同じ値
+   cp <このフォルダ>/worker.env.example worker.env && chmod 600 worker.env && vi worker.env   # <利用者> を書き換える
+   python3 -m unittest test_minutes_worker   # 単体試験（音声のモデルと Claude は使わない）
+   # faster-whisper をコンテナの中で pylib/ に入れる（ホストの python には入れない）
+   docker run --rm --user "$(id -u):$(id -g)" -e HOME=/w -v "$PWD":/w -w /w python:3.12-slim \
+     pip install --quiet --no-cache-dir --target /w/pylib -r requirements.txt
+   cp <このフォルダ>/iyakusai-minutes-transcribe.service <このフォルダ>/iyakusai-minutes-summarize.service ~/.config/systemd/user/
+   systemctl --user daemon-reload
+   systemctl --user enable --now iyakusai-minutes-summarize iyakusai-minutes-transcribe
+   journalctl --user -u iyakusai-minutes-transcribe -u iyakusai-minutes-summarize -f   # 仕事が無ければ待つだけ
+   ```
+
+3. 初回の文字起こしでモデル（large-v3 は約 3GB、置き場の合計は約 4.8GB）を Hugging Face から取りに行く。`models/` に置かれ、以後はそこから読む。
+
+## 止める・戻す
+
+- 処理役だけ止める：`systemctl --user disable --now iyakusai-minutes-transcribe iyakusai-minutes-summarize`（取り込みはできるが、順番待ちのまま進まない）。
+- 議事録ごと止める：`minutes.json` を退避してアプリを起動し直す（保存した議事録・音声は `minutes.sqlite3`・`minutes-audio/` に残る）。
+
+## 本番ホストでの確認（2026-11-02）
+
+記録の正本は共有ドライブの設計書 §2-3。ここには置き方に効くことだけを書く。
+
+- 本番ホスト：Intel Core Ultra 7 265K（20 コア・AVX2/AVX-VNNI）、メモリ 30GB、GPU なし。
+- 速さ（合成音声 11 分、CPU 8 スレッド・int8）：処理役の設定（`condition_on_previous_text=False`・用語のヒントつき）の large-v3 で 1 時間の会議を約 14 分。最大メモリ約 4.3GB。
+- 要約：Claude Code CLI 2.1.227。処理役と同じ引数（`--strict-mcp-config`・ツール無効）で動き、11 分の会議で 36 秒。
+- 依存：`faster-whisper==1.1.1` は `requests` が足りず、`1.2.1` も `av` 19 とは音声を開けなかった。`requirements.txt` で `av==15.1.0` に固定した。
+- Caddy は `Permissions-Policy` を付けず、アプリの値がそのまま届く（今の本番は `microphone=()`）。α 版の反映で録音が許される。
+
+## 確かめていないこと
+
+- 本物の会議の声（複数人・雑音・遠い声）での聞き取りの正しさ。測定は合成音声 1 人分。
+- 2 つの service を本番の systemd で実際に動かすこと（書式は `systemd-analyze verify` で確かめた）。

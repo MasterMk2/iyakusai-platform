@@ -20,6 +20,7 @@ import { applyBatches, fetchAll } from '../domain/sync.js';
 import { addNote, assigneeCandidates, updateTriage } from '../domain/triage.js';
 import { DomainError, type User } from '../domain/types.js';
 import { attachBotDatasource, BOT_DATASOURCE_PATH } from '../datasource/bot-datasource.js';
+import { WORKER_PATHS as MINUTES_WORKER_PATHS } from '../minutes/routes.js';
 import { INGEST_PATH } from '../mailbox/ingest.js';
 import { registerMailboxRoutes, type MailboxRuntime } from '../mailbox/routes.js';
 import { attachRentalDriveSync, SYNC_ACK_PATH } from '../rental/drive-sync.js';
@@ -28,6 +29,7 @@ import { registerTaskRoutes, type TaskRuntime } from '../tasks/routes.js';
 import { registerAssistantRoutes, type AssistantRuntime } from '../assistant/routes.js';
 import { HttpError } from './http-error.js';
 import { registerLineRoutes, type LineRuntime } from './line-routes.js';
+import { DISCORD_LINE_PATHS } from '../line/discord.js';
 
 export const SESSION_COOKIE = 'smm_demo_persona';
 
@@ -252,6 +254,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   }
   if (auth.mode === 'discord' && !options.discord) throw new ConfigError('discord モードのログイン構成がありません。');
   const mailbox = options.mailbox ?? null;
+  const minutesOn = !!mailbox?.config.minutes;
   if (mailbox && (auth.mode !== 'discord' || options.line)) throw new ConfigError('委員会の受信箱は discord モードでだけ使えます（LINE の模擬受信とは併用できません）。');
   const botDatasourceKey = options.botDatasourceKey ?? null;
   if (botDatasourceKey && auth.mode !== 'discord') throw new ConfigError('Bot のデータソースは discord モードでだけ使えます。');
@@ -286,7 +289,8 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     reply.header('Cross-Origin-Opener-Policy', 'same-origin');
     reply.header('Cross-Origin-Resource-Policy', 'same-origin');
     // The rental phone screen sets its own policy (camera for QR scanning and photos).
-    if (!reply.hasHeader('Permissions-Policy')) reply.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
+    // With the meeting minutes (α 2026-11-02) the app's own pages may record: the microphone and a shared tab's sound.
+    if (!reply.hasHeader('Permissions-Policy')) reply.header('Permissions-Policy', minutesOn ? 'camera=(), microphone=(self), display-capture=(self), geolocation=(), payment=()' : 'camera=(), microphone=(), geolocation=(), payment=()');
     // Same API recognition as the gate; error responses (including unmatched paths) are never cacheable either.
     if (isApiRequest(request) || reply.statusCode >= 400) reply.header('Cache-Control', 'no-store');
     return payload;
@@ -308,8 +312,15 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     });
   } else if (auth.mode === 'discord') {
     // The Bot data source path is always exempt from the browser Origin gate, so that without a key it answers 404 (no such route) like any unknown path.
-    const serverToServerPaths = [...(mailbox ? [INGEST_PATH] : []), ...(options.rental?.driveSyncKey ? [SYNC_ACK_PATH] : []), BOT_DATASOURCE_PATH];
-    discordApi = installDiscordAuth(app, options.discord!, { listenPort: options.listenPort, isAllowedLoopbackHost: isAllowedHost, sessionUser, serverToServerPaths });
+    const serverToServerPaths = [
+      ...(mailbox ? [INGEST_PATH] : []),
+      ...(options.rental?.driveSyncKey ? [SYNC_ACK_PATH] : []),
+      BOT_DATASOURCE_PATH,
+      // The minutes worker (α 2026-11-02): exempt like the Bot data source, so without minutes.json it answers 404.
+      ...Object.values(MINUTES_WORKER_PATHS),
+    ];
+    // The Bot's internal LINE routes (2026-11-02): reached over the internal network only, refused through the proxy.
+    discordApi = installDiscordAuth(app, options.discord!, { listenPort: options.listenPort, isAllowedLoopbackHost: isAllowedHost, sessionUser, serverToServerPaths, internalPaths: DISCORD_LINE_PATHS });
   } else {
     // Every request (including reads and static files) must address the loopback
     // server by a loopback name, so a DNS-rebinding origin cannot reach the API at all.
@@ -407,6 +418,8 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
         clock,
         now: () => Date.parse(clock()),
         parse,
+        publicOrigin: auth.mode === 'discord' ? auth.publicOrigin : null,
+        fromTrustedProxy: (request) => discordApi!.fromTrustedProxy(request),
       })
     : null;
 

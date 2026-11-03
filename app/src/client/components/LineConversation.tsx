@@ -33,6 +33,14 @@ function Content({ m }: { m: LineMessageView }) {
   }
 }
 
+/** Who wrote a row: a history row says it came from the admin screen's history and, if outgoing, which member sent it. */
+function sender(m: LineMessageView, accountName: string): string {
+  if (m.provenance !== 'oa_history') return m.senderLabel;
+  if (m.direction === 'inbound') return m.senderLabel;
+  if (m.history?.autoReply) return `${accountName}（自動応答）`;
+  return m.history?.staff ? `${accountName}（${m.history.staff}）` : accountName;
+}
+
 /** Received messages and what the app sent, in time order (a sent reply shows where it was written). */
 function timeline(d: LineConversationDetail): ({ kind: 'message'; at: string; m: LineMessageView } | { kind: 'sent'; at: string; o: OutboxView })[] {
   const sent = d.outbox.filter((o) => o.status !== 'failed').map((o) => ({ kind: 'sent' as const, at: o.createdAt, o }));
@@ -58,7 +66,9 @@ function OutboxItem({ item, canRetry, onChanged }: { item: OutboxView; canRetry:
   return (
     <li className={`outbox outbox-${item.status}`} data-outbox-id={item.id}>
       <span className="note-meta">
-        {fmtDate(item.createdAt)} ・ {item.actorName} ・ {item.mock ? 'プッシュ（模擬）' : 'プッシュ'}・ {item.billableRecipients ?? '?'} 人宛て
+        {fmtDate(item.createdAt)} ・ {item.actorName} ・ {item.broadcastId ? '一斉送信' : item.mock ? 'プッシュ（模擬）' : 'プッシュ'}・ {item.billableRecipients ?? '?'} 人宛て
+        {item.via === 'discord' ? ' ・ Discord から' : ''}
+        {item.image ? ' ・ 画像あり' : ''}
       </span>
       <strong className="outbox-status" data-testid="outbox-status">
         {item.statusLabel}
@@ -137,7 +147,9 @@ export function LineConversation({
             <p className="hint" data-testid="line-live-notice">
               {d.sending === 'live'
                 ? '公式LINE への返信はこのアプリから送ります。スマホの公式アカウントアプリから送った返信は、ここには出ません。'
-                : 'このサーバーでは公式LINE の送信は設定されていません（閲覧だけ）。'}
+                : d.account.kind === 'legacy_archive'
+                  ? '公式アカウントの管理画面の履歴のうち、相手の利用者 ID が分からなかった会話です（閲覧だけ）。'
+                  : 'このサーバーでは公式LINE の送信は設定されていません（閲覧だけ）。'}
             </p>
           )}
           <p className="hint">
@@ -153,7 +165,12 @@ export function LineConversation({
               e.kind === 'message' ? (
                 <li key={e.m.id} className={`line-msg ${e.m.direction === 'outbound_legacy' ? 'mine' : ''}`} data-message-id={e.m.id}>
                   <span className="note-meta">
-                    {e.m.senderLabel} ・ {fmtDate(e.m.sentAt)}
+                    {sender(e.m, d.account.name)} ・ {fmtDate(e.m.sentAt)}
+                    {e.m.provenance === 'oa_history' && (
+                      <span className="history-badge" title="公式アカウントの管理画面の履歴から取り込んだ行です（返信の対象にはなりません）" data-testid="line-history-badge">
+                        管理画面の履歴より
+                      </span>
+                    )}
                   </span>
                   <Content m={e.m} />
                 </li>
@@ -161,8 +178,11 @@ export function LineConversation({
                 <li key={e.o.id} className="line-msg mine" data-outbox-message={e.o.id}>
                   <span className="note-meta">
                     {d.account.name}（{e.o.actorName}）・ {fmtDate(e.o.createdAt)} ・ {e.o.statusLabel}
+                    {e.o.broadcastId ? ' ・ 一斉送信' : ''}
+                    {e.o.via === 'discord' ? ' ・ Discord から' : ''}
                   </span>
                   <span className="line-text">{e.o.body}</span>
+                  {e.o.image && <img className="line-image-thumb" src={e.o.image.previewUrl} alt="送った画像" />}
                 </li>
               ),
             )}

@@ -3,8 +3,9 @@ import { LINE_LIMITS, type LineDraftView, type LinePreviewResponse, type LineTar
 import { DomainError, notFound, type User } from '../domain/types.js';
 import { readableConversation, replyableConversation } from './access.js';
 import type { LinePushOutcome, LinePushRequest } from './connector.js';
+import { MEDIA_PATH, publicImage, usableMedia } from './media.js';
 import { sha256 } from './normalize.js';
-import { nextLineId, type AttemptOutcome, type LineAccount, type LineConversation, type LineState, type OutboxIntent } from './types.js';
+import { nextLineId, type AttemptOutcome, type LineAccount, type LineConversation, type LineState, type OutboxImage, type OutboxIntent, type SendChannel } from './types.js';
 
 // Manual reply state machine (the mock connector, or the Messaging API since 2026-10-28).
 //
@@ -99,13 +100,40 @@ export function monthlyUsage(state: LineState, accountId: string, nowMs: number)
     .reduce((n, o) => n + o.billableRecipients, 0);
 }
 
+/** Marks the errors of the monthly limits (the app's and LINE's), so the Discord route can say "quota". */
+export const QUOTA_DETAILS = { reason: 'quota' } as const;
+export const isQuotaError = (err: unknown) => err instanceof DomainError && (err.details as { reason?: unknown } | undefined)?.reason === 'quota';
+
 /** The app's own monthly limit, set in the account configuration (for example the free plan's 200). */
-function checkMonthlyLimit(state: LineState, account: LineAccount, billable: number, nowMs: number): void {
+export function checkMonthlyLimit(state: LineState, account: LineAccount, billable: number, nowMs: number): void {
   if (account.monthlyLimit === undefined) return;
   const used = monthlyUsage(state, account.id, nowMs);
   if (used + billable > account.monthlyLimit) {
-    throw new DomainError('validation', `今月の送信の上限（${account.monthlyLimit} 通）を超えるため送れません。今月はこのアプリから ${used} 通送っています（グループは人数分）。`);
+    throw new DomainError('validation', `今月の送信の上限（${account.monthlyLimit} 通）を超えるため送れません。今月はこのアプリから ${used} 通送っています（グループは人数分）。`, QUOTA_DETAILS);
   }
+}
+
+/** LINE's own count of the month (the admin screen, the Bot and this app together). */
+export function checkLineQuota(quota: PreviewQuota | null, billable: number): void {
+  if (quota && quota.limit !== null && quota.used + billable > quota.limit) {
+    throw new DomainError('validation', `LINE 側の今月の通数の上限（${quota.limit} 通）に届くため送れません（使用済み ${quota.used} 通）。`, QUOTA_DETAILS);
+  }
+}
+
+/** Where sent images are fetched from (send.publicBaseUrl or SMM_PUBLIC_ORIGIN); null: images cannot be sent. */
+export interface SendContext {
+  imageBaseUrl: string | null;
+  via?: SendChannel;
+}
+
+const channelOf = (ctx: SendContext | undefined): SendChannel => ctx?.via ?? 'app';
+const sameChannel = (x: { via?: SendChannel | undefined }, via: SendChannel) => (x.via ?? 'app') === via;
+
+/** The image a draft names: the sender's own upload, still public, and a server that can publish it. */
+export function imageOf(state: LineState, user: User, accountId: string, imageId: string | null | undefined, nowMs: number, ctx: SendContext | undefined): OutboxImage | null {
+  if (!imageId) return null;
+  if (!ctx?.imageBaseUrl) throw new DomainError('validation', 'このサーバーでは画像を送れません（公開 URL が設定されていません）。', { field: 'image' });
+  return publicImage(usableMedia(state, user, accountId, imageId, nowMs), ctx.imageBaseUrl);
 }
 
 /** A member count read from LINE: the account is in the group or room now (2026-10-28). */
@@ -142,39 +170,63 @@ function pruneConsents(state: LineState, nowMs: number): void {
   state.consents = state.consents.filter((c) => Date.parse(c.expiresAt) > nowMs);
 }
 
-function draftView(d: { id: string; version: number; body: string; updatedAt: string }): LineDraftView {
-  return { id: d.id, version: d.version, body: d.body, updatedAt: d.updatedAt };
+function draftView(d: { id: string; version: number; body: string; updatedAt: string; imageId?: string | null | undefined }): LineDraftView {
+  return { id: d.id, version: d.version, body: d.body, updatedAt: d.updatedAt, imageId: d.imageId ?? null };
 }
+
+/** The image as the browser shows it (the same server, so a relative path). */
+export const imageView = (image: OutboxImage | null | undefined) => (image ? { previewUrl: `${MEDIA_PATH}/${image.previewUrl.split('/').pop()!}` } : null);
 
 // ---- 1. draft
 
-export function saveDraft(state: LineState, user: User, conversationId: string, input: { body: string; expectedVersion: number | null }, now: string): LineDraftView {
+export function saveDraft(
+  state: LineState,
+  user: User,
+  conversationId: string,
+  input: { body: string; expectedVersion: number | null; imageId?: string | null | undefined },
+  now: string,
+  ctx?: SendContext,
+): LineDraftView {
   const conv = replyableConversation(state, user, conversationId);
   const check = evaluateTarget(state, conv, Date.parse(now));
   // A group's member count is read just before the preview, so a draft may be written before it is known.
   if (!check.ok && !check.countPending) throw new DomainError('validation', check.reason);
   const body = normalizeReplyBody(input.body);
-  const existing = state.drafts.find((d) => d.conversationId === conv.id && d.authorId === user.id);
+  const imageId = input.imageId ?? null;
+  imageOf(state, user, conv.accountId, imageId, Date.parse(now), ctx);
+  const via = channelOf(ctx);
+  const existing = state.drafts.find((d) => d.conversationId === conv.id && d.authorId === user.id && sameChannel(d, via));
   if ((existing?.version ?? null) !== input.expectedVersion) {
     throw new DomainError('conflict', '下書きが別の画面で更新されています。最新の下書きを確認してください。', existing ? { draft: draftView(existing) } : undefined);
   }
   if (existing) {
-    if (existing.body === body) return draftView(existing);
+    if (existing.body === body && (existing.imageId ?? null) === imageId) return draftView(existing);
     existing.body = body;
+    existing.imageId = imageId;
     existing.version += 1;
     existing.updatedAt = now;
     // Any confirmation of the previous version is void.
     state.consents = state.consents.filter((c) => c.draftId !== existing.id || c.consumedByIntentId !== null);
     return draftView(existing);
   }
-  const draft = { id: `ld_${randomBytes(8).toString('hex')}`, conversationId: conv.id, accountId: conv.accountId, authorId: user.id, body, version: 1, updatedAt: now };
+  const draft = {
+    id: `ld_${randomBytes(8).toString('hex')}`,
+    conversationId: conv.id,
+    accountId: conv.accountId,
+    authorId: user.id,
+    body,
+    version: 1,
+    updatedAt: now,
+    imageId,
+    ...(via !== 'app' ? { via } : {}),
+  };
   state.drafts.push(draft);
   return draftView(draft);
 }
 
 export function discardDraft(state: LineState, user: User, conversationId: string): void {
   const conv = readableConversation(state, user, conversationId);
-  const draft = state.drafts.find((d) => d.conversationId === conv.id && d.authorId === user.id);
+  const draft = state.drafts.find((d) => d.conversationId === conv.id && d.authorId === user.id && sameChannel(d, 'app'));
   if (!draft) return;
   state.drafts = state.drafts.filter((d) => d.id !== draft.id);
   state.consents = state.consents.filter((c) => c.draftId !== draft.id || c.consumedByIntentId !== null);
@@ -182,19 +234,27 @@ export function discardDraft(state: LineState, user: User, conversationId: strin
 
 // ---- 2. preview + server-issued consent
 
-export function previewReply(state: LineState, user: User, conversationId: string, input: { draftId: string; draftVersion: number }, now: string, quota: PreviewQuota | null = null): LinePreviewResponse {
+export function previewReply(
+  state: LineState,
+  user: User,
+  conversationId: string,
+  input: { draftId: string; draftVersion: number },
+  now: string,
+  quota: PreviewQuota | null = null,
+  ctx?: SendContext,
+): LinePreviewResponse {
   const nowMs = Date.parse(now);
+  const via = channelOf(ctx);
   const conv = replyableConversation(state, user, conversationId);
-  const draft = state.drafts.find((d) => d.id === input.draftId && d.conversationId === conv.id && d.authorId === user.id);
+  const draft = state.drafts.find((d) => d.id === input.draftId && d.conversationId === conv.id && d.authorId === user.id && sameChannel(d, via));
   if (!draft) throw notFound();
   if (draft.version !== input.draftVersion) throw new DomainError('conflict', '下書きが変更されています。保存した最新の内容でもう一度確認してください。');
   const check = evaluateTarget(state, conv, nowMs);
   if (!check.ok) throw new DomainError('validation', check.reason);
   const account = accountOf(state, conv);
+  const image = imageOf(state, user, account.id, draft.imageId, nowMs, ctx);
   checkMonthlyLimit(state, account, check.billableRecipients, nowMs);
-  if (quota && quota.limit !== null && quota.used + check.billableRecipients > quota.limit) {
-    throw new DomainError('validation', `LINE 側の今月の通数の上限（${quota.limit} 通）に届くため送れません（使用済み ${quota.used} 通）。`);
-  }
+  checkLineQuota(quota, check.billableRecipients);
 
   pruneConsents(state, nowMs);
   state.consents = state.consents.filter((c) => !(c.draftId === draft.id && c.actorId === user.id && c.consumedByIntentId === null));
@@ -218,6 +278,8 @@ export function previewReply(state: LineState, user: User, conversationId: strin
     createdAt: now,
     expiresAt,
     consumedByIntentId: null,
+    imageId: draft.imageId ?? null,
+    ...(via !== 'app' ? { via } : {}),
   });
 
   const mock = account.outbound === 'push_mock';
@@ -237,6 +299,7 @@ export function previewReply(state: LineState, user: User, conversationId: strin
           ? `LINE 側の今月の通数：${quota.used} 通${quota.limit !== null ? `／上限 ${quota.limit} 通` : '（上限なしのプラン）'}。公式アカウントの管理画面から送った分も含みます。`
           : 'LINE 側の今月の残り通数は読み取れませんでした。',
       ];
+  if (image) notices.push('文字のあとに画像を 1 枚送ります（1 回の送信なので通数は 1 人 1 通です）。画像は 7 日間、推測できない URL で公開されます。');
   if (conv.target.kind === 'messaging_api' && conv.target.type !== 'user') {
     notices.unshift(`この返信は${TYPE_LABEL[conv.target.type]}の参加者全員（確認済みの人数: ${check.billableRecipients} 人）に届き、人数分の通数として数えられます。個人宛てには送られません。`);
   }
@@ -252,6 +315,11 @@ export function previewReply(state: LineState, user: User, conversationId: strin
     mock,
     billableRecipients: check.billableRecipients,
     notices,
+    image: imageView(image),
+    monthUsed: used,
+    monthlyLimit: account.monthlyLimit ?? null,
+    lineUsage: quota?.used ?? null,
+    lineLimit: quota?.limit ?? null,
   };
 }
 
@@ -272,8 +340,9 @@ const INVALID_CONSENT = '送信の確認が無効か、有効期限が切れて�
  * existing intent for the same operation. The connector is called only after this
  * transaction was persisted.
  */
-export function beginSend(state: LineState, user: User, conversationId: string, input: SendInput, now: string): { intentId: string; attemptNo: number; replay: boolean } {
+export function beginSend(state: LineState, user: User, conversationId: string, input: SendInput, now: string, ctx?: SendContext): { intentId: string; attemptNo: number; replay: boolean } {
   const nowMs = Date.parse(now);
+  const via = channelOf(ctx);
   const body = normalizeReplyBody(input.body);
   const bodyHash = sha256(body);
 
@@ -293,13 +362,14 @@ export function beginSend(state: LineState, user: User, conversationId: string, 
   if (consent.consumedByIntentId !== null) {
     throw new DomainError('conflict', 'この確認内容は既に送信処理に使われています。二重送信はしません。', { intentId: consent.consumedByIntentId });
   }
-  if (consent.conversationId !== conv.id || consent.accountId !== account.id || consent.draftId !== input.draftId || consent.draftVersion !== input.draftVersion) {
+  if (consent.conversationId !== conv.id || consent.accountId !== account.id || consent.draftId !== input.draftId || consent.draftVersion !== input.draftVersion || !sameChannel(consent, via)) {
     throw new DomainError('conflict', INVALID_CONSENT);
   }
   const draft = state.drafts.find((d) => d.id === consent.draftId && d.authorId === user.id);
-  if (!draft || draft.version !== consent.draftVersion || draft.body !== body || consent.bodyHash !== bodyHash) {
+  if (!draft || draft.version !== consent.draftVersion || draft.body !== body || consent.bodyHash !== bodyHash || (draft.imageId ?? null) !== (consent.imageId ?? null)) {
     throw new DomainError('conflict', '確認した後に本文が変更されています。もう一度内容を確認してください。');
   }
+  const image = imageOf(state, user, account.id, consent.imageId, nowMs, ctx);
   const check = evaluateTarget(state, conv, nowMs);
   if (!check.ok) throw new DomainError('validation', check.reason);
   if (targetFingerprint(account, conv) !== consent.targetFingerprint || conv.target.kind !== 'messaging_api') {
@@ -328,16 +398,26 @@ export function beginSend(state: LineState, user: User, conversationId: string, 
     statusReason: null,
     retryNotBefore: null,
     attempts: [{ n: 1, actorId: user.id, startedAt: now, finishedAt: null, outcome: null, requestId: null, httpStatus: null, retryAfterSeconds: null }],
+    image,
+    ...(via !== 'app' ? { via } : {}),
   };
   state.outbox.push(intent);
   consent.consumedByIntentId = intent.id;
   state.drafts = state.drafts.filter((d) => d.id !== draft.id);
-  conv.history.push({ id: nextLineId(state, 'lhist'), at: now, actorId: user.id, action: 'reply_started', from: null, to: `${live ? 'プッシュ' : 'プッシュ（模擬）'}・操作 ${input.operationId.slice(0, 8)}` });
+  const how = `${live ? 'プッシュ' : 'プッシュ（模擬）'}${image ? '・画像あり' : ''}${via === 'discord' ? '・Discord から' : ''}`;
+  conv.history.push({ id: nextLineId(state, 'lhist'), at: now, actorId: user.id, action: 'reply_started', from: null, to: `${how}・操作 ${input.operationId.slice(0, 8)}` });
   return { intentId: intent.id, attemptNo: 1, replay: false };
 }
 
 export function pushRequestOf(intent: OutboxIntent): LinePushRequest {
-  return { retryKey: intent.retryKey, accountId: intent.accountId, to: intent.target.id, targetType: intent.target.type, text: intent.body };
+  return {
+    retryKey: intent.retryKey,
+    accountId: intent.accountId,
+    to: intent.target.id,
+    targetType: intent.target.type,
+    text: intent.body,
+    ...(intent.image ? { image: { originalUrl: intent.image.originalUrl, previewUrl: intent.image.previewUrl } } : {}),
+  };
 }
 
 // ---- 5. result
@@ -425,6 +505,7 @@ export function beginRetry(state: LineState, user: User, intentId: string, expec
   if (intent.attempts.length !== expectedAttempts) throw new DomainError('conflict', '別の操作で既に再試行されています。最新の状態を確認してください。');
   if (intent.status === 'accepted') throw new DomainError('conflict', '受付済みのため再送しません。');
   if (intent.status === 'manual_review') throw new DomainError('conflict', '要確認の送信は自動では再送できません。内容を確認し、新しい返信として作成してください。');
+  if (intent.broadcastId) throw new DomainError('conflict', BROADCAST_NO_RETRY);
   const last = intent.attempts[intent.attempts.length - 1]!;
   if (intent.status === 'failed' && (last.outcome === null || !RETRYABLE.has(last.outcome))) {
     throw new DomainError('conflict', 'この失敗は再試行できません。内容を確認し、新しい返信として作成してください。');
@@ -464,6 +545,8 @@ export function beginRetry(state: LineState, user: User, intentId: string, expec
 
 // ---- views
 
+export const BROADCAST_NO_RETRY = '一斉送信は 1 人ずつの再試行はしません（ほかの人と同じ要求のため）。結果を確かめてから、必要なら新しく送ってください。';
+
 export const STATUS_LABEL: Record<OutboxView['status'], string> = {
   pending: '送信処理中（模擬）',
   accepted: '受付済み（模擬）',
@@ -478,7 +561,7 @@ export function outboxView(intent: OutboxIntent, names: (id: string) => string, 
   const status = intent.status === 'pending' && !inFlight ? 'unknown' : intent.status;
   const lastOutcome = last.outcome ?? (status === 'unknown' ? 'unknown' : null);
   const windowOpen = nowMs - Date.parse(intent.attempts[0]!.startedAt) < RETRY_KEY_SAFE_WINDOW_MS;
-  const retryable = !inFlight && (status === 'unknown' || (status === 'failed' && lastOutcome !== null && RETRYABLE.has(lastOutcome)));
+  const retryable = !intent.broadcastId && !inFlight && (status === 'unknown' || (status === 'failed' && lastOutcome !== null && RETRYABLE.has(lastOutcome)));
   const mock = intent.connector === 'mock';
   let note: string;
   switch (status) {
@@ -501,6 +584,7 @@ export function outboxView(intent: OutboxIntent, names: (id: string) => string, 
       break;
   }
   if (retryable && !windowOpen) note += ' 再送キーの有効期間を過ぎているため、再試行すると要確認になります。';
+  if (intent.broadcastId && (status === 'failed' || status === 'unknown')) note += ` ${BROADCAST_NO_RETRY}`;
   return {
     id: intent.id,
     conversationId: intent.conversationId,
@@ -522,5 +606,8 @@ export function outboxView(intent: OutboxIntent, names: (id: string) => string, 
       outcomeLabel: a.outcome ? outcomeLabel(a.outcome, mock) : inFlight && a === last ? '処理中' : outcomeLabel('unknown', mock),
     })),
     billableRecipients: intent.billableRecipients,
+    via: intent.via ?? 'app',
+    broadcastId: intent.broadcastId ?? null,
+    image: imageView(intent.image),
   };
 }

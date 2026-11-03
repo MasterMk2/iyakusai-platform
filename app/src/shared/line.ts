@@ -68,7 +68,10 @@ export interface LineMessageView {
   senderLabel: string;
   sentAt: string;
   content: LineMessageContent;
-  provenance: 'legacy_export' | 'event_feed';
+  /** oa_history: a row of the official account's own history file (2026-11-02), never a reply target. */
+  provenance: 'legacy_export' | 'event_feed' | 'oa_history';
+  /** oa_history only: the committee member who sent it (outgoing rows) and whether it was an automatic answer. */
+  history?: { staff: string | null; autoReply: boolean };
 }
 
 export type LineHistoryAction =
@@ -126,6 +129,12 @@ export interface OutboxView {
   retryNotBefore: string | null;
   attempts: OutboxAttemptView[];
   billableRecipients: number | null;
+  /** Where it was confirmed: the app's screen or a Discord thread (2026-11-02). */
+  via?: 'app' | 'discord';
+  /** One recipient of a broadcast (the broadcast's ID), or null. */
+  broadcastId?: string | null;
+  /** The image sent after the text (the preview, from this server), or null. */
+  image?: { previewUrl: string } | null;
 }
 
 export interface LineDraftView {
@@ -133,6 +142,9 @@ export interface LineDraftView {
   version: number;
   body: string;
   updatedAt: string;
+  /** An uploaded image to send after the text (2026-11-02), and its preview on this server. */
+  imageId?: string | null;
+  imagePreviewUrl?: string | null;
 }
 
 export interface LineReplyState {
@@ -144,6 +156,8 @@ export interface LineReplyState {
   reason: string | null;
   /** The viewer's own saved draft only. */
   draft: LineDraftView | null;
+  /** An image can be attached (the server has a public URL for it), 2026-11-02. */
+  imagesEnabled?: boolean;
 }
 
 export interface LineConversationDetail {
@@ -179,6 +193,13 @@ export interface LinePreviewResponse {
   mock: boolean;
   billableRecipients: number;
   notices: string[];
+  /** The image sent after the text, or null (2026-11-02). */
+  image?: { previewUrl: string } | null;
+  /** This month's messages from this app and its limit, and LINE's own count (null: not read). */
+  monthUsed?: number;
+  monthlyLimit?: number | null;
+  lineUsage?: number | null;
+  lineLimit?: number | null;
 }
 
 export interface LineSendResponse {
@@ -218,4 +239,64 @@ export type MockPushOutcome = (typeof MOCK_PUSH_OUTCOMES)[number];
 export interface MockLineConnectorState {
   queued: MockPushOutcome[];
   acceptedCount: number;
+}
+
+// ---- images and broadcasts (2026-11-02)
+
+export const LINE_IMAGE_LIMITS = {
+  originalMaxSide: 2048,
+  originalMaxBytes: 10 * 1024 * 1024,
+  previewMaxSide: 1024,
+  previewMaxBytes: 1024 * 1024,
+} as const;
+
+export interface LineMediaResponse {
+  id: string;
+  previewUrl: string;
+  expiresAt: string;
+}
+
+export interface BroadcastRecipientView {
+  conversationId: string;
+  title: string;
+  maskedId: string;
+  /** The person is a known friend (else: not known; LINE delivers only to friends). */
+  friend: boolean;
+  latestAt: string | null;
+}
+
+export interface BroadcastOptionsResponse {
+  account: { id: string; name: string };
+  /** 1:1 conversations with a user ID that have not unfollowed or blocked. */
+  recipients: BroadcastRecipientView[];
+  monthUsed: number;
+  monthlyLimit: number | null;
+  imagesEnabled: boolean;
+  /** Mock connector (synthetic version). */
+  mock: boolean;
+}
+
+export interface BroadcastPreviewResponse {
+  consentId: string;
+  expiresAt: string;
+  account: { id: string; name: string };
+  recipients: { conversationId: string; title: string; maskedId: string }[];
+  count: number;
+  body: string;
+  image: { previewUrl: string } | null;
+  monthUsed: number;
+  monthlyLimit: number | null;
+  lineUsage: number | null;
+  lineLimit: number | null;
+  mock: boolean;
+  notices: string[];
+}
+
+export interface BroadcastSendResponse {
+  broadcastId: string;
+  replayed: boolean;
+  count: number;
+  /** Per status: how many recipients. */
+  statuses: Record<OutboxStatus, number>;
+  message: string;
 }

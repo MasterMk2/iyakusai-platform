@@ -2,6 +2,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { ConfigError } from '../auth.js';
 import { loadLineConfig, type LineOaConfig } from '../line/oa-config.js';
+import { loadMinutesConfig, type MinutesConfig } from '../minutes/config.js';
 import { parseKeyMaterial } from '../tasks/signing.js';
 import type { SmtpSettings } from './smtp.js';
 
@@ -50,6 +51,8 @@ export interface MailboxConfig {
   send: MailSendConfig | null;
   /** The official LINE account (line.json next to this file, 2026-10-28); absent or null when LINE is off. */
   line?: LineOaConfig | null;
+  /** Meeting minutes (minutes.json next to this file, α 2026-11-02); absent or null when they are off. */
+  minutes?: MinutesConfig | null;
 }
 
 /**
@@ -229,7 +232,7 @@ export function parseMailboxConfig(env: NodeJS.ProcessEnv, discordMode: boolean)
   const key = readKey((raw as Record<string, unknown> | null)?.ingestKeyFile);
   const send = (raw as Record<string, unknown> | null)?.send;
   const password = send && typeof send === 'object' ? readPassword((send as Record<string, unknown>).smtpPasswordFile) : null;
-  return { ...validateMailboxConfig(raw, resolve(dir), key, password), line: lineOrOff(file, resolve(dir)) };
+  return { ...validateMailboxConfig(raw, resolve(dir), key, password), line: lineOrOff(file, resolve(dir)), minutes: minutesOrOff(file, resolve(dir)) };
 }
 
 /** A line.json that cannot be used turns off LINE only: the mailbox starts as before (the message names no secret). */
@@ -239,6 +242,17 @@ function lineOrOff(file: string, dir: string): LineOaConfig | null {
   } catch (err) {
     if (!(err instanceof ConfigError)) throw err;
     console.error(`公式LINE は無効のまま起動しました: ${err.message}`);
+    return null;
+  }
+}
+
+/** A minutes.json that cannot be used turns off the minutes only (the message names no secret). */
+function minutesOrOff(file: string, dir: string): MinutesConfig | null {
+  try {
+    return loadMinutesConfig(file, dir);
+  } catch (err) {
+    if (!(err instanceof ConfigError)) throw err;
+    console.error(`議事録は無効のまま起動しました: ${err.message}`);
     return null;
   }
 }

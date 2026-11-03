@@ -1,5 +1,6 @@
 import { departmentsOfLabel, TEMPORARY_STAFF_DEPARTMENT, type MailAccessResponse } from '../../shared/mailbox.js';
 import { DomainError, type User } from '../domain/types.js';
+import { historyArchiveId } from './history.js';
 import { sha256 } from './normalize.js';
 import type { LineOaConfig } from './oa-config.js';
 import { LINE_SCHEMA_VERSION, LINE_STATE_KIND, nextLineId, type LineAccount, type LineState } from './types.js';
@@ -48,7 +49,14 @@ export function committeeLineState(stored: LineState | null, cfg: LineOaConfig):
       };
   state.committee = true;
   state.departmentGrants ??= [];
-  state.accounts = [account, ...state.accounts.filter((a) => a.id !== account.id)];
+  // The official account's history rows without a user ID (2026-11-02): read-only, never a send target.
+  const archive: LineAccount | null = cfg.history
+    ? { id: historyArchiveId(cfg.account.id), name: `${cfg.account.name}（旧履歴）`, kind: 'legacy_archive', destination: null, outbound: 'disabled' }
+    : null;
+  const kept = state.accounts.filter((a) => a.id !== account.id && a.id !== archive?.id);
+  // An archive that already holds conversations stays (read-only) when history is turned off again.
+  const oldArchive = archive ? null : state.accounts.find((a) => a.id === historyArchiveId(cfg.account.id));
+  state.accounts = [account, ...(archive ? [archive] : []), ...kept.filter((a) => a !== oldArchive || state.conversations.some((c) => c.accountId === a.id))];
   return state;
 }
 

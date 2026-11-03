@@ -1,0 +1,27 @@
+# 議事録の処理役・文字起こし（α 2026-11-02）。本番ホストの利用者の systemd（~/.config/systemd/user/）に置く。
+#   systemctl --user daemon-reload && systemctl --user enable --now iyakusai-minutes-transcribe
+# 本番ホストには python3-venv も pip も無いので、ホストには何も入れず、python:3.12-slim の使い捨てコンテナで動かす。
+# faster-whisper は ~/iyakusai-minutes-worker/pylib に、モデルは models/ に置く（README の手順 2）。
+# CPU を長く使うので、コンテナの CPU を 10 コア分・メモリを 6GB に抑え、優先度を最も低くし、同時に 1 件だけ処理する。
+# 測定では large-v3 の最大メモリが約 4.3GB（11 分の音声）。音声は全体を読み込むので、長い会議ほど少し増える。
+[Unit]
+Description=iyakusai minutes worker (transcription)
+After=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/iyakusai-minutes-worker/worker.env
+ExecStartPre=-/usr/local/bin/docker rm -f iyakusai-minutes-transcribe
+ExecStart=/usr/local/bin/docker run --rm --name iyakusai-minutes-transcribe \
+  --cpus 10 --memory 6g --user %U:%G \
+  -v %h/iyakusai-minutes-worker:/w -w /w \
+  -e HOME=/w -e HF_HOME=/w/models -e PYTHONPATH=/w/pylib -e PYTHONUNBUFFERED=1 \
+  -e MINUTES_STAGES=transcribe -e MINUTES_KEY_FILE=/w/minutes-worker.key \
+  -e MINUTES_APP_URL -e MINUTES_POLL_SEC -e WHISPER_MODEL -e WHISPER_DEVICE -e WHISPER_THREADS \
+  python:3.12-slim nice -n 19 python /w/minutes_worker.py
+ExecStop=/usr/local/bin/docker stop -t 30 iyakusai-minutes-transcribe
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=default.target

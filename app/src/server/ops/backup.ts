@@ -128,6 +128,31 @@ async function main(): Promise<void> {
     manifest.files['mailbox/contacts.sqlite3'] = { bytes: readFileSync(dest).length, sha256: sha256(readFileSync(dest)) };
   }
 
+  // Meeting minutes (α 2026-11-02): minutes.sqlite3 next to mail.sqlite3. The recordings (minutes-audio/) are
+  // not backed up: they are deleted a fixed number of days after confirmation.
+  const minutesDb = path.join(data, 'mailbox', 'minutes.sqlite3');
+  if (existsSync(minutesDb)) {
+    const dest = path.join(target, 'mailbox', 'minutes.sqlite3');
+    mkdirSync(path.dirname(dest), { recursive: true, mode: 0o700 });
+    const source = new DatabaseSync(minutesDb, { readOnly: true });
+    try {
+      await backup(source, dest);
+    } finally {
+      source.close();
+    }
+    const copy = new DatabaseSync(dest, { readOnly: true });
+    try {
+      const check = copy.prepare('PRAGMA integrity_check').get() as { integrity_check: string };
+      if (check.integrity_check !== 'ok') throw new Error('議事録の複製の整合性を確認できませんでした。');
+      for (const table of ['meetings', 'meeting_history']) {
+        manifest.counts[`minutes.${table}`] = Number((copy.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n);
+      }
+    } finally {
+      copy.close();
+    }
+    manifest.files['mailbox/minutes.sqlite3'] = { bytes: readFileSync(dest).length, sha256: sha256(readFileSync(dest)) };
+  }
+
   writeFileSync(path.join(target, 'manifest.json'), `${JSON.stringify(manifest, null, 1)}\n`, { mode: 0o600, flag: 'wx' });
   console.log(`バックアップを作りました: ${path.basename(target)}（ファイル ${Object.keys(manifest.files).length} 件）`);
 }
