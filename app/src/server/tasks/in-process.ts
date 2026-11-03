@@ -86,7 +86,8 @@ export class InProcessTaskBackend implements TaskBackend {
         const tasks = await this.service.listTasks(actor, workspace.id);
         groups.push({ workspaceId: workspace.id, name: workspace.name, tasks });
       }
-      return summarizeTaskGroups(groups, new Date().toISOString());
+      // The viewer's own tasks (自分の持ち) use the same Task user ID the tasks carry as assigneeId.
+      return summarizeTaskGroups(groups, new Date().toISOString(), actor);
     });
   }
 

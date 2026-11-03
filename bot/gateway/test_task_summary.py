@@ -64,6 +64,39 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual((s["deadlines"]["today"],s["deadlines"]["tomorrow"]),(1,1))
 
 
+class MineSummary(unittest.TestCase):
+    """自分の持ち（mine）: 主担当か副担当になっている未完了のタスクだけを、同じ 1 回の読み取りから数える。"""
+    ME = 1000000000000000002
+    OTHER = 1000000000000000003
+    def setUp(self):
+        self.store = types.SimpleNamespace(list_tasks=Mock(return_value=[]))
+        self.gateway = api.SqliteGateway(types.SimpleNamespace(DEPARTMENTS=DEPTS), self.store)
+        self.context = types.SimpleNamespace(authorize=Mock(), scope=Mock(return_value="synthetic-scope"), actor_id=f"discord-{self.ME}")
+    def held(self, number, assignee=None, helpers=(), deadline=None, status="todo"):
+        return types.SimpleNamespace(task=types.SimpleNamespace(number=number, deadline=deadline, tags=("kikaku",), status=status, assignee_id=assignee, helpers=list(helpers)))
+    def test_counts_open_tasks_I_lead_or_help_once_each(self):
+        self.store.list_tasks.return_value = [
+            self.held(1, self.ME, deadline="2026-10-13"),
+            self.held(2, self.OTHER, [self.ME], "2026-10-14", "in_progress"),
+            self.held(3, self.ME, deadline="2026-10-20", status="blocked"),
+            self.held(4, self.ME, status="done"),
+            self.held(5, self.OTHER),
+            self.held(6),
+        ]
+        s = self.gateway.summary(self.context, NOW)
+        self.assertEqual(s["mine"], {"remaining": 3, "lead": 2, "helper": 1, "overdue": 1, "today": 1})
+        self.assertEqual(s["total"], 5)
+        self.context.authorize.assert_called_once_with(None, "viewer")
+        self.store.list_tasks.assert_called_once_with("synthetic-scope")
+    def test_nothing_held_is_a_real_zero(self):
+        self.store.list_tasks.return_value = [self.held(1, self.OTHER)]
+        self.assertEqual(self.gateway.summary(self.context, NOW)["mine"], {"remaining": 0, "lead": 0, "helper": 0, "overdue": 0, "today": 0})
+    def test_no_actor_leaves_mine_out(self):
+        context = types.SimpleNamespace(authorize=Mock(), scope=Mock(return_value="synthetic-scope"))
+        self.store.list_tasks.return_value = [self.held(1, self.ME)]
+        self.assertNotIn("mine", self.gateway.summary(context, NOW))
+
+
 class SummaryLivePermissions(unittest.TestCase):
     def test_one_authorization_uses_two_discord_reads_regardless_of_task_count(self):
         guild, actor, bot = ('1000000000000000001','1000000000000000002','1000000000000000003')

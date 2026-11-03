@@ -6,6 +6,18 @@ export const TASK_DEADLINE_LABELS = {
   upcoming: '2〜7日後', later: '8日後以降', none: '期限なし',
 } as const;
 export type TaskDeadlineBucket = keyof typeof TASK_DEADLINE_LABELS;
+/**
+ * The viewer's own open tasks: as main assignee or as a helper (副担当). Each task counts once.
+ * Absent from a Bot-host Task API from before 2026-11-03, so the home card then leaves the block out.
+ */
+export interface TaskMineSummary {
+  remaining: number;
+  lead: number;
+  helper: number;
+  overdue: number;
+  today: number;
+}
+
 export interface TaskSummaryResponse {
   today: string;
   generatedAt: string;
@@ -13,10 +25,16 @@ export interface TaskSummaryResponse {
   deadlines: Record<TaskDeadlineBucket, number>;
   departments: { workspaceId: string; name: string; parentId: string | null; remaining: number; overdue: number; today: number }[];
   byDate: { deadline: string; remaining: number }[];
+  mine?: TaskMineSummary;
 }
 
-/** In-process/demo backend only. The production Bot API aggregates in one authorized read. */
-export function summarizeTaskGroups(groups: { workspaceId: string; name: string; tasks: Pick<TaskView, 'id' | 'deadline' | 'status'>[] }[], now: string): TaskSummaryResponse {
+type SummaryTask = Pick<TaskView, 'id' | 'deadline' | 'status'> & Partial<Pick<TaskView, 'assigneeId' | 'helperIds'>>;
+
+/**
+ * In-process/demo backend only. The production Bot API aggregates in one authorized read.
+ * With `me` (the viewer's Task user ID) the response also counts the viewer's own open tasks.
+ */
+export function summarizeTaskGroups(groups: { workspaceId: string; name: string; tasks: SummaryTask[] }[], now: string, me?: string): TaskSummaryResponse {
   const today = todayInTimeZone(new Date(now));
   const tomorrow = addDays(today, 1), weekEnd = addDays(today, 7);
   const unique = new Map(groups.flatMap(g => g.tasks).filter(t => t.status !== 'done').map(t => [t.id, t]));
@@ -28,7 +46,7 @@ export function summarizeTaskGroups(groups: { workspaceId: string; name: string;
     deadlines[bucket]++;
     if (d !== null) dates.set(d, (dates.get(d) ?? 0) + 1);
   }
-  return {
+  const response: TaskSummaryResponse = {
     today, generatedAt: now, total: unique.size, deadlines,
     departments: groups.map(g => {
       const tasks = [...new Map(g.tasks.filter(t => t.status !== 'done').map(t => [t.id, t])).values()];
@@ -38,4 +56,14 @@ export function summarizeTaskGroups(groups: { workspaceId: string; name: string;
     }),
     byDate: [...dates].sort(([a], [b]) => a.localeCompare(b)).map(([deadline, remaining]) => ({ deadline, remaining })),
   };
+  if (me !== undefined) {
+    const held = [...unique.values()].filter(t => t.assigneeId === me || (t.helperIds ?? []).includes(me));
+    const lead = held.filter(t => t.assigneeId === me).length;
+    response.mine = {
+      remaining: held.length, lead, helper: held.length - lead,
+      overdue: held.filter(t => t.deadline !== null && t.deadline < today).length,
+      today: held.filter(t => t.deadline === today).length,
+    };
+  }
+  return response;
 }
