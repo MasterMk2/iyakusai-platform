@@ -1,12 +1,13 @@
-import { LIMITS, STATUS_LABELS, type AssigneeCandidate, type AttachmentView, type HandlingStatus, type LabelFacet, type MailboxSummary, type NoteView, type ReceiptView, type ThreadDetailResponse, type ThreadListResponse, type ThreadStatusResponse, type TriageView } from '../../shared/api.js';
+import { LIMITS, STATUS_LABELS, type AssigneeCandidate, type AttachmentView, type HandlingStatus, type LabelFacet, type MailboxSummary, type NoteView, type ReceiptImagesView, type ReceiptView, type ThreadDetailResponse, type ThreadListResponse, type ThreadStatusResponse, type TriageView } from '../../shared/api.js';
 import { departmentsOfLabel, TEMPORARY_STAFF_DEPARTMENT, type MailAccessResponse } from '../../shared/mailbox.js';
 import { sanitizeMailHtml } from '../domain/sanitize.js';
 import { normalizeLabels } from '../domain/triage.js';
 import { DomainError, notFound, type User } from '../domain/types.js';
 import type { CommitteeAddresses } from './addresses.js';
 import type { MailboxDefinition } from './config.js';
+import { contentIdOf, eachLimited, imageSources, MAIL_IMAGE_MAX_BYTES, MAIL_IMAGES_TOTAL_BYTES, MAIL_REMOTE_IMAGES_MAX, remoteImageUrl, sniffMailImage, type RemoteImageFetch } from './images.js';
 import { SIGN_IN_MAIL_SUBJECT, SIGN_IN_MAIL_TEXT } from './restricted.js';
-import { normalizeForSearch, type ListFilter, type MailboxStore, type MessageRow } from './store.js';
+import { normalizeForSearch, type AttachmentRow, type ListFilter, type MailboxStore, type MessageRow } from './store.js';
 
 // What the committee mailbox shows. Every signed-in committee member reads every configured mailbox
 // (requirement 3-3). Members change status, assignees and labels; notes need a mailbox edit grant, given to
@@ -192,11 +193,75 @@ export class MailboxService {
       hasHtml: row.html !== null && !hidden,
       sanitizedHtml: sanitized?.html ?? null,
       blockedRemoteResources: sanitized?.blockedRemoteResources ?? 0,
+      ...(sanitized ? this.imageCounts(row.id, row.html!) : {}),
       attachments,
       triage: this.triageView(row),
       notes,
       history: this.store.history(row.id).map((h) => ({ id: String(h.id), at: h.at, actorName: this.name(h.actor_id), action: h.action, from: h.from_value, to: h.to_value })),
     };
+  }
+
+  private attachmentsByContentId(id: string): Map<string, AttachmentRow> {
+    const out = new Map<string, AttachmentRow>();
+    for (const a of this.store.attachments(id)) {
+      const cid = a.content_id ? contentIdOf(`cid:${a.content_id}`) : null;
+      if (cid && !out.has(cid)) out.set(cid, a);
+    }
+    return out;
+  }
+
+  private imageCounts(id: string, html: string): { inlineImages: number; remoteImages: number } {
+    const sources = [...new Set(imageSources(html))];
+    const byCid = this.attachmentsByContentId(id);
+    return {
+      inlineImages: sources.filter((src) => byCid.has(contentIdOf(src) ?? '')).length,
+      remoteImages: sources.filter((src) => remoteImageUrl(src) !== null).length,
+    };
+  }
+
+  /**
+   * The HTML with its images as data: URIs: those the mail carries (cid:) always, those on other servers only with
+   * `remote` (fetched by `fetchRemote`, public addresses only). Types are read from the bytes; too large, unreadable
+   * or anything else stays blocked and is counted as failed.
+   */
+  async receiptImages(user: User, id: string, remote: boolean, fetchRemote: RemoteImageFetch): Promise<ReceiptImagesView> {
+    const { row } = this.visible(id);
+    if (row.html === null || this.hidden(user, row)) throw notFound();
+    const sources = [...new Set(imageSources(row.html))];
+    const byCid = this.attachmentsByContentId(row.id);
+    const images = new Map<string, string>();
+    let total = 0;
+    let failed = 0;
+    const keep = (src: string, data: Buffer | null) => {
+      const type = data && data.length <= MAIL_IMAGE_MAX_BYTES ? sniffMailImage(data) : null;
+      if (!data || !type || total + data.length > MAIL_IMAGES_TOTAL_BYTES) {
+        failed += 1;
+        return;
+      }
+      total += data.length;
+      images.set(src, `data:${type};base64,${data.toString('base64')}`);
+    };
+    for (const src of sources) {
+      const cid = contentIdOf(src);
+      if (cid === null) continue;
+      const attachment = byCid.get(cid);
+      let data: Buffer | null;
+      try {
+        data = attachment && attachment.size <= MAIL_IMAGE_MAX_BYTES ? this.store.readAttachment(attachment) : null;
+      } catch {
+        data = null;
+      }
+      keep(src, data);
+    }
+    if (remote) {
+      const remotes = sources.flatMap((src) => {
+        const url = remoteImageUrl(src);
+        return url ? [{ src, url }] : [];
+      });
+      failed += Math.max(0, remotes.length - MAIL_REMOTE_IMAGES_MAX);
+      await eachLimited(remotes.slice(0, MAIL_REMOTE_IMAGES_MAX), 6, async ({ src, url }) => keep(src, await fetchRemote(url)));
+    }
+    return { sanitizedHtml: sanitizeMailHtml(row.html, images).html, shown: images.size, failed, remote };
   }
 
   getReceipt(user: User, id: string): ReceiptView {

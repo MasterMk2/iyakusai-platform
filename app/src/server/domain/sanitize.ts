@@ -49,22 +49,30 @@ function countResourceCarriers(html: string): number {
   return count;
 }
 
-export function sanitizeMailHtml(html: string): SanitizedHtml {
+const SIZE = /^\d{1,4}$/;
+
+/**
+ * `images` maps an <img> src (decoded, trimmed) to a data: URI the server built from bytes it checked
+ * (mailbox/images.ts); every other image stays blocked.
+ */
+export function sanitizeMailHtml(html: string, images?: ReadonlyMap<string, string>): SanitizedHtml {
   const clean = sanitizeHtml(html, {
     allowedTags: ALLOWED_TAGS,
     allowedAttributes: {
       td: ['colspan', 'rowspan'],
       th: ['colspan', 'rowspan'],
       span: ['class', 'data-href'],
+      img: ['src', 'alt', 'width', 'height'],
     },
     allowedClasses: { span: ['mail-link', 'blocked-image'] },
     allowedSchemes: [],
-    allowedSchemesAppliedToAttributes: [],
+    allowedSchemesByTag: { img: ['data'] },
+    allowedSchemesAppliedToAttributes: ['src'],
     allowProtocolRelative: false,
     allowedStyles: {},
     disallowedTagsMode: 'discard',
     nonTextTags: ['script', 'style', 'textarea', 'option', 'noscript', 'title', 'template', 'head', 'iframe', 'object', 'svg', 'math'],
-    selfClosing: ['br', 'hr'],
+    selfClosing: ['br', 'hr', 'img'],
     transformTags: {
       a: (_tagName, attribs) => {
         const href = (attribs.href ?? '').trim();
@@ -76,7 +84,12 @@ export function sanitizeMailHtml(html: string): SanitizedHtml {
           },
         };
       },
-      img: () => ({ tagName: 'span', attribs: { class: 'blocked-image' } }),
+      img: (_tagName, attribs): sanitizeHtml.Tag => {
+        const uri = images?.get((attribs.src ?? '').trim());
+        if (!uri) return { tagName: 'span', attribs: { class: 'blocked-image' } };
+        const size: sanitizeHtml.Attributes = Object.fromEntries(['width', 'height'].flatMap((k) => (SIZE.test(attribs[k] ?? '') ? [[k, attribs[k]!]] : [])));
+        return { tagName: 'img', attribs: { src: uri, alt: attribs.alt ?? '', ...size } };
+      },
     },
   });
   return { html: clean, blockedRemoteResources: countResourceCarriers(html) };

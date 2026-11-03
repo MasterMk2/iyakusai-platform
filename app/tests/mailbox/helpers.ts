@@ -51,7 +51,8 @@ export interface RawMailOptions {
   references?: string[];
   listId?: string;
   deliveredTo?: string;
-  attachments?: { filename: string; contentType: string; content: Buffer }[];
+  /** With contentId: an inline part (Content-ID) the HTML can show as src="cid:…". */
+  attachments?: { filename: string; contentType: string; content: Buffer; contentId?: string }[];
 }
 
 /** Builds an RFC 5322 message like Gmail's raw content. */
@@ -73,14 +74,15 @@ export function rawMail(o: RawMailOptions = {}): Buffer {
   const textPart = o.textJis
     ? { type: 'text/plain; charset=ISO-2022-JP', encoding: '7bit', body: Buffer.from(o.textJis, 'latin1') }
     : { type: 'text/plain; charset=UTF-8', encoding: 'base64', body: Buffer.from(Buffer.from(o.text ?? '合成テストの本文です。', 'utf8').toString('base64'), 'latin1') };
-  const parts: { type: string; encoding: string; body: Buffer; disposition?: string }[] = [textPart];
+  const parts: { type: string; encoding: string; body: Buffer; disposition?: string; contentId?: string }[] = [textPart];
   if (o.html) parts.push({ type: 'text/html; charset=UTF-8', encoding: 'base64', body: Buffer.from(Buffer.from(o.html, 'utf8').toString('base64'), 'latin1') });
   for (const a of o.attachments ?? []) {
     parts.push({
       type: `${a.contentType}; name="=?UTF-8?B?${Buffer.from(a.filename).toString('base64')}?="`,
       encoding: 'base64',
       body: Buffer.from(a.content.toString('base64').replace(/.{76}/g, '$&\r\n'), 'latin1'),
-      disposition: `attachment; filename="=?UTF-8?B?${Buffer.from(a.filename).toString('base64')}?="`,
+      disposition: `${a.contentId ? 'inline' : 'attachment'}; filename="=?UTF-8?B?${Buffer.from(a.filename).toString('base64')}?="`,
+      ...(a.contentId ? { contentId: a.contentId } : {}),
     });
   }
   const crlf = Buffer.from('\r\n');
@@ -95,6 +97,7 @@ export function rawMail(o: RawMailOptions = {}): Buffer {
   for (const part of parts) {
     const head = [`--${boundary}`, `Content-Type: ${part.type}`, `Content-Transfer-Encoding: ${part.encoding}`];
     if (part.disposition) head.push(`Content-Disposition: ${part.disposition}`);
+    if (part.contentId) head.push(`Content-ID: <${part.contentId}>`);
     chunks.push(Buffer.from(head.join('\r\n')), crlf, crlf, part.body, crlf);
   }
   chunks.push(Buffer.from(`--${boundary}--`), crlf);

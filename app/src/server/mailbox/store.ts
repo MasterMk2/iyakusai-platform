@@ -40,6 +40,8 @@ export interface AttachmentRow {
   idx: number;
   filename: string;
   content_type: string;
+  /** Content-ID as the mail wrote it (usually in angle brackets): the HTML shows it with src="cid:…". */
+  content_id: string | null;
   size: number;
   sha256: string;
 }
@@ -426,7 +428,7 @@ export class MailboxStore {
   }
 
   attachments(messageId: string): AttachmentRow[] {
-    return this.db.prepare('SELECT message_id, idx, filename, content_type, size, sha256 FROM attachments WHERE message_id=? ORDER BY idx').all(messageId) as unknown as AttachmentRow[];
+    return this.db.prepare('SELECT message_id, idx, filename, content_type, content_id, size, sha256 FROM attachments WHERE message_id=? ORDER BY idx').all(messageId) as unknown as AttachmentRow[];
   }
 
   notes(messageId: string): NoteRow[] {

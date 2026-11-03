@@ -97,9 +97,16 @@ Vitest 5、Playwright 1.64、ESLint 10。すべて無償の OSS で、ローカ�
 1. サーバー：sanitize-html（htmlparser2）で許可リスト方式に無害化。スクリプト、イベント属性、style、
    フォーム、iframe/object/embed/svg、meta/base/link を除去。`<a>` は `href` を持たない
    `span.mail-link`（URL は `data-href`）、`<img>` は `span.blocked-image` に置換。外部リソースを指す要素数を数える。
+   委員会のメールでは画像だけ例外（2026-11-04、`mailbox/images.ts`）：`GET /api/receipts/:id/images` が、メールに
+   含まれる画像（`src="cid:…"` に当たる添付）を、`?remote=1` のときは外部の http(s) 画像も、先頭のバイトで
+   JPEG/PNG/GIF/WebP と確かめて `data:` URI の `<img>` にした HTML を返す（1 枚 5MB・合計 15MB・外部は 30 枚まで。
+   SVG は不可）。外部の画像はサーバーが取得する（ブラウザは送り主のサーバーに触れない。Cookie・Referer なし・
+   10 秒・転送 3 回まで・ポートは既定のみ）。接続先は接続時の名前解決で公開アドレスだけに限る（ループバック・
+   LAN・Docker の網・リンクローカル・CGNAT・射影 IPv6 などは拒否）。画面はメールに含まれる画像を自動で、外部の
+   画像は「外部の画像を表示」を押したときだけ出す（送り主に開封が伝わりうる旨を表示）。
 2. ブラウザ：`sandbox=""` の iframe（スクリプト・フォーム・ポップアップ・上位遷移・同一オリジンを全て不許可）に
    `srcdoc` で表示。
-3. iframe 内 CSP：`default-src 'none'; img-src 'none'; form-action 'none'; base-uri 'none'` 等。
+3. iframe 内 CSP：`default-src 'none'; img-src data:; form-action 'none'; base-uri 'none'` 等（画像はサーバーが作った `data:` だけ）。
 4. アプリ全体の CSP（`srcdoc` に継承）、`Referrer-Policy: no-referrer`、`X-Content-Type-Options: nosniff`。
 5. テキスト表示：React のテキストとして描画（HTML として解釈しない）。
 
