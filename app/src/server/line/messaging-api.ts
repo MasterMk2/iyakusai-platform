@@ -130,6 +130,20 @@ export class MessagingApiConnector implements LinePushConnector {
     return typeof limit.value === 'number' ? { limit: limit.value, used: usage.totalUsage } : null;
   }
 
+  // https://developers.line.biz/en/reference/messaging-api/#get-profile : 200 for friends and for users who sent a
+  // message (not blocked); 404 for users who blocked the account, deleted their account or never were in contact.
+  async profileReachable(userId: string): Promise<boolean | null> {
+    if (!/^U[0-9a-f]{32}$/.test(userId)) return null;
+    try {
+      const res = await this.request(`/v2/bot/profile/${userId}`);
+      await res.body?.cancel();
+      if (res.ok) return true;
+      return res.status === 404 ? false : null;
+    } catch {
+      return null;
+    }
+  }
+
   async memberCount(target: { type: 'group' | 'room'; id: string }): Promise<number | null> {
     if (!/^[CR][0-9a-f]{32}$/.test(target.id)) return null;
     const body = await this.getJson(`/v2/bot/${target.type}/${target.id}/members/count`);

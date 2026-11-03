@@ -60,9 +60,13 @@ export function targetFingerprint(account: LineAccount, conv: LineConversation):
 }
 
 /** `countPending`: only the group's member count is unknown, and the preview reads it from LINE (live push). */
-export type TargetCheck = { ok: true; billableRecipients: number } | { ok: false; reason: string; countPending?: true };
+export type TargetCheck = { ok: true; billableRecipients: number; unconfirmed?: true } | { ok: false; reason: string; countPending?: true };
 
-/** Push eligibility from stored, verified observations only. Unknown means no. */
+/**
+ * Push eligibility from stored observations. A 1:1 user who is neither a known friend nor a recent sender may still be
+ * a friend who added the account before the receiver ran (2026-11-04: most of them): sending is allowed with a notice
+ * (`unconfirmed`), unless LINE said the user blocked the account or left (unfollow event, or no profile).
+ */
 export function evaluateTarget(state: LineState, conv: LineConversation, nowMs: number): TargetCheck {
   const account = accountOf(state, conv);
   if (conv.target.kind === 'legacy_chat') {
@@ -74,9 +78,14 @@ export function evaluateTarget(state: LineState, conv: LineConversation, nowMs: 
   const e = conv.eligibility;
   if (conv.target.type === 'user') {
     if (e.relation === 'unfollowed') return { ok: false, reason: 'この相手は友だち解除（ブロックを含む）しているため送信できません。' };
-    if (e.relation === 'friend') return { ok: true, billableRecipients: 1 };
     if (e.lastUserMessageAt && nowMs - Date.parse(e.lastUserMessageAt) <= RECENT_DM_WINDOW_MS) return { ok: true, billableRecipients: 1 };
-    return { ok: false, reason: '友だち登録が確認できず、最後の 1:1 メッセージから 7 日を過ぎているため送信できません。' };
+    // A newer friend event or message outweighs an older "no profile".
+    const newer = [e.relationAt, e.lastUserMessageAt].some((at) => at !== null && e.profile !== undefined && at > e.profile.at);
+    if (e.profile && !e.profile.reachable && !newer) {
+      return { ok: false, reason: 'LINE がこの相手のプロフィールを返さなかったため送信できません（ブロック・アカウント削除など。送っても届きません）。' };
+    }
+    if (e.relation === 'friend') return { ok: true, billableRecipients: 1 };
+    return { ok: true, billableRecipients: 1, unconfirmed: true };
   }
   if (account.allowGroups === false) return { ok: false, reason: 'グループ・トークルームへの送信は設定で止めています（閲覧のみ）。' };
   if (e.relation === 'left') return { ok: false, reason: 'このグループ・トークルームからは退出済みのため送信できません。' };
@@ -137,6 +146,13 @@ export function imageOf(state: LineState, user: User, accountId: string, imageId
 }
 
 /** A member count read from LINE: the account is in the group or room now (2026-10-28). */
+/** What LINE said about a 1:1 user's profile just before a preview (see Eligibility.profile). */
+export function observeProfile(state: LineState, conversationId: string, reachable: boolean, now: string): void {
+  const conv = state.conversations.find((c) => c.id === conversationId);
+  if (!conv || conv.target.kind !== 'messaging_api' || conv.target.type !== 'user') return;
+  conv.eligibility.profile = { reachable, at: now };
+}
+
 export function observeMemberCount(state: LineState, conversationId: string, count: number, now: string): void {
   const conv = state.conversations.find((c) => c.id === conversationId);
   if (!conv || conv.target.kind !== 'messaging_api' || conv.target.type === 'user') return;
@@ -300,6 +316,9 @@ export function previewReply(
           : 'LINE 側の今月の残り通数は読み取れませんでした。',
       ];
   if (image) notices.push('文字のあとに画像を 1 枚送ります（1 回の送信なので通数は 1 人 1 通です）。画像は 7 日間、推測できない URL で公開されます。');
+  if (check.unconfirmed) {
+    notices.unshift('この相手が友だちかどうかは確かめられません（友だち追加がこのアプリの受け取りより前で、最後の 1:1 メッセージから 7 日を過ぎています）。友だちでなければ、LINE は「受付済み」と返しても相手には届きません。');
+  }
   if (conv.target.kind === 'messaging_api' && conv.target.type !== 'user') {
     notices.unshift(`この返信は${TYPE_LABEL[conv.target.type]}の参加者全員（確認済みの人数: ${check.billableRecipients} 人）に届き、人数分の通数として数えられます。個人宛てには送られません。`);
   }

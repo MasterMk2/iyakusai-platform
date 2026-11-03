@@ -154,6 +154,15 @@ describe('the Messaging API adapter, images and multicast', () => {
     expect(await c.multicast({ retryKey: 'k3', accountId: 'oa', to: Array.from({ length: 501 }, () => USER_A), text: 'x' })).toMatchObject({ kind: 'rejected' });
     expect(seen).toHaveLength(2);
   });
+
+  it("asks for a user's profile: 200 reachable, 404 not, anything else unknown", async () => {
+    const at = (status: number) => new MessagingApiConnector(ACCESS, 'https://api.example.invalid', async () => new Response('{}', { status }));
+    expect(await at(200).profileReachable(USER_A)).toBe(true);
+    expect(await at(404).profileReachable(USER_A)).toBe(false);
+    expect(await at(500).profileReachable(USER_A)).toBeNull();
+    expect(await at(200).profileReachable('C' + 'a'.repeat(32))).toBeNull();
+    expect(await new MessagingApiConnector(ACCESS, 'https://api.example.invalid', () => Promise.reject(new Error('x'))).profileReachable(USER_A)).toBeNull();
+  });
 });
 
 describe('the history file (contract A)', () => {
@@ -267,6 +276,9 @@ let records: FeedRecord[];
 let pushes: { to: string; messages: { type: string; text?: string; originalContentUrl?: string; previewImageUrl?: string }[]; retryKey: string | null }[];
 let multicasts: { to: string[]; messages: { type: string; text?: string; originalContentUrl?: string }[]; retryKey: string | null }[];
 let lineUsed: number;
+/** LINE's answer to a profile request, per user (default 200), and who was asked. */
+let profiles: Record<string, number>;
+let profileAsked: string[];
 
 const network: Fetch = async (input, init) => {
   const url = new URL(input);
@@ -285,6 +297,11 @@ const network: Fetch = async (input, init) => {
     const body = JSON.parse(String(init.body)) as { to: string[]; messages: never[] };
     multicasts.push({ to: body.to, messages: body.messages, retryKey: new Headers(init.headers).get('x-line-retry-key') });
     return new Response('{}', { status: 200, headers: { 'x-line-request-id': `mreq-${multicasts.length}` } });
+  }
+  if (url.pathname.startsWith('/v2/bot/profile/')) {
+    const id = url.pathname.slice('/v2/bot/profile/'.length);
+    profileAsked.push(id);
+    return new Response('{}', { status: profiles[id] ?? 200 });
   }
   if (url.pathname === '/v2/bot/message/quota') return Response.json({ type: 'limited', value: 200 });
   if (url.pathname === '/v2/bot/message/quota/consumption') return Response.json({ totalUsage: lineUsed });
@@ -335,6 +352,8 @@ beforeEach(() => {
   multicasts = [];
   lineUsed = 0;
   records = [];
+  profiles = {};
+  profileAsked = [];
 });
 afterEach(async () => {
   await app?.close();
@@ -573,6 +592,38 @@ describe('images', () => {
     const detail = (await call('GET', `/api/line/conversations/${conversationId}`, { cookie: chair.cookie })).json;
     expect(detail.reply.imagesEnabled).toBe(false);
     expect((await call('PUT', `/api/line/conversations/${conversationId}/reply/draft`, { cookie: chair.cookie, body: { body: 'x', expectedVersion: null, imageId: 'lmd_0000000000000000' } })).json.message).toMatch(/画像を送れません/);
+  });
+});
+
+describe('a user not confirmed as a friend', () => {
+  it('can be replied to with a notice; LINE is asked about the profile first, and no profile closes the reply', async () => {
+    const now = ctx.clock.now;
+    // Messaged 8 days ago and no follow event: a friend from before the receiver ran, or not.
+    records = [record(now, 8 * 86_400), record(now, 600, { user_id: USER_B, display_name: '合成 花子さん' })];
+    await build();
+    const chair = await signIn(CHAIR, '21000001');
+    await grantSend(chair, chair.id);
+    const items = await lineItems(chair.cookie, 2);
+    const old = items.find((i) => i.title === '合成 太郎さん')!.conversationId;
+    const recent = items.find((i) => i.title === '合成 花子さん')!.conversationId;
+
+    expect((await call('GET', `/api/line/conversations/${old}`, { cookie: chair.cookie })).json.reply.available).toBe(true);
+    const first = await reply(chair.cookie, old, '合成の返信');
+    expect(first.preview!.json.notices[0]).toContain('友だちかどうかは確かめられません');
+    expect(first.sent!.status).toBe(200);
+    expect(profileAsked).toEqual([USER_A]);
+    // A recent sender is not asked and gets no notice.
+    const second = await reply(chair.cookie, recent, '合成の返信');
+    expect(second.preview!.json.notices.join()).not.toContain('友だちかどうか');
+    expect(profileAsked).toEqual([USER_A]);
+
+    // LINE returns no profile (blocked or deleted): refused, and the reply closes.
+    profiles[USER_A] = 404;
+    const third = await reply(chair.cookie, old, '届かない返信');
+    expect(third.preview!.status).toBe(422);
+    expect(third.preview!.json.message).toContain('プロフィールを返さなかった');
+    expect((await call('GET', `/api/line/conversations/${old}`, { cookie: chair.cookie })).json.reply).toMatchObject({ available: false, reason: expect.stringContaining('プロフィール') });
+    expect(pushes.map((x) => x.to)).toEqual([USER_A, USER_B]);
   });
 });
 

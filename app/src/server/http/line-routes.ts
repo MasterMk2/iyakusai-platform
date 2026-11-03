@@ -14,7 +14,7 @@ import { isInboundImage, type InboundImageSource } from '../line/inbound-media.j
 import { expireMedia, MEDIA_FILE, MEDIA_PATH, mediaExpired, mediaExpiresAt, mediaOfFile, ORIGINAL_MAX_BYTES, registerMedia, checkUploader, storeUpload, type LineMediaFiles } from '../line/media.js';
 import { sha256 } from '../line/normalize.js';
 import { lineAccountSummaries, lineConversationDetail, type LinePeople } from '../line/queries.js';
-import { beginRetry, beginSend, checkLineQuota, discardDraft, observeMemberCount, previewReply, pushRequestOf, recordAttempt, saveDraft, type PreviewQuota, type SendContext } from '../line/reply.js';
+import { beginRetry, beginSend, checkLineQuota, discardDraft, evaluateTarget, observeMemberCount, observeProfile, previewReply, pushRequestOf, recordAttempt, saveDraft, type PreviewQuota, type SendContext } from '../line/reply.js';
 import { releaseLineBatches } from '../line/seed.js';
 import type { LineStore } from '../line/store.js';
 import { addLineNote, getOutbox, lineAccessMatrix, lineAssigneeCandidates, lineAuditLog, setLineGrant, updateLineTriage } from '../line/triage.js';
@@ -419,7 +419,8 @@ export function registerLineRoutes(app: FastifyInstance, ctx: LineRouteContext):
 
   /**
    * LINE's own facts just before a preview: whether the account is in the group and how many members it has (the
-   * message counts once per member), and this month's messages. Asked only for someone who may send here.
+   * message counts once per member), whether a 1:1 user not known as a friend blocked the account, and this month's
+   * messages. Asked only for someone who may send here.
    */
   async function observeBeforePreview(user: User, conversationId: string): Promise<PreviewQuota | null> {
     const conv = replyableConversation(store.current, user, conversationId);
@@ -429,6 +430,14 @@ export function registerLineRoutes(app: FastifyInstance, ctx: LineRouteContext):
     if (conv.target.kind === 'messaging_api' && conv.target.type !== 'user' && account.allowGroups !== false && connector.memberCount) {
       const count = await connector.memberCount({ type: conv.target.type, id: conv.target.id });
       if (count !== null) store.transact((s) => observeMemberCount(s, conv.id, count, clock()));
+    }
+    // A 1:1 user who is not a known friend nor a recent sender: ask LINE whether they blocked the account.
+    if (conv.target.kind === 'messaging_api' && conv.target.type === 'user' && connector.profileReachable) {
+      const check = evaluateTarget(store.current, conv, Date.parse(clock()));
+      if (check.ok && check.unconfirmed) {
+        const reachable = await connector.profileReachable(conv.target.id);
+        if (reachable !== null) store.transact((s) => observeProfile(s, conv.id, reachable, clock()));
+      }
     }
     return (await connector.quota?.()) ?? null;
   }
