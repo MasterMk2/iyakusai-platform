@@ -32,6 +32,7 @@ import { registerRentalRoutes, type RentalRuntime } from '../rental/routes.js';
 import { registerTaskRoutes, type TaskRuntime } from '../tasks/routes.js';
 import { registerAssistantRoutes, type AssistantRuntime } from '../assistant/routes.js';
 import { attachmentDisposition } from './content-disposition.js';
+import { registerCalendarRoutes, type CalendarRuntime } from '../calendar/routes.js';
 import { HttpError } from './http-error.js';
 import { registerLineRoutes, type LineRuntime } from './line-routes.js';
 import { DISCORD_LINE_PATHS } from '../line/discord.js';
@@ -62,6 +63,8 @@ export interface AppOptions {
   discord?: DiscordAuthRuntime;
   /** Discord login only: the committee mailbox (SQLite). Replaces the synthetic inbox routes. */
   mailbox?: MailboxRuntime | null;
+  /** The committee calendar (SQLite beside the mail, or the demo's). Absent: the calendar API answers 404. */
+  calendar?: CalendarRuntime | null;
   /** Discord login only: key of the Bot's read-only data source (POST /v1/bot/datasource). Absent: the route does not exist. */
   botDatasourceKey?: Buffer | null;
   /** The decision register (decisions.sqlite3). Absent: the register is off (its meta route answers enabled: false). */
@@ -433,6 +436,18 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
 
   const taskRoutes = registerTaskRoutes(app, { tasks: options.tasks ?? null, mail: store, mailCases: committeeMail?.cases ?? null, line: options.line, clock, parse, requireUser });
   registerAssistantRoutes(app, { assistant: options.assistant ?? null, mailDraftBcc: options.mailbox?.config.draftBccAddress ?? null, parse, requireUser });
+  // The committee calendar (2026-11-03): events, the yearly schedule, the home reminders, the personal iCal feed (see calendar/routes.ts).
+  registerCalendarRoutes(app, options.calendar ?? null, {
+    requireUser,
+    isTemporary: (user, request) => !!discordApi && (departmentsOfLabel(user.roleLabel).includes(TEMPORARY_STAFF_DEPARTMENT) || (request !== null && discordApi.currentSession(request)?.temporaryStaff === true)),
+    lookupUser: (userId) => (discordApi ? discordApi.lookupUser(userId) : findUser(store.current, userId)),
+    listUsers: () => (discordApi ? discordApi.listUsers() : store.current.users.filter((u) => !u.disabled)),
+    tasks: options.tasks ?? null,
+    fromTrustedProxy: (request) => (discordApi ? discordApi.fromTrustedProxy(request) : false),
+    clock,
+    parse,
+  });
+  if (options.calendar) app.addHook('onClose', async () => options.calendar!.store.close());
 
   await registerRentalRoutes(app, { rental: options.rental ?? null, requireUser, lookupUser: (userId) => (discordApi ? discordApi.lookupUser(userId) : findUser(store.current, userId)), listUsers: () => discordApi ? discordApi.listUsers() : store.current.users.filter((u) => !u.disabled) });
   // Decision register (2026-11-03): committee members only. Temporary staff and a Discord-less account are refused, reads too.

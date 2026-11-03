@@ -45,6 +45,9 @@ import type { MailboxRuntime } from './mailbox/routes.js';
 import { MailboxStore } from './mailbox/store.js';
 import { DecisionsStore } from './decisions/store.js';
 import { seedDecisionsDemo } from './decisions/seed.js';
+import { CalendarStore } from './calendar/store.js';
+import { seedCalendarDemo } from './calendar/seed.js';
+import type { CalendarRuntime } from './calendar/routes.js';
 
 // Server composition from a validated configuration (used by main.ts and by tests that exercise
 // the real production composition). Nothing here listens or installs signal handlers.
@@ -329,6 +332,19 @@ export async function composeServer(config: ServerConfig, overrides: ComposeOver
     if (decisions && config.auth.mode === 'demo') seedDecisionsDemo(decisions, initial.users.find((u) => u.canManageAccess)?.id ?? initial.users[0]?.id ?? 'system', now);
   }
 
+  // Committee calendar (2026-11-03): its own SQLite file in the mail folder (Discord login, the production backup covers it),
+  // or beside the state file in the other modes (the demos and the integrated demo, with synthetic data). A file that cannot
+  // be opened turns the calendar off only (503), never the rest of the app.
+  let calendar: CalendarRuntime | null;
+  const calendarDir = config.mailbox ? config.mailbox.dataDir : path.dirname(config.dataFile);
+  try {
+    const store = new CalendarStore(calendarDir);
+    if (config.auth.mode === 'demo') seedCalendarDemo(store, now);
+    calendar = { store, icalEnabled: config.calendar.ical };
+  } catch {
+    calendar = null;
+  }
+
   // Bot tab: the Bot host's signed assistant API, on the task API's host and key, with the same identity bridge.
   const assistant: AssistantRuntime | null =
     config.assistant.mode === 'on' && tasks
@@ -344,6 +360,7 @@ export async function composeServer(config: ServerConfig, overrides: ComposeOver
     assistant,
     rental,
     mailbox,
+    calendar,
     botDatasourceKey: config.botDatasourceKey,
     decisions,
     ...(discord ? { discord } : {}),

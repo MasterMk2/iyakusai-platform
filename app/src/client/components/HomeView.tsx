@@ -11,6 +11,7 @@ import { BotSummaryCard } from './bot/BotSummaryCard';
 import { isBotDisabled } from './bot/BotView';
 import { LoadStatus } from './LoadStatus';
 import { TaskSummaryCard } from './tasks/TaskSummaryCard';
+import { UpcomingCard } from './calendar/UpcomingCard';
 import type { InboxFilter } from './ThreadList';
 
 /** Answer of GET /api/rental/summary (src/server/rental/store.ts). */
@@ -191,6 +192,7 @@ export function HomeView({
             />
           )}
           {tasks?.enabled && <TaskSummaryCard context={tasks} loader={taskSummary} onOpenTasks={onOpenTasks} />}
+          <UpcomingCard />
         </div>
         <div className="home-side">
           {rental && <RentalCard loader={rentalSummary} />}

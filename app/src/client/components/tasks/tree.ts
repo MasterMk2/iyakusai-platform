@@ -77,12 +77,12 @@ export const treeKeys = (nodes: TreeNode[]): string[] => nodes.flatMap((n) => [n
 const VIEW_KEY = 'iyakusai.tasks.view';
 const FOLDED_KEY = 'iyakusai.tasks.treeFolded';
 
-export type ListView = 'list' | 'tree' | 'bowtie' | 'people';
+export type ListView = 'list' | 'tree' | 'bowtie' | 'people' | 'calendar';
 
 export function storedView(): ListView {
   try {
     const view = localStorage.getItem(VIEW_KEY);
-    return view === 'tree' || view === 'bowtie' || view === 'people' ? view : 'list';
+    return view === 'tree' || view === 'bowtie' || view === 'people' || view === 'calendar' ? view : 'list';
   } catch {
     return 'list';
   }

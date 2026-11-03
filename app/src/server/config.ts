@@ -6,6 +6,7 @@ import { LINK_EVIDENCE, type LinkEvidence } from './login/types.js';
 import { parseDiscordAuthConfig, type DiscordAuthConfig } from './discord-auth/config.js';
 import { parseKeyMaterial } from './tasks/signing.js';
 import { parseMailboxConfig, type MailboxConfig } from './mailbox/config.js';
+import { parseCalendarConfig, type CalendarConfig } from './calendar/config.js';
 
 const LOOPBACK = new Set(['127.0.0.1', '::1', 'localhost']);
 
@@ -94,6 +95,8 @@ export interface ServerConfig {
   line: LineConfig;
   tasks: TaskGatewayConfig;
   assistant: AssistantConfig;
+  /** The calendar's iCal subscription switch (SMM_CALENDAR_ICAL). */
+  calendar: CalendarConfig;
   rental: RentalConfig;
   account: AccountProviderConfig | null;
   /** Discord login (SMM_AUTH_MODE=discord) only: the private login configuration. */
@@ -376,10 +379,10 @@ function parseAccountProduction(env: NodeJS.ProcessEnv): Extract<AccountProvider
  */
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const base = loadBaseConfig(env);
-  return { ...base, assistant: parseAssistantConfig(env, base.tasks) };
+  return { ...base, assistant: parseAssistantConfig(env, base.tasks), calendar: parseCalendarConfig(env, parseAuthMode(env)) };
 }
 
-function loadBaseConfig(env: NodeJS.ProcessEnv): Omit<ServerConfig, 'assistant'> {
+function loadBaseConfig(env: NodeJS.ProcessEnv): Omit<ServerConfig, 'assistant' | 'calendar'> {
   const mode = parseAuthMode(env);
   const host = env.SMM_HOST ?? '127.0.0.1';
   const port = Number(env.SMM_PORT ?? '5178');

@@ -3,6 +3,7 @@ import type { MailboxSummary, SessionResponse } from '../shared/api';
 import type { LineAccountSummary } from '../shared/line';
 import type { MailSendOptions, MailStatusResponse } from '../shared/mailbox';
 import type { TaskContextResponse } from '../shared/tasks';
+import { calendarDateParam } from '../shared/calendar';
 import { api, ApiFailure } from './api';
 import { AccountBar } from './components/AccountBar';
 import { AccountLogin } from './components/AccountLogin';
@@ -48,6 +49,8 @@ export interface Route {
   taskRemaining: boolean;
   /** Tasks view opened from a home count (`focus=`): that filter is set when the list opens. */
   taskFocus: TaskFocus | null;
+  /** Tasks view opened on the calendar's day (`cal=YYYY-MM-DD`), from a deadline on the home screen. */
+  taskCalendarDate: string | null;
   /** Inbox opened from a home count (`filter=`): unhandled items or the viewer's own. */
   inboxFilter: InboxFilter | null;
   /** Committee mailbox: writing new mail (`compose=1`) instead of a thread. */
@@ -78,6 +81,7 @@ const EMPTY_ROUTE: Route = {
   taskNew: false,
   taskRemaining: false,
   taskFocus: null,
+  taskCalendarDate: null,
   inboxFilter: null,
   mailCompose: false,
   lineBroadcast: false,
@@ -116,7 +120,7 @@ export function parseHash(hash: string): Route {
   }
   if (parts[0] === 'bot') return { ...EMPTY_ROUTE, view: 'bot', botSection: parseBotSection(parts[1]), botJobId: params.get('job') };
   if (parts[0] === 'tasks') {
-    return { ...EMPTY_ROUTE, view: 'tasks', taskWorkspaceId: params.get('ws'), taskId: params.get('task'), taskNew: params.get('new') === '1', taskRemaining: params.get('remaining') === '1', taskFocus: parseFocus(params.get('focus')) };
+    return { ...EMPTY_ROUTE, view: 'tasks', taskWorkspaceId: params.get('ws'), taskId: params.get('task'), taskNew: params.get('new') === '1', taskRemaining: params.get('remaining') === '1', taskFocus: parseFocus(params.get('focus')), taskCalendarDate: calendarDateParam(params.get('cal')) };
   }
   const mailCompose = !threadId && !conversationId && params.get('compose') === '1';
   if (parts[0] === 'mailbox' && parts[1]) return { ...EMPTY_ROUTE, mailboxId: decodeURIComponent(parts[1]), threadId, inboxFilter, mailCompose };
@@ -494,7 +498,7 @@ export function App() {
         {topNav}
         <div className={`layout tasks-layout ${route.taskId || route.taskNew ? 'has-detail' : ''}`}>
           <TasksView
-            route={{ workspaceId: route.taskWorkspaceId, taskId: route.taskId, creating: route.taskNew, remaining: route.taskRemaining, focus: route.taskFocus }}
+            route={{ workspaceId: route.taskWorkspaceId, taskId: route.taskId, creating: route.taskNew, remaining: route.taskRemaining, focus: route.taskFocus, calendarDate: route.taskCalendarDate }}
             refresh={refresh}
             onNavigate={(r) => navigate({ ...EMPTY_ROUTE, view: 'tasks', taskWorkspaceId: r.workspaceId, taskId: r.taskId, taskNew: r.creating, taskRemaining: route.taskRemaining, taskFocus: route.taskFocus })}
           />
