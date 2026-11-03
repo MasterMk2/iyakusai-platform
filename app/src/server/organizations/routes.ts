@@ -14,9 +14,11 @@ import {
   ORG_KIND_LABELS,
   ORG_KINDS,
   ORG_LIMITS,
+  ORG_PAYMENT_ACTIONS,
   ORG_STAGES,
   OrgValidationError,
   orgNameKey,
+  orgPaymentText,
   parseYenText,
   renderMail,
   statusAllowed,
@@ -38,6 +40,7 @@ import {
   type OrgMailItem,
   type OrgMailThreads,
   type OrgMeta,
+  type OrgPaymentDetail,
   type OrgTemplateView,
   type OrgView,
 } from '../../shared/organizations.js';
@@ -77,6 +80,8 @@ export interface OrganizationRouteDeps extends ContactRouteDeps {
   /** The largest total size of the shared attachments of a batch: the sending setting (0 when sending is off). */
   attachmentBytes: number;
   now: () => number;
+  /** Whether the person may see the amounts of the payment lines in the history (会計を見る). Absent: nobody may. */
+  paymentsVisible?: (user: User) => boolean;
 }
 
 const orgParams = z.strictObject({ orgId: z.string().regex(/^og_[0-9a-f]{16}$/) });
@@ -237,21 +242,37 @@ export function registerOrganizationRoutes(app: FastifyInstance, opened: Organiz
     contactEmail: contactOf(row.data.contactId)?.data.emails[0]?.address ?? null,
   });
 
-  const historyView = (h: HistoryRaw): OrgHistoryView => ({
+  const paymentView = (h: HistoryRaw): OrgHistoryView['payment'] => {
+    const d = h.detail;
+    if (!ORG_PAYMENT_ACTIONS.includes(h.action) || !d || d.invoiceNumber === undefined) return null;
+    const payment: OrgPaymentDetail = { ...d, amountYen: d.amountYen ?? 0, date: d.date ?? null, invoiceNumber: d.invoiceNumber };
+    return { amountYen: payment.amountYen, date: payment.date, invoiceNumber: payment.invoiceNumber, text: orgPaymentText(h.action, payment) };
+  };
+
+  /** A payment line's amounts and days are for the accounting only (`payments`); the others see the stage it moved. */
+  const historyView = (h: HistoryRaw, payments: boolean): OrgHistoryView => ({
     id: h.id,
     at: h.at,
     actorName: nameOf(h.actor_id),
     action: h.action,
     changed: h.changed.map((k) => ORG_FIELD_LABELS[k as keyof OrgInput] ?? k),
     mail: h.action === 'mail_sent' && h.detail?.subject !== undefined ? { subject: h.detail.subject, sent: h.detail.sent ?? 1 } : null,
+    payment: payments ? paymentView(h) : null,
     canRevert: h.before !== null && HISTORY_REVERTABLE.includes(h.action),
   });
 
-  const detail = (row: OrgRow, user: User): OrgDetailResponse => ({
-    org: orgView(row),
-    history: store.history(row.id).map(historyView),
-    canAdminister: user.canManageAccess,
-  });
+  const detail = (row: OrgRow, user: User): OrgDetailResponse => {
+    const payments = deps.paymentsVisible?.(user) ?? false;
+    return {
+      org: orgView(row),
+      // Without the accounting, a payment line that did not move the stage says nothing (not even how often money came).
+      history: store
+        .history(row.id)
+        .filter((h) => payments || !ORG_PAYMENT_ACTIONS.includes(h.action) || h.changed.length > 0)
+        .map((h) => historyView(h, payments)),
+      canAdminister: user.canManageAccess,
+    };
+  };
 
   /** Owner and contact must exist (the owner is a committee account, the contact is in the contacts). */
   const checkLinks = (data: OrgInput) => {

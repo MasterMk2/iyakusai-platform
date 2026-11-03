@@ -2,13 +2,14 @@ import { useEffect, useState, type FormEvent } from 'react';
 import type { ContactListResponse } from '../../../shared/contacts';
 import { defaultStatus, ORG_KIND_LABELS, ORG_KINDS, type OrgDetailResponse, type OrgHistoryAction, type OrgInput, type OrgKind, type OrgMeta, type OrgView } from '../../../shared/organizations';
 import { api, ApiFailure, fmtDate, toFailure } from '../../api';
+import { OrgPaymentStatus } from '../payments/OrgPaymentStatus';
 
 // The organization on the right of the list: its facts, the status (changed at once where the kind has stages), the
 // history (with 戻す), the mail of its contact, and the form to add or change it. Errors from the server are shown next
 // to the field they are about (or at the top). A version conflict keeps what was typed and loads the latest version.
 
 const THIS_YEAR = new Date().getFullYear();
-const ACTION_LABELS: Record<OrgHistoryAction, string> = { created: '登録', updated: '変更', deleted: '削除', imported: '取り込み', reverted: '元に戻す', mail_sent: '一斉送信' };
+const ACTION_LABELS: Record<OrgHistoryAction, string> = { created: '登録', updated: '変更', deleted: '削除', imported: '取り込み', reverted: '元に戻す', mail_sent: '一斉送信', payment_confirmed: '入金を確認', payment_unconfirmed: '入金の確定を外す', payment_rechecked: '請求の変更を反映' };
 
 type Thread = { threadId: string; mailboxId: string; mailboxName: string; subject: string; latestReceivedAt: string; senders: string[] };
 
@@ -251,6 +252,8 @@ export function OrganizationDetail({
         </dd>
       </dl>
 
+      <OrgPaymentStatus orgId={org.id} version={org.version} />
+
       <section aria-labelledby="org-mail-title">
         <h3 id="org-mail-title">関係するメール</h3>
         {!meta.mail.readable ? (
@@ -298,6 +301,7 @@ export function OrganizationDetail({
                   「{h.mail.subject}」を {h.mail.sent} 通送りました
                 </span>
               )}
+              {h.payment && <span className="history-meta">{h.payment.text}</span>}
               {h.canRevert && (
                 <span>
                   <button type="button" className="link-button" disabled={busy} onClick={() => void revert(h.id)}>

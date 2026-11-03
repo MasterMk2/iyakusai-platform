@@ -10,6 +10,8 @@ import { ContactsStore } from '../contacts/store.js';
 import type { DecisionsStore } from '../decisions/store.js';
 import { registerOrganizationRoutes } from '../organizations/routes.js';
 import { OrganizationsStore } from '../organizations/store.js';
+import { accountingPermissionsOf, registerPaymentRoutes } from '../payments/routes.js';
+import { PaymentsStore } from '../payments/store.js';
 import { registerMinutesRoutes } from '../minutes/routes.js';
 import { MinutesStore } from '../minutes/store.js';
 import { DomainError, notFound, type User } from '../domain/types.js';
@@ -51,6 +53,8 @@ export interface MailboxRuntime {
   remoteImages?: RemoteImageFetch;
   /** Replaces the organizations file next to mail.sqlite3 (tests). */
   organizations?: OrganizationsStore;
+  /** Replaces the payments file next to organizations.sqlite3 (tests). */
+  payments?: PaymentsStore;
   /** Replace LINE's HTTP (the receiver and the Messaging API) or its push connector (tests). */
   lineFetch?: Fetch;
   lineConnector?: LinePushConnector;
@@ -213,7 +217,24 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
       organizations = null;
     }
   }
-  registerOrganizationRoutes(app, organizations, { requireUser: deps.requireUser, session: deps.session, people: deps.people, discordUserIdOf: deps.discordUserIdOf, clock: deps.clock, parse: deps.parse, contacts, sender, mailGate: (request) => reader(request, true), mailPeek: (request) => reader(request, false), mail: service, attachmentBytes: sendConfig?.maxAttachmentBytes ?? 0, now: deps.now ?? Date.now });
+  // Payments (入金確認, 2026-11-03): their own file next to organizations.sqlite3, with the accounting permissions. A file
+  // that cannot be opened turns off the payments only (503). Opened before the organizations' routes, whose history
+  // shows the amounts of a payment only to the people with 会計を見る.
+  let payments: PaymentsStore | null = rt.payments ?? null;
+  if (!payments) {
+    try {
+      const opened = new PaymentsStore(rt.config.dataDir);
+      payments = opened;
+      app.addHook('onClose', async () => opened.close());
+    } catch {
+      payments = null;
+    }
+  }
+  const paymentsStore = payments;
+  const paymentsVisible = (user: User) => paymentsStore !== null && accountingPermissionsOf(paymentsStore, user).includes('accounting.view');
+  registerOrganizationRoutes(app, organizations, { requireUser: deps.requireUser, session: deps.session, people: deps.people, discordUserIdOf: deps.discordUserIdOf, clock: deps.clock, parse: deps.parse, contacts, sender, mailGate: (request) => reader(request, true), mailPeek: (request) => reader(request, false), mail: service, attachmentBytes: sendConfig?.maxAttachmentBytes ?? 0, now: deps.now ?? Date.now, paymentsVisible });
+
+  registerPaymentRoutes(app, payments, { requireUser: deps.requireUser, session: deps.session, people: deps.people, discordUserIdOf: deps.discordUserIdOf, clock: deps.clock, parse: deps.parse, organizations, contacts, now: deps.now ?? Date.now });
 
   // Meeting minutes (α, 2026-11-02), when minutes.json is next to the mail configuration: their own file in the
   // mail folder, with the same people and sign-in as the contacts. A file that cannot be opened turns off the

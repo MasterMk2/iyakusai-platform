@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { ORG_KIND_LABELS, ORG_KINDS, type OrgKind, type OrgListResponse, type OrgMailBatchSummary, type OrgMeta } from '../../../shared/organizations';
+import type { PaymentsMe } from '../../../shared/payments';
 import { api, toFailure } from '../../api';
+import { AccountingView } from '../payments/AccountingView';
 import { OrganizationDetail } from './OrganizationDetail';
 import { OrganizationImport } from './OrganizationImport';
 import { OrganizationMail } from './OrganizationMail';
@@ -15,7 +17,8 @@ import './organizations.css';
 
 const PAGE_SIZE = 50;
 
-type View = { kind: 'browse' } | { kind: 'new' } | { kind: 'import' } | { kind: 'mail'; resumeId?: string };
+// 会計 (入金確認) opens from here, for the people with the accounting permission only.
+type View = { kind: 'browse' } | { kind: 'new' } | { kind: 'import' } | { kind: 'mail'; resumeId?: string } | { kind: 'accounting' };
 
 /**
  * The organization open on the screen is kept in the address (#/contacts?section=organizations&org=og_…), so coming
@@ -79,6 +82,7 @@ export function OrganizationsPanel() {
   const [selectNotice, setSelectNotice] = useState<string | null>(null);
   const [openBatches, setOpenBatches] = useState<OrgMailBatchSummary[]>([]);
   const [view, setView] = useState<View>({ kind: 'browse' });
+  const [payments, setPayments] = useState<PaymentsMe | null>(null);
 
   useEffect(() => keepOrgInHash(selectedId), [selectedId]);
 
@@ -88,6 +92,16 @@ export function OrganizationsPanel() {
       .then((m) => setMeta(m))
       .catch((err: unknown) => {
         if (!controller.signal.aborted) setMetaError(errorText(err));
+      });
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    api<PaymentsMe>('GET', '/api/payments/me', undefined, controller.signal)
+      .then((m) => setPayments(m))
+      .catch(() => {
+        // No accounting here (or not for this person): the 会計 button stays hidden.
       });
     return () => controller.abort();
   }, []);
@@ -181,6 +195,16 @@ export function OrganizationsPanel() {
     setSelectNotice(skipped > 0 ? `一斉送信は ${batchLimit} 団体までのため、${skipped} 件は選べませんでした。` : null);
   };
 
+  if (view.kind === 'accounting' && payments?.canView) {
+    return (
+      <section className="orgs-panel" aria-label="会計">
+        <div className="orgs-full">
+          <AccountingView me={payments} onBack={() => setView({ kind: 'browse' })} />
+        </div>
+      </section>
+    );
+  }
+
   if (view.kind === 'import' && meta) {
     return (
       <section className="orgs-panel" aria-label="団体の取り込み">
@@ -242,6 +266,11 @@ export function OrganizationsPanel() {
               <button type="button" className="secondary" onClick={() => setView({ kind: 'import' })}>
                 CSVから取り込む
               </button>
+              {payments?.canView && (
+                <button type="button" className="secondary" onClick={() => setView({ kind: 'accounting' })} data-testid="org-accounting">
+                  会計
+                </button>
+              )}
             </div>
           </div>
 

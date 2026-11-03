@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { normalizeContactSearch } from '../../shared/contacts.js';
-import { orgNameKey, type OrgHistoryAction, type OrgInput, type OrgKind } from '../../shared/organizations.js';
+import { orgNameKey, type OrgHistoryAction, type OrgInput, type OrgKind, type OrgPaymentDetail } from '../../shared/organizations.js';
 
 // Organizations (団体の台帳): one SQLite file (organizations.sqlite3) next to contacts.sqlite3 in the mail folder,
 // so the backups of the folder carry it. It has its own schema version, so it never touches contacts.sqlite3.
@@ -137,7 +137,7 @@ export interface HistoryRaw {
   action: OrgHistoryAction;
   changed: string[];
   before: OrgInput | null;
-  detail: { subject?: string; sent?: number; batchId?: string } | null;
+  detail: ({ subject?: string; sent?: number; batchId?: string } & Partial<OrgPaymentDetail>) | null;
 }
 
 export interface TemplateRow {
@@ -363,6 +363,35 @@ export class OrganizationsStore {
       this.db.prepare('DELETE FROM organizations WHERE id=?').run(id);
       this.addHistory(id, actor, now, 'deleted', [], before.data);
       return 'deleted';
+    });
+  }
+
+  /**
+   * A payment confirmed or taken back on the accounting screens (payments.sqlite3 keeps the payment itself): one history
+   * line, and the stage `nextStatus` gives (decided inside the transaction from the row as it is now; null keeps it).
+   * With `onlyIfMoved` (a change of an invoice), the line is written only when the stage moved.
+   * The line is not one 「この時点の内容に戻す」 offers: a payment is taken back on the accounting screen. Null when gone.
+   */
+  recordPayment(
+    orgId: string,
+    actor: string,
+    now: string,
+    action: 'payment_confirmed' | 'payment_unconfirmed' | 'payment_rechecked',
+    detail: OrgPaymentDetail,
+    nextStatus: (row: OrgRow) => string | null,
+    onlyIfMoved = false,
+  ): { before: string; after: string } | null {
+    return this.tx(() => {
+      const before = this.get(orgId);
+      if (!before) return null;
+      const status = nextStatus(before);
+      if (status !== null && status !== before.data.status) {
+        this.writeRow(orgId, { ...before.data, status }, before.version + 1, actor, now, false);
+        this.addHistory(orgId, actor, now, action, ['status'], before.data, detail);
+        return { before: before.data.status, after: status };
+      }
+      if (!onlyIfMoved) this.addHistory(orgId, actor, now, action, [], null, detail);
+      return { before: before.data.status, after: before.data.status };
     });
   }
 

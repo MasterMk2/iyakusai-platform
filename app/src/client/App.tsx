@@ -546,7 +546,8 @@ export function App() {
     );
   }
 
-  if (route.view === 'contacts' && contactsEnabled) {
+  // The demo has synthetic contacts, organizations and accounting of its own (no committee mailbox).
+  if (route.view === 'contacts' && (contactsEnabled || demoMode)) {
     return (
       <div className="app">
         {bar}

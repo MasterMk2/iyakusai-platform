@@ -45,6 +45,7 @@ import type { MailboxRuntime } from './mailbox/routes.js';
 import { MailboxStore } from './mailbox/store.js';
 import { DecisionsStore } from './decisions/store.js';
 import { seedDecisionsDemo } from './decisions/seed.js';
+import { openDemoBooks } from './payments/demo.js';
 import { CalendarStore } from './calendar/store.js';
 import { seedCalendarDemo } from './calendar/seed.js';
 import type { CalendarRuntime } from './calendar/routes.js';
@@ -368,6 +369,8 @@ export async function composeServer(config: ServerConfig, overrides: ComposeOver
     calendar,
     botDatasourceKey: config.botDatasourceKey,
     decisions,
+    // Contacts, organizations and payments on synthetic data next to the demo data file (2026-11-03); null if they cannot be opened.
+    demoBooks: config.auth.mode === 'demo' ? openDemoBooks(path.dirname(config.dataFile), initial.users, now) : null,
     ...(discord ? { discord } : {}),
     ...(account ? { account } : {}),
     ...(line ? { line } : {}),

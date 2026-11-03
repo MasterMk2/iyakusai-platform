@@ -10,6 +10,7 @@ import { installDiscordAuth, type DiscordAuthRuntime } from '../discord-auth/htt
 import { isTemporaryStaffLoginId } from '../discord-auth/temporary-staff.js';
 import { registerDecisionRoutes } from '../decisions/routes.js';
 import type { DecisionsStore } from '../decisions/store.js';
+import { registerDemoBooks, type DemoBooks } from '../payments/demo.js';
 import { assertMappedUsers, ConfigError, IDENTITY_HEADER, isValidIdentity, normalizeAddress, type AuthConfig, type TrustedProxyAuth } from '../auth.js';
 import { MockInboundConnector, type MockConnectorOptions } from '../connector/mock.js';
 import type { InboundConnector } from '../connector/types.js';
@@ -69,6 +70,8 @@ export interface AppOptions {
   botDatasourceKey?: Buffer | null;
   /** The decision register (decisions.sqlite3). Absent: the register is off (its meta route answers enabled: false). */
   decisions?: DecisionsStore | null;
+  /** Demo only: contacts, organizations and payments on synthetic data (2026-11-03). Absent: those routes do not exist. */
+  demoBooks?: DemoBooks | null;
 }
 
 const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '[::1]']);
@@ -462,6 +465,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     clock,
     parse,
   });
+  if (demo && options.demoBooks) registerDemoBooks(app, options.demoBooks, { requireUser, lookupUser: (userId) => findUser(store.current, userId), listUsers: () => store.current.users.filter((u) => !u.disabled), clock, parse });
   // Copy to Google Drive: signed requests of the committee's Apps Script, Discord login only (the gate lets its report through).
   if (options.rental?.driveSyncKey) {
     if (auth.mode !== 'discord') throw new ConfigError('物品の Drive 同期は discord モードでだけ使えます。');

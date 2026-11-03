@@ -176,6 +176,30 @@ async function main(): Promise<void> {
     manifest.files['mailbox/organizations.sqlite3'] = { bytes: readFileSync(dest).length, sha256: sha256(readFileSync(dest)) };
   }
 
+  // Payments (入金確認, 2026-11-03): payments.sqlite3 next to organizations.sqlite3, with its invoices, deposits and history.
+  const paymentsDb = path.join(data, 'mailbox', 'payments.sqlite3');
+  if (existsSync(paymentsDb)) {
+    const dest = path.join(target, 'mailbox', 'payments.sqlite3');
+    mkdirSync(path.dirname(dest), { recursive: true, mode: 0o700 });
+    const source = new DatabaseSync(paymentsDb, { readOnly: true });
+    try {
+      await backup(source, dest);
+    } finally {
+      source.close();
+    }
+    const copy = new DatabaseSync(dest, { readOnly: true });
+    try {
+      const check = copy.prepare('PRAGMA integrity_check').get() as { integrity_check: string };
+      if (check.integrity_check !== 'ok') throw new Error('会計の複製の整合性を確認できませんでした。');
+      for (const table of ['invoices', 'deposits', 'allocations', 'history']) {
+        manifest.counts[`payments.${table}`] = Number((copy.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n);
+      }
+    } finally {
+      copy.close();
+    }
+    manifest.files['mailbox/payments.sqlite3'] = { bytes: readFileSync(dest).length, sha256: sha256(readFileSync(dest)) };
+  }
+
   // Meeting minutes (α 2026-11-02): minutes.sqlite3 next to mail.sqlite3. The recordings (minutes-audio/) are
   // not backed up: they are deleted a fixed number of days after confirmation.
   const minutesDb = path.join(data, 'mailbox', 'minutes.sqlite3');

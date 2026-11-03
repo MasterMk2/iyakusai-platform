@@ -471,7 +471,51 @@ export interface OrgListResponse {
   kind: OrgKind | null;
 }
 
-export type OrgHistoryAction = 'created' | 'updated' | 'deleted' | 'imported' | 'reverted' | 'mail_sent';
+// payment_confirmed / payment_unconfirmed / payment_rechecked (2026-11-03): written by the accounting screens (payments),
+// never revertable here. payment_rechecked is a change of an invoice (made, changed, withdrawn, restored) that moved the stage.
+export type OrgHistoryAction = 'created' | 'updated' | 'deleted' | 'imported' | 'reverted' | 'mail_sent' | 'payment_confirmed' | 'payment_unconfirmed' | 'payment_rechecked';
+
+export const ORG_PAYMENT_ACTIONS: readonly OrgHistoryAction[] = ['payment_confirmed', 'payment_unconfirmed', 'payment_rechecked'];
+
+export type OrgPaymentCause = 'invoice_created' | 'invoice_updated' | 'invoice_voided' | 'invoice_restored';
+
+/** What a payment line of an organization's history keeps (written by the accounting; never the payer's name). */
+export interface OrgPaymentDetail {
+  /** The deposits confirmed or taken back by this line (0 when none). */
+  amountYen: number;
+  /** The day of the latest deposit, or null. */
+  date: string | null;
+  invoiceNumber: string;
+  /** A shortfall accepted (payment_confirmed), or an accepted one taken back (payment_unconfirmed). */
+  acceptShort?: boolean;
+  /** What the invoice has received in all after this line. */
+  paidYen?: number;
+  /** payment_rechecked: the change of the invoice that moved the stage, and whether every invoice is paid now. */
+  cause?: OrgPaymentCause;
+  settled?: boolean;
+}
+
+const ORG_PAYMENT_CAUSES: Record<OrgPaymentCause, string> = {
+  invoice_created: ' を追加したため',
+  invoice_updated: ' を変えたため',
+  invoice_voided: ' を取り消したため',
+  invoice_restored: ' の取り消しを戻したため',
+};
+
+/** The sentence of a payment line for the people who may see the accounting (amounts, days, the invoice number). */
+export function orgPaymentText(action: OrgHistoryAction, d: OrgPaymentDetail): string {
+  const yenOf = (n: number) => `${n.toLocaleString('ja-JP')}円`;
+  const invoice = `請求 ${d.invoiceNumber}`;
+  if (action === 'payment_rechecked') {
+    return `${invoice}${ORG_PAYMENT_CAUSES[d.cause ?? 'invoice_updated']}、${d.settled ? 'すべての請求が入金済みになりました' : '入金済みでない請求があります'}`;
+  }
+  if (action === 'payment_unconfirmed') {
+    if (d.amountYen > 0) return `${yenOf(d.amountYen)}・${invoice}${d.acceptShort ? '（不足の承認も取り消し）' : ''}`;
+    return `不足の承認を取り消し（入金 ${yenOf(d.paidYen ?? 0)}）・${invoice}`;
+  }
+  if (d.amountYen > 0) return `${yenOf(d.amountYen)}${d.date ? `・${d.date}` : ''}・${invoice}${d.acceptShort ? '（不足を認めて入金済み）' : ''}`;
+  return `不足を認めて入金済み（入金 ${yenOf(d.paidYen ?? 0)}${d.date ? `・最後の入金 ${d.date}` : ''}）・${invoice}`;
+}
 
 export interface OrgHistoryView {
   id: number;
@@ -482,6 +526,11 @@ export interface OrgHistoryView {
   changed: string[];
   /** Mail: the subject and the number of messages sent. Null for other actions. */
   mail: { subject: string; sent: number } | null;
+  /**
+   * A payment line's amount, day and invoice number with the screen's sentence: only for the people who may see the
+   * accounting (会計を見る); null for everyone else, who see only that the stage moved. Never the payer's name.
+   */
+  payment?: { amountYen: number; date: string | null; invoiceNumber: string; text: string } | null;
   /** The earlier state can be put back from this row (updates, imports and reverts that kept one). */
   canRevert: boolean;
 }
