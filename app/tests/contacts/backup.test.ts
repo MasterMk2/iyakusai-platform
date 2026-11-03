@@ -6,6 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { ContactsStore } from '../../src/server/contacts/store.js';
 import { MailboxStore } from '../../src/server/mailbox/store.js';
+import { OrganizationsStore } from '../../src/server/organizations/store.js';
 import { validateContact } from '../../src/shared/contacts.js';
 
 // The app's backup (dist/server/ops/backup.js, run before every deployment) keeps the contacts file.
@@ -38,4 +39,22 @@ it('copies contacts.sqlite3 next to mail.sqlite3 and counts its rows', () => {
   } finally {
     copy.close();
   }
-});
+}, 60_000);
+
+it('copies organizations.sqlite3 next to contacts.sqlite3, with its history and mail batches counted', () => {
+  const data = path.join(dir, 'data');
+  const out = path.join(dir, 'backups');
+  new MailboxStore(path.join(data, 'mailbox')).close();
+  const organizations = new OrganizationsStore(path.join(data, 'mailbox'));
+  organizations.create({ kind: 'sponsor', fiscalYear: 2026, name: '合成商事', department: '', ownerId: null, contactId: null, status: '依頼前', amountYen: null, content: '', nextAction: '', nextDue: null, notes: '' }, 'u1', '2026-11-03T00:00:00.000Z');
+  organizations.close();
+
+  execFileSync(process.execPath, ['--disable-warning=ExperimentalWarning', '--import', 'tsx', path.resolve('src/server/ops/backup.ts')], {
+    env: { ...process.env, BACKUP_DATA_DIR: data, BACKUP_OUT_DIR: out },
+    stdio: 'pipe',
+  });
+  const [folder] = readdirSync(out);
+  const manifest = JSON.parse(readFileSync(path.join(out, folder!, 'manifest.json'), 'utf8')) as { files: Record<string, unknown>; counts: Record<string, number> };
+  expect(Object.keys(manifest.files)).toContain('mailbox/organizations.sqlite3');
+  expect(manifest.counts).toMatchObject({ 'organizations.organizations': 1, 'organizations.organization_history': 1, 'organizations.mail_batches': 0 });
+}, 60_000);

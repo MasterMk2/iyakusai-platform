@@ -1,0 +1,86 @@
+/* Organizations (団体の台帳, 2026-11-03). The shared classes (form-grid, rows-list, status, filter-chip…) come from
+   styles.css; this file adds what the organizations screens need. The panes have their own classes (orgs-list-pane,
+   orgs-detail-pane): the contacts' .list-pane and .detail-pane rules hide them on a phone (the layout's has-detail),
+   so the organizations never use those classes. */
+
+.contacts-switch { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 12px 20px 0; background: var(--surface); border-bottom: 1px solid var(--line); }
+.contacts-switch button { min-height: 40px; padding: 4px 16px; border-radius: 20px; border: 1px solid var(--field); background: var(--surface); color: var(--ink); font-weight: 400; }
+.contacts-switch button[aria-pressed='true'] { background: var(--navy-fill); border-color: var(--navy-fill); color: #fff; font-weight: 700; }
+
+.orgs-panel { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; }
+.orgs-body { display: grid; grid-template-columns: minmax(380px, 0.9fr) minmax(0, 1fr); min-width: 0; }
+.orgs-body > * { min-width: 0; }
+.orgs-list-pane { position: relative; min-width: 0; background: var(--surface); container-type: inline-size; padding: 16px 20px; }
+.orgs-detail-pane { position: relative; min-width: 0; background: var(--surface); border-left: 1px solid var(--line); padding: 20px 28px 48px; }
+@media (min-width: 901px) {
+  .orgs-list-pane { position: sticky; top: 53px; align-self: start; max-height: calc(100dvh - 53px); overflow: auto; }
+  .orgs-detail-pane { min-height: calc(100dvh - 113px); }
+}
+.orgs-full { padding: 16px 20px 48px; min-width: 0; }
+.orgs-full .back-link { display: inline-flex; }
+
+.orgs-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
+.orgs-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; align-items: end; }
+.orgs-filters label { display: grid; gap: 4px; font-size: 14px; font-weight: 700; min-width: 0; }
+.orgs-filters input, .orgs-filters select { width: 100%; min-width: 0; font-weight: 400; }
+.orgs-counts { display: flex; flex-wrap: wrap; gap: 6px; }
+.orgs-check { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; font-weight: 700; }
+.orgs-check input[type='checkbox'] { width: 20px; min-width: 20px; height: 20px; margin: 0; }
+.orgs-row { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; border-bottom: 1px solid var(--line-soft); }
+/* The pick box is a label, so the whole 44px square takes the tap (not the 20px box alone). */
+.orgs-row > .orgs-row-pick { display: flex; align-items: flex-start; justify-content: center; min-width: 44px; min-height: 44px; padding: 10px 0 0; cursor: pointer; }
+.orgs-row > .orgs-row-pick input { width: 22px; height: 22px; margin: 0; }
+.orgs-row > .row-open { border-bottom: 0; }
+.orgs-kind { display: inline-block; padding: 0 8px; border-radius: 999px; border: 1px solid var(--field); font-size: 14px; color: var(--muted); }
+.orgs-status { display: inline-block; padding: 0 8px; border-radius: 999px; font-size: 14px; font-weight: 700; background: var(--neutral-bg); color: var(--ink); border: 1px solid var(--field); }
+/* Red: the deadline is past. Yellow: it is within a week. Anything else keeps the neutral colour. */
+.orgs-status.overdue { background: var(--red-bg); color: var(--red); border-color: var(--red-line); }
+.orgs-status.soon { background: var(--amber-bg); color: var(--amber); border-color: var(--amber-line); }
+.orgs-selected-bar { position: sticky; bottom: 0; z-index: 2; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; padding: 10px 12px; background: var(--surface); border-top: 1px solid var(--line); box-shadow: 0 -2px 8px var(--shadow); }
+.orgs-selected-names { display: grid; gap: 2px; min-width: 0; max-height: 96px; overflow: auto; }
+.orgs-open-batches { display: grid; gap: 6px; }
+.orgs-open-item, .orgs-attach-item { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
+.orgs-form { display: grid; gap: 12px; }
+.orgs-form .field-error { margin: 0; }
+.orgs-form textarea { resize: vertical; line-height: 1.6; }
+.orgs-status-change { display: grid; gap: 6px; max-width: 360px; }
+.orgs-status-change select { width: 100%; }
+.orgs-contact-results { list-style: none; margin: 0; padding: 0; border: 1px solid var(--field); border-radius: 5px; max-height: 240px; overflow: auto; }
+.orgs-contact-results li button { width: 100%; min-height: 44px; text-align: left; background: var(--surface); color: var(--ink); border: 0; border-bottom: 1px solid var(--line-soft); border-radius: 0; font-weight: 400; }
+.orgs-chosen { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.orgs-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; margin: 0; font-size: 15px; }
+.orgs-facts dt { color: var(--muted); }
+.orgs-facts dd { margin: 0; overflow-wrap: anywhere; }
+.orgs-mail-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.orgs-mail-list a { color: var(--blue); }
+.orgs-batch-item { border-bottom: 1px solid var(--line-soft); padding: 10px 0; display: grid; gap: 4px; min-width: 0; }
+.orgs-batch-item details summary { cursor: pointer; min-height: 40px; display: flex; align-items: center; }
+.orgs-batch-item pre { white-space: pre-wrap; overflow-wrap: anywhere; font-family: inherit; margin: 4px 0; font-size: 15px; background: var(--surface-soft, transparent); }
+.orgs-steps { display: flex; flex-wrap: wrap; gap: 6px; font-size: 14px; color: var(--muted); }
+.orgs-steps strong { color: var(--ink); }
+.orgs-progress { height: 10px; border-radius: 5px; background: var(--line); overflow: hidden; }
+.orgs-progress > span { display: block; height: 100%; background: var(--blue); }
+.orgs-mapping { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px 12px; }
+.orgs-mapping label { display: grid; gap: 4px; font-size: 14px; font-weight: 700; min-width: 0; }
+.orgs-mapping select { width: 100%; min-width: 0; font-weight: 400; }
+.orgs-plan { width: 100%; border-collapse: collapse; font-size: 14px; }
+.orgs-plan th, .orgs-plan td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line-soft); vertical-align: top; overflow-wrap: anywhere; }
+.orgs-plan-wrap { overflow-x: auto; max-width: 100%; }
+
+@media (max-width: 900px) {
+  .orgs-body { display: block; }
+  .orgs-body.has-detail .orgs-list-pane { display: none; }
+  .orgs-body:not(.has-detail) .orgs-detail-pane { display: none; }
+  .orgs-detail-pane { border-left: 0; padding: 12px 16px 32px; }
+}
+@media (max-width: 680px) {
+  .contacts-switch { padding: 10px 16px 0; }
+  .orgs-full { padding: 12px 16px 40px; }
+  .orgs-list-pane { padding: 12px; }
+  .orgs-facts { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .orgs-facts dt { margin-top: 8px; }
+}
+@media (max-width: 340px) {
+  .contacts-switch { padding-left: 8px; padding-right: 8px; }
+  .orgs-full { padding-left: 12px; padding-right: 12px; }
+}

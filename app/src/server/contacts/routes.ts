@@ -71,26 +71,28 @@ function csvCell(value: string): string {
   return `"${safe.replace(/"/g, '""')}"`;
 }
 
+/** The committee member of this request (the contacts' rule, also used by the organizations): not temporary staff. */
+export function committeeMember(deps: ContactRouteDeps, request: FastifyRequest): User {
+  const user = deps.requireUser(request);
+  const session = deps.session(request);
+  if (!session || user.disabled) throw new DomainError('unauthenticated', 'ログインしてください。');
+  // Temporary staff, however the login names them: staff:<number>, their login ID iy-<number>, no Discord account, the label.
+  const temporary =
+    session.discordUserId.startsWith('staff:') ||
+    isTemporaryStaffLoginId(user.id) ||
+    deps.discordUserIdOf(user.id) === null ||
+    departmentsOfLabel(user.roleLabel).includes(TEMPORARY_STAFF_DEPARTMENT);
+  if (temporary) throw new DomainError('forbidden', '連絡先は委員だけが使えます。');
+  return user;
+}
+
 /**
  * `opened` is null when contacts.sqlite3 could not be opened: the contacts routes then answer 503 and the rest of
  * the app (mail, tasks, rental) starts as usual.
  */
 export function registerContactRoutes(app: FastifyInstance, opened: ContactsStore | null, deps: ContactRouteDeps): void {
   const nameOf = (userId: string) => deps.people.lookup(userId)?.displayName ?? '（不明な利用者）';
-
-  function member(request: FastifyRequest): User {
-    const user = deps.requireUser(request);
-    const session = deps.session(request);
-    if (!session || user.disabled) throw new DomainError('unauthenticated', 'ログインしてください。');
-    // Temporary staff, however the login names them: staff:<number>, their login ID iy-<number>, no Discord account, the label.
-    const temporary =
-      session.discordUserId.startsWith('staff:') ||
-      isTemporaryStaffLoginId(user.id) ||
-      deps.discordUserIdOf(user.id) === null ||
-      departmentsOfLabel(user.roleLabel).includes(TEMPORARY_STAFF_DEPARTMENT);
-    if (temporary) throw new DomainError('forbidden', '連絡先は委員だけが使えます。');
-    return user;
-  }
+  const member = (request: FastifyRequest): User => committeeMember(deps, request);
 
   function administrator(request: FastifyRequest): User {
     const user = member(request);

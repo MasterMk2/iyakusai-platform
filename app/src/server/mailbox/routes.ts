@@ -8,6 +8,8 @@ import { DUE_DATE_PATTERN } from '../../shared/mailDue.js';
 import { registerContactRoutes } from '../contacts/routes.js';
 import { ContactsStore } from '../contacts/store.js';
 import type { DecisionsStore } from '../decisions/store.js';
+import { registerOrganizationRoutes } from '../organizations/routes.js';
+import { OrganizationsStore } from '../organizations/store.js';
 import { registerMinutesRoutes } from '../minutes/routes.js';
 import { MinutesStore } from '../minutes/store.js';
 import { DomainError, notFound, type User } from '../domain/types.js';
@@ -47,6 +49,8 @@ export interface MailboxRuntime {
   minutes?: MinutesStore;
   /** Replaces fetching images on other servers for a mail's HTML (tests). */
   remoteImages?: RemoteImageFetch;
+  /** Replaces the organizations file next to mail.sqlite3 (tests). */
+  organizations?: OrganizationsStore;
   /** Replace LINE's HTTP (the receiver and the Messaging API) or its push connector (tests). */
   lineFetch?: Fetch;
   lineConnector?: LinePushConnector;
@@ -195,6 +199,21 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
     }
   }
   registerContactRoutes(app, contacts, { requireUser: deps.requireUser, session: deps.session, people: deps.people, discordUserIdOf: deps.discordUserIdOf, clock: deps.clock, parse: deps.parse });
+
+  // Organizations (団体の台帳, 2026-11-03): their own file next to contacts.sqlite3. A batch mail goes through the same
+  // sending service and the same sign-in gate as the mail screens (mailGate). A file that cannot be opened turns off
+  // organizations only (503).
+  let organizations: OrganizationsStore | null = rt.organizations ?? null;
+  if (!organizations) {
+    try {
+      const opened = new OrganizationsStore(rt.config.dataDir);
+      organizations = opened;
+      app.addHook('onClose', async () => opened.close());
+    } catch {
+      organizations = null;
+    }
+  }
+  registerOrganizationRoutes(app, organizations, { requireUser: deps.requireUser, session: deps.session, people: deps.people, discordUserIdOf: deps.discordUserIdOf, clock: deps.clock, parse: deps.parse, contacts, sender, mailGate: (request) => reader(request, true), mailPeek: (request) => reader(request, false), mail: service, attachmentBytes: sendConfig?.maxAttachmentBytes ?? 0, now: deps.now ?? Date.now });
 
   // Meeting minutes (α, 2026-11-02), when minutes.json is next to the mail configuration: their own file in the
   // mail folder, with the same people and sign-in as the contacts. A file that cannot be opened turns off the

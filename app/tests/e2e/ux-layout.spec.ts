@@ -136,7 +136,7 @@ async function settleAndCheck(page: Page) {
   });
   const size = await page.evaluate(() => ({ content: document.documentElement.scrollWidth, viewport: innerWidth }));
   expect(size.content, 'the page does not overflow horizontally').toBeLessThanOrEqual(size.viewport);
-  const overflowingPanels = await page.locator('.list-pane, .detail-pane, .task-fields-section, .handling').evaluateAll(panels => panels
+  const overflowingPanels = await page.locator('.list-pane, .detail-pane, .orgs-list-pane, .orgs-detail-pane, .task-fields-section, .handling').evaluateAll(panels => panels
     .filter(panel => panel.getClientRects().length > 0 && panel.scrollWidth > panel.clientWidth + 1)
     .map(panel => ({ classes: panel.className, content: panel.scrollWidth, viewport: panel.clientWidth })));
   expect(overflowingPanels, 'visible content panels do not hide horizontal overflow').toEqual([]);
