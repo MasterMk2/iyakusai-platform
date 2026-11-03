@@ -161,7 +161,7 @@ interface FakeOptions {
   noAuthPlain?: boolean;
   starttls?: boolean;
   badPassword?: boolean;
-}
+ ehloHost?: string; }
 
 function fakeSmtp(o: FakeOptions = {}) {
   const seen: { commands: string[]; data: string | null; auth: string | null } = { commands: [], data: null, auth: null };
@@ -213,7 +213,7 @@ function fakeSmtp(o: FakeOptions = {}) {
     async start(): Promise<{ settings: SmtpSettings; transport: MailTransport }> {
       await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
       const port = (server.address() as { port: number }).port;
-      const settings: SmtpSettings = { host: 'smtp.example.invalid', port, security: o.starttls ? 'starttls' : 'tls', user: SMTP_USER, password: 'abcdabcdabcdabcd' };
+      const settings: SmtpSettings = { host: 'smtp.example.invalid', port, security: o.starttls ? 'starttls' : 'tls', user: SMTP_USER, password: 'abcdabcdabcdabcd', ...(o.ehloHost ? { ehloHost: o.ehloHost } : {}) };
       const plain = () => new Promise<Socket>((resolve, reject) => {
         const s = connect({ host: '127.0.0.1', port }, () => resolve(s));
         s.once('error', reject);
@@ -236,15 +236,16 @@ describe('the SMTP client', () => {
     await transport.send(envelope, raw);
     expect(fake.seen.auth).toBe(`\u0000${SMTP_USER}\u0000abcdabcdabcdabcd`);
     // QUIT follows without waiting for the answer.
-    expect(fake.seen.commands.slice(0, 6)).toEqual(['EHLO app.iyakusai.com', 'AUTH PLAIN ***', `MAIL FROM:<${SMTP_USER}>`, `RCPT TO:<${OUTSIDE}>`, `RCPT TO:<${ARCHIVE}>`, 'DATA']);
+    expect(fake.seen.commands.slice(0, 6)).toEqual(['EHLO localhost', 'AUTH PLAIN ***', `MAIL FROM:<${SMTP_USER}>`, `RCPT TO:<${OUTSIDE}>`, `RCPT TO:<${ARCHIVE}>`, 'DATA']);
     expect(fake.seen.data).toBe('Subject: x\r\n\r\nline\r\n..dot line\r\n');
   });
 
   it('upgrades with STARTTLS on 587 before logging in', async () => {
-    fake = fakeSmtp({ starttls: true });
+    // 2026-11-03 (M6): the EHLO name comes from the public origin's host name, not from the code; 'localhost' when there is none.
+    fake = fakeSmtp({ starttls: true, ehloHost: 'app.example.invalid' });
     const { transport } = await fake.start();
     await transport.send(envelope, raw);
-    expect(fake.seen.commands.slice(0, 4)).toEqual(['EHLO app.iyakusai.com', 'STARTTLS', 'EHLO app.iyakusai.com', 'AUTH PLAIN ***']);
+    expect(fake.seen.commands.slice(0, 4)).toEqual(['EHLO app.example.invalid', 'STARTTLS', 'EHLO app.example.invalid', 'AUTH PLAIN ***']);
   });
 
   it('refuses replies injected in plain text with the STARTTLS go-ahead, before logging in', async () => {
