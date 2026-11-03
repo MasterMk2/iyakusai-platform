@@ -12,6 +12,7 @@ import { RentalAccess } from './access.js';
 import { IrregularCards } from './irregular-cards.js';
 import { ItemEditor } from './item-editor.js';
 import { OperationCorrections } from './corrections.js';
+import { registerSupplyRoutes } from './supplies/routes.js';
 import { isTemporaryStaffLoginId } from '../discord-auth/temporary-staff.js';
 
 // Rental API and phone screen inside the common app. Identity is the common login (requireUser); what a
@@ -336,6 +337,9 @@ export async function registerRentalRoutes(app: FastifyInstance, ctx: RentalRout
       }),
     );
   });
+
+  // Counted supplies, attachments and the 団体 collection board (supplies/): their own tables and screen, the same access.
+  if (rental) registerSupplyRoutes(app, { store: rental.store, access, respond, webDir: rental.webDir, csp: RENTAL_CSP, permissionsPolicy: RENTAL_PERMISSIONS_POLICY });
 
   // ---- phone screen
   const webDir = rental?.webDir;

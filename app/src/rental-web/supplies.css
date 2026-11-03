@@ -1,0 +1,152 @@
+/* 数の物品・団体の回収（supplies.html）。Colours and the base controls come from styles.css (the phone screen);
+   this file adds only the layout of this page. Text is at least 14px (ui-guidelines §5); touch targets 44px or more. */
+
+.supplies { padding: 16px; max-width: 920px; margin: 0 auto; box-sizing: border-box; overflow-wrap: anywhere; }
+.supplies *, .supplies *::before, .supplies *::after { box-sizing: border-box; }
+.supplies h1 { font-size: 1.35rem; margin: 0; }
+.supplies h2 { font-size: 1.2rem; margin: 0 0 10px; }
+.supplies h3 { font-size: 1.05rem; margin: 18px 0 8px; }
+.supplies h4 { font-size: 1rem; margin: 14px 0 6px; }
+.supplies .small { font-size: 14px; color: var(--muted); margin: 4px 0; }
+.supplies .intro { margin: 8px 0 14px; }
+
+.page-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 16px; }
+.page-head a { min-height: 44px; display: inline-flex; align-items: center; color: var(--blue); font-weight: 700; }
+
+.notice { margin: 12px 0; padding: 12px 14px; border-left: 5px solid var(--blue); background: #edf5ff; color: var(--ink); white-space: pre-wrap; }
+.notice.ok { border-left-color: var(--green); background: #e9f6ef; }
+.notice.error { border-left-color: var(--red); background: #fdecee; }
+.notice.warn { border-left-color: var(--amber); background: #fff0cf; color: var(--ink); }
+.notice[hidden] { display: none; }
+
+.login-panel { background: #fff; border: 1px solid var(--line); padding: 20px; margin-top: 16px; }
+.button-link { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 10px 16px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--navy); font-weight: 700; text-decoration: none; }
+.button-link.primary { background: var(--navy); border-color: var(--navy); color: #fff; }
+
+.panel { background: #fff; border: 1px solid var(--line); padding: 16px; margin-bottom: 20px; }
+.panel[hidden] { display: none; }
+.section-line { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; }
+
+.field { display: grid; gap: 6px; margin: 4px 0 10px; }
+.field label, .stack label, .sub-form label, .check-row label, .grid-2 label, .inline-form label { display: grid; gap: 4px; font-weight: 700; font-size: 15px; }
+.supplies input, .supplies select { width: 100%; min-height: 44px; padding: 8px 10px; border: 1px solid #7a8d9f; border-radius: 6px; font-size: 16px; background: #fff; color: var(--ink); }
+.supplies input:focus-visible, .supplies select:focus-visible, .supplies button:focus-visible, .supplies a:focus-visible { outline: 3px solid #000; outline-offset: 2px; box-shadow: 0 0 0 2px #ffd43d; }
+
+.supplies button { min-height: 44px; padding: 10px 14px; border: 1px solid var(--navy); border-radius: 6px; background: #fff; color: var(--navy); font-weight: 700; cursor: pointer; }
+.supplies button:disabled { opacity: .5; cursor: not-allowed; }
+.supplies button.primary { background: var(--navy); color: #fff; }
+.supplies button.secondary { background: #edf2f7; border-color: #7a8d9f; color: var(--ink); }
+.supplies button.quiet { border-color: #7a8d9f; color: var(--ink); }
+.supplies button.small-button { min-height: 44px; padding: 8px 12px; font-size: 14px; }
+.supplies button.full { width: 100%; }
+.supplies button[aria-expanded=true] { background: #e7f0fc; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 8px; }
+.chip { min-height: 44px; padding: 8px 12px; border-radius: 999px; background: #edf2f7; border-color: transparent !important; color: var(--ink) !important; }
+.chip[aria-pressed=true] { background: var(--navy); color: #fff !important; }
+
+.pick-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin: 6px 0 16px; }
+/* The tile rules are written with the .supplies prefix: the general button rule above has a higher specificity otherwise. */
+.supplies .pick { display: grid; gap: 4px; text-align: left; min-height: 88px; padding: 12px; background: #fff; border: 2px solid #7a8d9f; }
+.supplies .pick:not(:disabled):hover { background: #f5f8fc; }
+.supplies .pick.picked { border-color: var(--blue); background: #eaf3ff; }
+/* A tile that cannot be pressed is shown by a dashed frame and its text, not by fading the whole tile (the 在庫切れ text stays readable). */
+.supplies .pick:disabled { opacity: 1; background: #f5f7fa; border-style: dashed; border-color: #52677b; }
+.supplies .pick:disabled .pick-name, .supplies .pick:disabled .pick-stock { color: #52677b; }
+.pick-panel { display: grid; gap: 10px; margin: 0 0 16px; padding: 14px; background: #fff; border: 2px solid var(--navy); border-radius: 8px; }
+.pick-panel[hidden] { display: none; }
+.pick-panel h3 { margin: 0; }
+.check-block { display: grid; gap: 6px; padding: 10px 0 2px; border-top: 1px dashed var(--line); }
+.check-block h4 { margin: 0; }
+.pick-name { font-weight: 700; color: var(--ink); overflow-wrap: anywhere; }
+.pick-stock { font-size: 14px; color: var(--muted); font-weight: 400; }
+.pick-count { font-size: 14px; font-weight: 700; color: var(--navy); }
+
+.flag { display: inline-block; width: fit-content; padding: 2px 8px; border-radius: 4px; font-size: 14px; font-weight: 700; background: #fff0cf; color: var(--amber); }
+.flag.strong { margin: 8px 0; }
+.flag-text { color: var(--amber) !important; font-weight: 700; }
+
+.basket { border-top: 2px solid var(--navy); padding-top: 12px; }
+.basket-list { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 8px; }
+.basket-list li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.action-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.action-row.wrap { align-items: center; }
+.action-row > button { flex: 1 1 auto; }
+
+.item-list { display: grid; gap: 12px; }
+.item-card { background: #fff; border: 1px solid var(--line); padding: 14px; border-radius: 8px; }
+.item-head h3, .item-head h4 { margin: 0; }
+.item-head p { margin: 2px 0 0; }
+.counts { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; margin: 10px 0 0; }
+.counts div { background: var(--paper); border-radius: 6px; padding: 8px 10px; }
+.counts dt { font-size: 14px; color: var(--muted); }
+.counts dd { margin: 0; font-size: 1.1rem; font-weight: 700; }
+.sub-form { margin-top: 12px; padding: 12px; background: var(--paper); border-radius: 8px; display: grid; gap: 10px; }
+.sub-form[hidden] { display: none; }
+.sub-form p { margin: 0; }
+.plain-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.plain-list li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.plain-list li.short { color: var(--red); font-weight: 700; }
+.history-head { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 0; }
+.undo { border-top: 1px dashed var(--line); padding-top: 8px; }
+.stack { display: grid; gap: 10px; }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.check-row { display: grid; gap: 6px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+
+.new-item { margin: 0 0 14px; background: var(--paper); padding: 10px 12px; border-radius: 8px; }
+.new-item summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; font-weight: 700; color: var(--navy); }
+.new-item[hidden] { display: none; }
+.new-item form { margin-top: 10px; }
+
+.group-list { display: grid; gap: 10px; margin: 8px 0 16px; }
+.group-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+.group-row strong { overflow-wrap: anywhere; }
+.group-row p { margin: 2px 0 0; }
+
+.board { background: #fff; border: 2px solid var(--navy); border-radius: 8px; padding: 14px; margin: 14px 0 20px; }
+.board[hidden] { display: none; }
+.board-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.board-status { font-weight: 700; padding: 10px 12px; border-radius: 6px; margin: 8px 0; }
+.board-status.open { background: #fff0cf; color: var(--amber); }
+.board-status.done { background: #dcefe6; color: var(--green); }
+.pending { display: grid; gap: 8px; margin: 8px 0; }
+.pending[hidden] { display: none; }
+.pending-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; padding: 10px; background: #fdecee; border-radius: 6px; }
+.pending-row p { margin: 0; }
+
+.code-check { margin-top: 22px; border-top: 2px solid var(--navy); padding-top: 14px; }
+.inline-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
+.inline-form .grow { flex: 1 1 200px; }
+.inline-form button { min-height: 44px; }
+
+/* Screen only: the print sheet is shown by the browser's print dialog. */
+.print-sheet { display: none; }
+
+@media (max-width: 680px) {
+  .supplies { padding: 12px 16px; }
+  .panel { padding: 12px; }
+  .pick-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid-2 { grid-template-columns: 1fr; }
+}
+@media (max-width: 340px) {
+  .supplies { padding: 12px 12px; }
+  .pick-grid { grid-template-columns: 1fr; }
+}
+
+@page { size: A4 portrait; margin: 12mm; }
+@media print {
+  .masthead, .global-nav, #message, .supplies, #login-panel, .code-check, .board-actions, .pending { display: none !important; }
+  #print-sheet { display: block !important; color: #000; background: #fff; font-size: 11pt; line-height: 1.5; }
+  #print-sheet h1 { font-size: 15pt; margin: 0 0 6pt; }
+  #print-sheet p { margin: 0 0 8pt; }
+  #print-sheet table { width: 100%; border-collapse: collapse; }
+  #print-sheet th, #print-sheet td { border: 1px solid #000; padding: 6pt 5pt; vertical-align: top; text-align: left; font-size: 10.5pt; }
+  #print-sheet td.blank { min-width: 40pt; }
+  #print-sheet td.check { width: 28pt; text-align: center; font-size: 13pt; }
+  #print-sheet .sign { margin-top: 16pt; }
+}
+
+.shortage { margin: 14px 0 18px; border: 1px solid var(--line); border-radius: 8px; padding: 0 12px; background: #fff; }
+.shortage summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; font-weight: 700; color: var(--navy); }
+.shortage[open] summary { border-bottom: 1px solid var(--line); margin-bottom: 10px; }
+.shortage > .item-list { padding-bottom: 12px; }

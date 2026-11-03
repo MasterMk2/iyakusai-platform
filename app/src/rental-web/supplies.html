@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#163960">
+  <meta name="description" content="医薬祭スタッフ用の数で管理する物品・付属品・団体ごとの回収">
+  <link rel="stylesheet" href="/rental/styles.css">
+  <link rel="stylesheet" href="/rental/supplies.css">
+  <title>数の物品・団体の回収｜医薬祭 委員会アプリ</title>
+  <script src="/rental/supplies.js" defer></script>
+</head>
+<body>
+  <!-- Same header and module tabs as the phone screen (index.html) and the common screens (AppShell.tsx). -->
+  <header class="masthead"><a class="brand" href="/#/home" data-leave><span>医薬祭</span><strong>委員会アプリ</strong></a><div class="session"><span id="staff-name"></span></div></header>
+  <nav class="global-nav" aria-label="機能"><ul>
+    <li><a href="/#/home" data-leave><svg class="nav-icon" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11.5 12 4l9 7.5M5.5 9.5V20h5v-6h3v6h5V9.5"/></svg><span>ホーム</span></a></li>
+    <li><a href="/#/tasks" data-leave><svg class="nav-icon" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 6.5h10M10 12h10M10 17.5h10M3.5 6.5l1.5 1.5 2.5-3M3.5 12l1.5 1.5 2.5-3M3.5 17.5 5 19l2.5-3"/></svg><span>タスク</span></a></li>
+    <li><a href="/rental" aria-current="page" data-leave><svg class="nav-icon" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.5 12 3.5l8.5 4v9L12 20.5l-8.5-4zM3.5 7.5 12 11.5l8.5-4M12 11.5v9"/></svg><span>物品<wbr>貸出</span></a></li>
+    <li><a href="/#/all" data-leave><svg class="nav-icon" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 13.5 6.5 5h11l3 8.5V19a1 1 0 0 1-1 1h-15a1 1 0 0 1-1-1zM3.5 13.5h5l1.5 2.5h4l1.5-2.5h5"/></svg><span>メール</span></a></li>
+    <li><a href="/#/line" data-leave><svg class="nav-icon" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4c-4.7 0-8.5 3-8.5 6.8 0 3.3 2.9 6 6.8 6.6L9.5 20.5l3.9-3.1c4-.5 7.1-3.3 7.1-6.6C20.5 7 16.7 4 12 4zM8 9.5h8M8 12.5h5"/></svg><span>公式<wbr>LINE</span></a></li>
+    <li><a href="/#/contacts" data-leave><svg class="nav-icon" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5h12a1.5 1.5 0 0 1 1.5 1.5v14a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 19V5A1.5 1.5 0 0 1 6 3.5zM2.5 8h2M2.5 12h2M2.5 16h2M12 11.5a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5zM8 16.5c.7-2 2.2-3 4-3s3.3 1 4 3"/></svg><span>連絡先</span></a></li>
+    <li><a href="/#/bot" data-leave><svg class="nav-icon" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 6.5h15a1.5 1.5 0 0 1 1.5 1.5v7.5a1.5 1.5 0 0 1-1.5 1.5h-8.5L7 20.5V17h-2.5A1.5 1.5 0 0 1 3 15.5V8a1.5 1.5 0 0 1 1.5-1.5zM8 12h.01M12 12h.01M16 12h.01"/></svg><span>Bot</span></a></li>
+    <li><a href="/#/settings" data-leave><svg class="nav-icon" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h9m4 0h3M4 17h3m4 0h9M15 4.5v5M9 14.5v5"/></svg><span>設定</span></a></li>
+  </ul></nav>
+  <main class="supplies">
+    <p id="message" class="notice" role="status" aria-live="polite" hidden></p>
+
+    <section id="login-panel" class="login-panel" hidden>
+      <h1>ログイン</h1>
+      <p>医薬祭アカウントでログインしてください。</p>
+      <a class="button-link primary" href="/rental" data-leave>物品貸出の画面からログインする</a>
+    </section>
+
+    <div id="workspace" hidden>
+      <div class="page-head">
+        <h1>数の物品・団体の回収</h1>
+        <a href="/rental" data-leave>物品貸出へ戻る</a>
+      </div>
+      <p class="small intro">貸出品の数・消耗品・付属品・団体ごとの回収を記録します。カード付きの個体の貸出と返却は、従来どおり個体の画面で行います。</p>
+
+      <div class="view-tabs" role="tablist" aria-label="画面の切替">
+        <button id="tab-lend" type="button" role="tab" aria-controls="view-lend" aria-selected="true" class="selected">その場で貸す</button>
+        <button id="tab-stock" type="button" role="tab" aria-controls="view-stock" aria-selected="false">数の物品</button>
+        <button id="tab-collect" type="button" role="tab" aria-controls="view-collect" aria-selected="false">団体の回収</button>
+      </div>
+
+      <!-- 1. その場で貸す: group, then the items (one tap each), then one button. -->
+      <section id="view-lend" class="panel" role="tabpanel" aria-labelledby="tab-lend">
+        <h2>団体に物品を貸す</h2>
+        <div class="field">
+          <label for="lend-group">団体名 <span class="small">（登録済みの貸出先）</span></label>
+          <input id="lend-group" list="group-options" autocomplete="off" maxlength="120" placeholder="団体名を選ぶか入力">
+          <datalist id="group-options"></datalist>
+        </div>
+        <div id="lend-recent" class="chips" aria-label="最近の団体"></div>
+        <p id="lend-register-note" class="small" hidden></p>
+        <button id="lend-register" type="button" class="secondary full" hidden>団体を登録する</button>
+        <h3>貸す物品を押す</h3>
+        <p class="small">物品を押すと、何個入れるかを入力する欄が開きます。</p>
+        <div id="lend-items" class="pick-grid" aria-live="polite"><p class="small">読み込み中…</p></div>
+        <div id="lend-pick" class="pick-panel" hidden></div>
+        <div class="basket" aria-labelledby="basket-title">
+          <h3 id="basket-title">今回貸すもの</h3>
+          <ul id="basket-list" class="basket-list"></ul>
+          <div id="basket-checks" class="stack"></div>
+          <div class="action-row">
+            <button id="lend-submit" type="button" class="primary full" disabled>物品を選んでください</button>
+            <button id="lend-clear" type="button" class="quiet" hidden>選び直す</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2. 数の物品: 在庫・使った・返してもらう・在庫の補正・付属品・履歴 -->
+      <section id="view-stock" class="panel" role="tabpanel" aria-labelledby="tab-stock" hidden>
+        <div class="section-line"><h2>数で管理する物品</h2><button id="stock-refresh" type="button" class="quiet">最新の数に更新</button></div>
+        <details id="item-new" class="new-item" hidden>
+          <summary>物品を追加する</summary>
+          <form id="item-form" class="stack">
+            <label>物品名<input name="name" required maxlength="60" autocomplete="off"></label>
+            <label>単位<input name="unit" required maxlength="10" autocomplete="off" placeholder="脚・本・枚"></label>
+            <label>種類
+              <select name="kind"><option value="lend">貸し出す物品（椅子・机・延長コードなど）</option><option value="consumable">消耗品（ペン・テープなど）</option></select>
+            </label>
+            <label>在庫が残りわずかになる数（この数以下で表示）<input name="low_threshold" type="number" min="0" max="9999" step="1" inputmode="numeric" value="0"></label>
+            <label>登録時の在庫数<input name="initial_on_hand" type="number" min="0" max="9999" step="1" inputmode="numeric" value="0"></label>
+            <label>メモ<span class="small">（任意）</span><input name="note" maxlength="200" autocomplete="off"></label>
+            <button type="submit" class="primary full">物品を登録する</button>
+          </form>
+        </details>
+        <div id="stock-list" class="item-list" aria-live="polite"><p class="small">読み込み中…</p></div>
+      </section>
+
+      <!-- 3. 団体の回収: 団体一覧 → 回収表（その場でチェック・印刷）、個体の付属品の点検 -->
+      <section id="view-collect" class="panel" role="tabpanel" aria-labelledby="tab-collect" hidden>
+        <div class="section-line"><h2>団体ごとの回収</h2><button id="collect-refresh" type="button" class="quiet">一覧を更新</button></div>
+        <p class="small">団体に貸している個体・数の物品・付属品をまとめます。全部戻ると「回収済み」になります。未回収の団体を先に並べます。</p>
+        <div id="collect-groups" class="group-list" aria-live="polite"><p class="small">読み込み中…</p></div>
+        <details id="shortage-box" class="shortage">
+          <summary id="shortage-summary">付属品の欠品（読み込み中）</summary>
+          <div id="shortage-list" class="item-list" aria-live="polite"><p class="small">読み込み中…</p></div>
+        </details>
+
+        <section id="board" class="board" aria-labelledby="board-title" hidden>
+          <div class="section-line"><h3 id="board-title"></h3><div class="board-actions"><button id="board-print" type="button">印刷（A4 縦）</button><button id="board-refresh" type="button" class="quiet">更新</button></div></div>
+          <p id="board-status" class="board-status" role="status"></p>
+          <div id="pending-checks" class="pending" hidden></div>
+          <h4>個体（カード）</h4>
+          <p class="small">個体の返却は個体の画面で行います。ここでは付属品の点検を記録できます。</p>
+          <div id="board-cards" class="item-list"></div>
+          <h4>数の物品</h4>
+          <div id="board-supplies" class="item-list"></div>
+        </section>
+
+        <section class="code-check" aria-labelledby="code-title">
+          <h3 id="code-title">個体の付属品を点検する</h3>
+          <form id="code-form" class="inline-form">
+            <label class="grow">個体コード<input id="code-input" autocomplete="off" placeholder="IY-000123" maxlength="40"></label>
+            <button type="submit">開く</button>
+          </form>
+          <div id="code-panel"></div>
+        </section>
+      </section>
+    </div>
+  </main>
+
+  <!-- A4 portrait sheet for the 団体 page. Hidden on the screen; filled and printed by supplies.js. -->
+  <div id="print-sheet" class="print-sheet" aria-hidden="true"></div>
+</body>
+</html>

@@ -33,6 +33,7 @@
     <div id="workspace" hidden>
       <div class="view-tabs" role="tablist" aria-label="画面の切替"><button id="view-work" role="tab" aria-selected="true" aria-controls="work-view" class="selected">貸出・返却</button><button id="view-info" role="tab" aria-selected="false" aria-controls="info-view">情報</button></div>
       <div id="work-view" role="tabpanel" aria-labelledby="view-work">
+      <p class="small supplies-entry"><a href="/rental/supplies" data-leave>数の物品・団体の回収（付属品・その場で貸す）へ</a></p>
       <section class="batch" aria-labelledby="batch-title">
         <div class="section-line"><h1 id="batch-title">連続して処理する</h1><button id="new-batch" class="quiet">区切って次の団体へ</button></div>
         <div class="mode-tabs" role="group" aria-label="処理の種類"><button data-mode="borrow" class="selected" aria-pressed="true">貸出</button><button data-mode="return" aria-pressed="false">返却</button><button data-mode="check" aria-pressed="false"><span class="mode-word">随時</span><span class="mode-word">チェック</span></button></div>
