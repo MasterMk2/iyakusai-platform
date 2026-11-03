@@ -463,11 +463,16 @@ class SqliteTests(unittest.TestCase):
             self.assertEqual(failure.exception.code, "VALIDATION")
         self.assertEqual([v.task.version for v in self.store.list_tasks(self.scope)], [1])
 
-    def test_reopen_requires_officer(self):
-        created = self.create()
-        with self.assertRaises(api.ApiError) as failure:
-            self.gateway.dispatch("POST", self.path(created) + "/reopen", {"expectedVersion": 1}, self.context)
-        self.assertEqual(failure.exception.status, 403)
+    def test_any_editor_may_reopen(self):
+        # 2026-11-03 委員長判断: 完了したタスクは役員でなくても(編集できる人なら)未着手に戻せる
+        created = self.create(requirements={"purpose": "Synthetic purpose", "deliverable": "Synthetic output",
+                                            "completionCriteria": "Synthetic criteria", "openQuestions": "None"})
+        path = self.path(created)
+        self.gateway.dispatch("PATCH", path, {"expectedVersion": 1, "changes": {"status": "in_progress"}}, self.context)
+        self.gateway.dispatch("PATCH", path, {"expectedVersion": 2, "changes": {"status": "done"}}, self.context)
+        status, result = self.gateway.dispatch("POST", path + "/reopen", {"expectedVersion": 3}, self.context)
+        self.assertEqual((status, result["task"]["version"]), (200, 4))
+        self.assertNotEqual(result["task"]["status"], "done")
 
     def test_explicit_web_completion_satisfies_bot_confirmation(self):
         created = self.create(requirements={"purpose": "Synthetic purpose", "deliverable": "Synthetic output",

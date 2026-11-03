@@ -288,7 +288,7 @@ export async function installWorld(page: Page, options: WorldOptions = {}): Prom
     m = /^\/api\/tasks\/([^/]+)\/history$/.exec(path);
     if (m) { const t = tasks.find((x) => x.id === m![1]); return respond(t ? [{ id: 'h1', version: 1, action: 'created', actorName: '合成 太郎', at: t.createdAt, source: 'discord', displayChanges: [{ field: 'title', before: null, after: t.title }] }, ...(t.version > 1 ? [{ id: 'h2', version: t.version, action: 'updated', actorName: t.assignee?.displayName ?? '合成 太郎', at: t.updatedAt, source: 'web', displayChanges: [{ field: 'status', before: '未着手', after: '進行中' }] }] : [])].reverse() : []); }
     m = /^\/api\/tasks\/([^/]+)\/reopen$/.exec(path);
-    if (m && method === 'POST') { const i = tasks.findIndex((x) => x.id === m![1]); if (!officer) return respond({ error: 'forbidden', message: '再開できるのは役員だけです。' }, 403); tasks[i] = { ...tasks[i]!, status: 'todo', version: tasks[i]!.version + 1 }; return respond({ task: tasks[i], replayed: false }); }
+    if (m && method === 'POST') { const i = tasks.findIndex((x) => x.id === m![1]); tasks[i] = { ...tasks[i]!, status: 'todo', version: tasks[i]!.version + 1 }; return respond({ task: tasks[i], replayed: false }); }
     m = /^\/api\/tasks\/([^/]+)$/.exec(path);
     if (m && method === 'GET') { const t = tasks.find((x) => x.id === m![1]); return t ? respond({ task: t, provenance: t.id === tasks[0]?.id && threads[0] ? [{ kind: 'mail', label: threads[0].receipts[0]!.subject, href: `#/all?thread=${threads[0].id}` }] : [] }) : respond({ error: 'not_found', message: '見つかりません。' }, 404); }
     if (m && method === 'PATCH') {

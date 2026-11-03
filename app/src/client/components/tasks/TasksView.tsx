@@ -168,9 +168,10 @@ export function TasksView({ route, onNavigate, refresh }: { route: TaskRoute; on
   // folded departments are kept in this browser.
   const [view, setView] = useState<ListView>(storedView);
   const [foldedDepartments, setFoldedDepartments] = useState<ReadonlySet<string>>(storedFolded);
-  // The role is committee-wide (the same for every department); only officers ("admin") may reopen.
-  const admin = role === 'admin';
+  // The role is committee-wide (the same for every department). Anyone who can edit may also reopen a done task
+  // (chair's decision 2026-11-03; it was officers only before).
   const editable = role === 'editor' || role === 'admin';
+  const canReopen = editable;
 
   async function write(task: TaskView, kind: 'status' | 'reopen', status?: TaskStatus): Promise<TaskView> {
     const key = JSON.stringify({ id: task.id, v: task.version, kind, status });
@@ -204,8 +205,8 @@ export function TasksView({ route, onNavigate, refresh }: { route: TaskRoute; on
   }
   const changeStatus = (task: TaskView, status: TaskStatus, confirmed = false, openChildren = 0) => {
     if (saving[task.id] || status === task.status) return;
-    // An ordinary member cannot undo a completion (reopening is for officers), so the row asks first.
-    if (status === 'done' && !admin && !confirmed) {
+    // Someone who cannot undo a completion (reopen) is asked first.
+    if (status === 'done' && !canReopen && !confirmed) {
       setNotice(null);
       setConfirmDone(task.id);
       return;
@@ -216,7 +217,7 @@ export function TasksView({ route, onNavigate, refresh }: { route: TaskRoute; on
         const updated = await write(task, 'status', status);
         // Completing a project leaves its open children as they are; say so (an officer was not asked first).
         const children = status === 'done' && openChildren > 0 ? openChildrenText(openChildren) : '';
-        setNotice({ kind: 'ok', text: `「${task.title}」を${TASK_STATUS_LABELS[status]}にしました。${children}`, ...(status === 'done' && admin ? { undo: { task: updated, previous: task.status } } : {}) });
+        setNotice({ kind: 'ok', text: `「${task.title}」を${TASK_STATUS_LABELS[status]}にしました。${children}`, ...(status === 'done' && canReopen ? { undo: { task: updated, previous: task.status } } : {}) });
       } catch (err) {
         failed(task, err, '変更できませんでした: ');
       }
@@ -382,7 +383,7 @@ export function TasksView({ route, onNavigate, refresh }: { route: TaskRoute; on
     const selected = route.taskId === t.id;
     const due = deadlineInfo(t, today);
     const others = tagNames(t).filter((d) => (skip ? !skip.has(d.k) : d.k !== ownKey));
-    const withButtons = !context && editable && (t.status !== 'done' || admin);
+    const withButtons = !context && editable && (t.status !== 'done' || canReopen);
     const kids = children.get(t.id) ?? [];
     const open = openCount(kids);
     return (
@@ -421,7 +422,7 @@ export function TasksView({ route, onNavigate, refresh }: { route: TaskRoute; on
         {withButtons && (
           <TaskStatusButtons
             task={t}
-            canReopen={admin}
+            canReopen={canReopen}
             saving={!!saving[t.id]}
             disabled={!!saving[t.id]}
             pending={saving[t.id] && saving[t.id] !== 'reopen' ? (saving[t.id] as TaskStatus) : null}
@@ -740,7 +741,7 @@ export function TasksView({ route, onNavigate, refresh }: { route: TaskRoute; on
             taskId={route.taskId}
             departments={departments}
             canEditRole={canEditRole}
-            canReopen={admin}
+            canReopen={canReopen}
             refreshKey={detailRefresh}
             onChanged={(task, listChanged) => {
               // A saved task replaces its row at once; the list is fetched again only after a reload or a change

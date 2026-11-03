@@ -386,7 +386,7 @@ class SharedDiscordCache:
 
 
 
-# 役員(タスクを再開できる人)の判定。設定 officer_role_ids(ロール ID)があればそれだけを見る。無いときだけ
+# 役員("admin")の判定。2026-11-03 からタスクの再開は編集できる人なら誰でもできる(委員長判断)ので、今は再開には使っていない。設定 officer_role_ids(ロール ID)があればそれだけを見る。無いときだけ
 # ロール名で判定する(名前はロールを作れる人が同名のロールを作れば名乗れる。2026-11-03 セキュリティレビュー L5)。
 OFFICER_ROLE_NAMES = {"委員長", "副委員長", "役員会"}
 MANAGE_GUILD = 1 << 5
@@ -409,7 +409,8 @@ class LiveContext:
 
     Every human member of the configured guild may read and edit every department's tasks
     (committee decision). Officers (roles 委員長・副委員長・役員会, guild owner, Administrator
-    or Manage Server) are "admin" and may also reopen. Pending or timed-out members read only.
+    or Manage Server) are "admin". Since 2026-11-03 any editor may reopen a done task (chair's decision).
+    Pending or timed-out members read only.
     Discord data comes through SharedDiscordCache, reused across requests for a few seconds.
     """
 
@@ -806,7 +807,7 @@ class SqliteGateway:
                 )
                 return 201, {"task": self.task_view(created.view, context), "replayed": created.replayed}
         if task_route and not parsed.query:
-            level = "admin" if task_route[2] == "reopen" else "editor" if method == "PATCH" else "viewer"
+            level = "editor" if method in ("PATCH", "POST") else "viewer"
             context.authorize(None, level)
             number = self.task_number(task_route[1], context)
             scope = context.scope(self.domain)
