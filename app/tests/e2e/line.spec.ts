@@ -75,6 +75,33 @@ test('editor sees email and LINE on their own tabs, previews the exact reply, ed
   await expect(page.locator('details.history')).not.toContainText('E2E の返信');
 });
 
+test('the status is set from the LINE list row and from the top of the conversation, as for mail', async ({ page }) => {
+  await loginAs(page, 'u-editor-c');
+  await openLineTab(page);
+  await page.locator('button[data-line-account-id="line-oa-support"]').click();
+  const rowButtons = page.locator('ul.threads').getByRole('group', { name: '「顧客サンプルL1」の対応状況' });
+  await rowButtons.getByRole('button', { name: '対応中' }).click();
+  await expect(rowButtons.getByRole('button', { name: '対応中' })).toHaveAttribute('aria-pressed', 'true');
+
+  await lineItem(page, '顧客サンプルL1').click();
+  const detail = page.locator('.thread-detail');
+  const top = detail.getByRole('region', { name: '会話の対応状況' });
+  await expect(top.getByRole('button', { name: '対応中' })).toHaveAttribute('aria-pressed', 'true');
+  // Handling comes before the messages.
+  const before = await top.evaluate((el) => !!(el.compareDocumentPosition(document.querySelector('.line-timeline')!) & Node.DOCUMENT_POSITION_FOLLOWING));
+  expect(before).toBe(true);
+  await expect(detail.getByRole('region', { name: '対応情報' }).getByLabel('対応状況')).toHaveCount(0);
+  await top.getByRole('button', { name: '完了' }).click();
+  await expect(rowButtons.getByRole('button', { name: '完了' })).toHaveAttribute('aria-pressed', 'true');
+  await page.locator('details.history summary').click();
+  await expect(page.locator('details.history')).toContainText('「対応中」→「完了」');
+
+  await loginAs(page, 'u-viewer-b');
+  await openLineTab(page);
+  await expect(lineItem(page, '顧客サンプルL1')).toBeVisible();
+  await expect(page.locator('ul.threads').getByRole('group', { name: '「顧客サンプルL1」の対応状況' })).toHaveCount(0);
+});
+
 test('read-only viewer cannot reply, legacy history is read-only, and users without LINE access see nothing', async ({ page }) => {
   await loginAs(page, 'u-viewer-b');
   await expect(page.getByRole('navigation', { name: '受信箱' })).not.toContainText('LINE');

@@ -115,6 +115,25 @@ describe('ACL on detail, notes, drafts and outbound state', () => {
   });
 });
 
+describe('status from the list', () => {
+  it('LINE rows say whether the viewer may set the status and from which version; a stale version is refused', async () => {
+    const row = async (userId: string) =>
+      (await t.call(userId, 'GET', '/api/inbox?source=line&pageSize=50')).json.items.find((i: { conversationId: string }) => i.conversationId === CONV.l1);
+    const mine = await row(EDITOR_C);
+    expect(mine).toMatchObject({ canSetStatus: true, triageVersion: expect.any(Number) });
+    expect((await row(VIEWER_B)).canSetStatus).toBe(false);
+
+    const saved = await t.call(EDITOR_C, 'PATCH', `/api/line/conversations/${CONV.l1}/triage`, { expectedVersion: mine.triageVersion, status: 'done' });
+    expect(saved.status, saved.raw).toBe(200);
+    expect(saved.json.status).toBe('done');
+    const after = await row(EDITOR_C);
+    expect(after.statuses).toEqual(['done']);
+    expect(after.triageVersion).toBe(mine.triageVersion + 1);
+    // The same row clicked again from the old version: someone else came first.
+    expect((await t.call(EDITOR_C, 'PATCH', `/api/line/conversations/${CONV.l1}/triage`, { expectedVersion: mine.triageVersion, status: 'in_progress' })).status).toBe(409);
+  });
+});
+
 describe('received images', () => {
   it('shows an event-feed image to those who may read the conversation, through a signed-in route only', async () => {
     const t = await makeLineApp({ inboundImages: new MockInboundImages() });

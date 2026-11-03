@@ -353,7 +353,7 @@ export function ThreadList(props: {
           )}
           <ul className="rows-list threads">
             {data.items.map((t) => {
-              const withButtons = t.source === 'email' && t.canSetStatus === true;
+              const withButtons = t.canSetStatus === true;
               const id = t.source === 'email' ? t.threadId : t.conversationId;
               return (
                 <li key={id} className={`row thread-row ${props.selectedId === id ? 'selected' : ''} ${withButtons ? 'has-buttons' : ''}`}>
@@ -361,7 +361,14 @@ export function ThreadList(props: {
                   {/* Labels and assignee on the left, the row's own status buttons on the right. */}
                   <div className="row-foot">
                     <Chips statuses={t.statuses} labels={t.labels} assignees={t.assignees} showStatus={!withButtons || t.statuses.length > 1} />
-                    {t.source === 'email' && withButtons && <ThreadStatusButtons threadId={t.threadId} subject={t.subject} statuses={t.statuses} onChanged={props.onChanged ?? threads.retry} />}
+                    {withButtons && (
+                      <ThreadStatusButtons
+                        target={t.source === 'email' ? { kind: 'thread', threadId: t.threadId } : { kind: 'line', conversationId: t.conversationId, version: t.triageVersion ?? 0 }}
+                        subject={t.source === 'email' ? t.subject : t.title}
+                        statuses={t.statuses}
+                        onChanged={props.onChanged ?? threads.retry}
+                      />
+                    )}
                   </div>
                 </li>
               );

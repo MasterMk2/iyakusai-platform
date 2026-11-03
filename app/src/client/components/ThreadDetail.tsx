@@ -329,7 +329,7 @@ export function ThreadDetail({
                 対応状況<span className="hint">{receipts.length > 1 ? `押すとすぐ保存（${receipts.length} 通をまとめて変更）` : '押すとすぐ保存'}</span>
               </h3>
               <ThreadStatusButtons
-                threadId={data.threadId}
+                target={{ kind: 'thread', threadId: data.threadId }}
                 subject={data.subject}
                 statuses={[...new Set(data.receipts.map((r) => r.triage.status))]}
                 onChanged={onChanged}

@@ -104,6 +104,8 @@ export function collectLineItems(state: LineState, names: NameOf, user: User, q:
       statuses: [conv.triage.status],
       labels: [...conv.triage.labels].sort(),
       assignees: conv.triage.assigneeId ? [names(conv.triage.assigneeId)] : [],
+      canSetStatus: canTriageLine(state, user, conv.accountId),
+      triageVersion: conv.triage.version,
     });
   }
   return items;

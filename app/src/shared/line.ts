@@ -41,6 +41,9 @@ export interface LineInboxItem {
   statuses: HandlingStatus[];
   labels: string[];
   assignees: string[];
+  /** The viewer may change the status here (list rows' buttons, 2026-11-04), and the version to change it from. */
+  canSetStatus?: boolean;
+  triageVersion?: number;
 }
 
 export type InboxItem = ({ source: 'email' } & ThreadListItem) | LineInboxItem;
