@@ -155,7 +155,9 @@ export class DiscordAccountService {
 
   constructor(private readonly o: AccountServiceOptions) {
     this.config = o.config;
-    this.hasher = o.hasher ?? new PasswordHasher();
+    // Two derivations at a time (2 x 144 MiB) and a queue of 16: a sign-in burst on the festival days answers
+    // 503 less often (2026-11-03, review L4).
+    this.hasher = o.hasher ?? new PasswordHasher({ maxConcurrent: 2, maxQueue: 16 });
     this.now = o.now ?? Date.now;
   }
 

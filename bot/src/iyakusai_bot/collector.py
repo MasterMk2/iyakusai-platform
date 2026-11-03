@@ -8,7 +8,11 @@ raw が新しくなると /ask の Discord raw 検索(knowledge_search)が最新
 - 単一インスタンスは既存のホストロックで保証される。よって **RPi の systemd タイマー等で
   二重に走らせないこと**(_state.json 競合・二重収集になる)。収集の常駐はこのループに一本化。
 - 収集は同期処理(urllib+sleep)。**サブプロセスで実行**しイベントループ(heartbeat/ /ask)を止めない。
-- トークンは Bot と同じ環境変数(DISCORD_TOKEN / DISCORD_TOKEN_FILE)を継承して使う。
+- **実行するスクリプトは Bot と同じホストのローカルの写し(tools_dir)だけ**。共有ドライブ(knowledge_dir)
+  上の版は実行しない(2026-11-03 セキュリティレビュー H1: ドライブに書ける人が Bot の権限でコードを
+  動かせる経路になっていた)。スクリプトにはデータの場所を環境変数 IYAKUSAI_KNOWLEDGE_DIR で渡す。
+- 子プロセスは `python -I`(隔離モード)で起き、環境変数は必要なものだけ渡す。Discord のトークンは
+  収集スクリプトだけに(ファイルの場所があればその場所を)渡す。
   トークンのファイルは、共有ドライブなど複数人が読める場所に置かない。
 """
 
@@ -18,9 +22,7 @@ import asyncio
 import datetime
 import json
 import logging
-import os
 import re
-import sys
 from pathlib import Path
 
 from discord.ext import commands, tasks
@@ -36,16 +38,25 @@ _DONE_RE = re.compile(r"完了: 新規\s*(\d+)\s*件")
 # なるうえ、JST は夏時間が無く固定オフセットで厳密に等価なため(query_fields.py:27-29 と同じ判断)。
 _JST = datetime.timezone(datetime.timedelta(hours=9))
 
+from .tools_runner import (  # noqa: E402  (discord に依存しない部分は tools_runner.py)
+    ATTACHMENTS_SCRIPT, COLLECT_SCRIPT, SEMANTIC_SCRIPT, STALENESS_SCRIPT,
+    child_env, default_tools_dir, resolve_tools_dir, script_command,
+)
+
+__all__ = ["Collector", "child_env", "default_tools_dir", "resolve_tools_dir", "script_command"]
+
 
 def _today_jst() -> str:
     return datetime.datetime.now(_JST).date().isoformat()
 
 
 class Collector(commands.Cog):
-    def __init__(self, bot: commands.Bot, script: Path, interval_min: int = 30,
-                 timeout_sec: int = 600):
+    def __init__(self, bot: commands.Bot, tools_dir: Path, interval_min: int = 30,
+                 timeout_sec: int = 600, knowledge_dir: Path | None = None):
         self.bot = bot
-        self.script = Path(script)
+        self.tools_dir = Path(tools_dir)
+        self.script = self.tools_dir / COLLECT_SCRIPT
+        self.knowledge_dir = Path(knowledge_dir) if knowledge_dir is not None else Path(bot.cfg.knowledge_dir)
         self.timeout = timeout_sec
         self._running = False
         self.collect_loop.change_interval(minutes=max(1, interval_min))
@@ -55,6 +66,10 @@ class Collector(commands.Cog):
 
     async def cog_unload(self):
         self.collect_loop.cancel()
+
+    def _env(self, *, discord_token: bool = False) -> dict[str, str]:
+        return child_env(self.knowledge_dir, discord_token=discord_token,
+                         config_path=getattr(self.bot.cfg, "config_path", None))
 
     @tasks.loop(minutes=30)
     async def collect_loop(self):
@@ -89,14 +104,12 @@ class Collector(commands.Cog):
         self._running = True
         proc = None
         try:
-            env = dict(os.environ)
-            env["PYTHONIOENCODING"] = "utf-8"
             proc = await asyncio.create_subprocess_exec(
-                sys.executable, str(self.script),
-                cwd=str(self.script.parent),
+                *script_command(self.script),
+                cwd=str(self.tools_dir),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=env,
+                env=self._env(discord_token=True),
             )
             out, err = await asyncio.wait_for(proc.communicate(), timeout=self.timeout)
         except asyncio.TimeoutError:
@@ -130,18 +143,16 @@ class Collector(commands.Cog):
 
     async def _maybe_fetch_attachments(self):
         """本文収集の後、同じ認証で添付を保存する。ログのみで外部通知はしない。"""
-        script = self.script.with_name("fetch_attachments.py")
+        script = self.tools_dir / ATTACHMENTS_SCRIPT
         if not script.exists():
             log.warning("添付回収スクリプトが見つかりません")
             return
         proc = None
         try:
-            env = dict(os.environ)
-            env["PYTHONIOENCODING"] = "utf-8"
             proc = await asyncio.create_subprocess_exec(
-                sys.executable, str(script), cwd=str(script.parent),
+                *script_command(script), cwd=str(self.tools_dir),
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                env=env,
+                env=self._env(discord_token=True),
             )
             out, _ = await asyncio.wait_for(proc.communicate(), timeout=self.timeout)
             if proc.returncode != 0:
@@ -192,17 +203,15 @@ class Collector(commands.Cog):
         cfg = self.bot.cfg
         if not getattr(cfg, "kn_vector", False) or not cfg.knowledge_dir:
             return
-        script = cfg.knowledge_dir / "tools" / "fulltext" / "build_semantic_indexes.py"
+        script = self.tools_dir / SEMANTIC_SCRIPT
         if not script.is_file():
-            log.warning("意味検索索引の更新ツールがありません")
+            log.warning("意味検索索引の更新ツールがありません: %s", script.name)
             return
         proc = None
         try:
-            env = dict(os.environ)
-            env["PYTHONIOENCODING"] = "utf-8"
             proc = await asyncio.create_subprocess_exec(
-                sys.executable, str(script), cwd=str(script.parent),
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env)
+                *script_command(script), cwd=str(self.tools_dir),
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=self._env())
             out, _ = await asyncio.wait_for(proc.communicate(), timeout=900)
             for line in (out or b"").decode("utf-8", "replace").splitlines():
                 try:
@@ -238,17 +247,14 @@ class Collector(commands.Cog):
         kd = getattr(cfg, "knowledge_dir", None)
         if not kd:
             return
-        script = Path(kd) / "discord" / "tools" / "digest_staleness.py"
+        script = self.tools_dir / STALENESS_SCRIPT
         if not script.exists():
             return
         try:
-            env = dict(os.environ)
-            env["PYTHONIOENCODING"] = "utf-8"
             proc = await asyncio.create_subprocess_exec(
-                sys.executable, str(script), "--json",
-                "--threshold", str(getattr(cfg, "collect_staleness_threshold", 30)),
-                cwd=str(script.parent),
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env)
+                *script_command(script, "--json", "--threshold", str(getattr(cfg, "collect_staleness_threshold", 30))),
+                cwd=str(self.tools_dir),
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=self._env())
             out, _ = await asyncio.wait_for(proc.communicate(), timeout=120)
             data = json.loads((out or b"").decode("utf-8", "replace").strip().splitlines()[-1])
         except Exception:

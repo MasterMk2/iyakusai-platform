@@ -2,7 +2,7 @@
  * 医薬祭 委員会アプリ メール送り出し  send_mail_to_app.gs  (Google Apps Script)
  * ------------------------------------------------------------------------------
  * Gmail のメールを 1 通ずつ元の形（RFC 5322）のまま、委員会アプリの受け口
- *   https://app.iyakusai.com/v1/mail/ingest
+ *   https://app.example.org/v1/mail/ingest
  * へ署名付きで送る。Gmail には一切書き込まない（送信・移動・削除・既読化をしない）。
  *
  * 同じスクリプトを 2 つのアカウントで使う（設定 SOURCE だけ変える）。
@@ -25,7 +25,7 @@ const CONFIG = {
   // 'collector'（委員会の共用アカウント）または 'backfill'（委員長のアカウント・過去分 1 回）。
   SOURCE: 'collector',
 
-  ENDPOINT: 'https://app.iyakusai.com/v1/mail/ingest',
+  ENDPOINT: 'https://app.example.org/v1/mail/ingest',
 
   // これより前のメールは送らない（要件: 2025-08 以降）。
   START_AFTER: '2025/08/01',

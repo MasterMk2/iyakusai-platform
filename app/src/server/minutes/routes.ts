@@ -20,7 +20,9 @@ import {
   type MinutesPerson,
 } from '../../shared/minutes.js';
 import { SESSION_COOKIE } from '../discord-auth/http.js';
+import { isTemporaryStaffLoginId } from '../discord-auth/temporary-staff.js';
 import { DomainError, notFound, type User } from '../domain/types.js';
+import { attachmentDisposition } from '../http/content-disposition.js';
 import { HttpError } from '../http/http-error.js';
 import type { MailSession } from '../mailbox/routes.js';
 import type { People } from '../mailbox/service.js';
@@ -53,8 +55,6 @@ const UNCONFIRMED_PER_PERSON = 10;
 const DISK_RESERVE_BYTES = 5 * 1024 * 1024 * 1024;
 /** An upload left unfinished this long is dropped. */
 const UPLOAD_EXPIRES_MS = 12 * 3_600_000;
-/** Login IDs of the temporary staff accounts (as in the contacts). */
-const TEMPORARY_STAFF_LOGIN = /^iy-(?:90\d{6}|91000000)$/;
 /** Words the speech model is told to expect, besides the members' names and departments. */
 const FIXED_GLOSSARY = ['医薬祭', '実行委員会', '役員会', '富山大学', '杉谷', '五福', '高岡', '富大祭', '創己祭', '白パス', '協賛', '出展団体', '物品貸出', '基盤システム'];
 
@@ -135,7 +135,7 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
   const nameOf = (userId: string) => deps.people.lookup(userId)?.displayName ?? '（不明な利用者）';
 
   const temporaryStaff = (user: User) =>
-    TEMPORARY_STAFF_LOGIN.test(user.id) || deps.discordUserIdOf(user.id) === null || departmentsOfLabel(user.roleLabel).includes(TEMPORARY_STAFF_DEPARTMENT);
+    isTemporaryStaffLoginId(user.id) || deps.discordUserIdOf(user.id) === null || departmentsOfLabel(user.roleLabel).includes(TEMPORARY_STAFF_DEPARTMENT);
 
   function member(request: FastifyRequest): User {
     const user = deps.requireUser(request);
@@ -410,7 +410,7 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
     ].join('\n');
     const text = head + (row.body || (row.draft ? draftToMarkdown(row.title, row.heldOn, row.draft) : ''));
     reply.header('Content-Type', 'text/markdown; charset=utf-8');
-    reply.header('Content-Disposition', `attachment; filename="minutes.md"; filename*=UTF-8''${encodeURIComponent(`【AI】議事録_${row.heldOn.replaceAll('-', '')}_${row.title}.md`.replace(/[\\/:*?"<>|]/g, '_')).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)}`);
+    reply.header('Content-Disposition', attachmentDisposition(`【AI】議事録_${row.heldOn.replaceAll('-', '')}_${row.title}.md`.replace(/[\\/:*?"<>|]/g, '_'), 'minutes.md'));
     reply.header('Cache-Control', 'no-store');
     return reply.send(text);
   });

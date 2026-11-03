@@ -70,6 +70,9 @@ agentic = "all"           # all=全質問 / heavy=まとめ・経緯系のみ(�
 agent_model = "sonnet"    # ターン数が多い分 sonnet 推奨(opus はトークン消費大)
 agent_max_turns = 15      # ターン上限(トークン浪費の頭打ち)
 agent_timeout_sec = 300
+# claude CLI に --strict-mcp-config を渡し、利用者の MCP サーバーを読ませない(既定 true)。古い CLI で
+# この引数が無いときだけ false にする(`claude --help` で確かめる)。2026-11-03
+strict_mcp_config = true
 
 [knowledge]
 # 省略時は knowledge_search.py の既定(discord/digest, mail/digest, line/digest, プレイブック, カタログ/Google文書目録_*.md)
@@ -90,6 +93,10 @@ vector_topk = 4           # 意味検索から拾う文書数
 # ※単一インスタンスはホストロックで保証。RPi 等で systemd タイマーと二重に走らせないこと。
 enabled = true             # false にすると常駐収集を止める(手動収集運用に戻す)
 interval_min = 30          # 収集間隔(分)
+# 収集・保守スクリプト(collect_discord_v2.py・fetch_attachments.py・digest_staleness.py・build_semantic_indexes.py)の
+# **ローカルの**置き場。省略時はリポジトリの collectors/discord。共有ドライブ・ミラーの中は拒む(2026-11-03)。
+# Bot は共有ドライブ上のスクリプトを実行しない(ドライブに書ける人が Bot の権限でコードを動かせる経路を閉じるため)。
+# tools_dir = '/home/<bot>/iyakusai/collectors/discord'
 # digest 本文の鮮度リマインド: 収集後に digest_staleness.py を回し、digest(.md)が raw に
 # 遅れていたら知らせる。**自動再生成はしない**(要約の劣化回避=②③の再生成判断は人)。
 staleness_threshold = 30   # 未反映がこの件数以上で「再生成を」と促す

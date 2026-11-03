@@ -1,6 +1,8 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { ConfigError } from '../auth.js';
+import { parseKeyMaterial } from '../tasks/signing.js';
+import type { DiscordLineAuth } from './discord.js';
 
 // The committee's official LINE account in the unified app (2026-10-28). An operator file `line.json` next to
 // the mailbox configuration (SMM_MAIL_CONFIG): present, LINE is on; absent, LINE is off and the app is as before.
@@ -29,8 +31,11 @@ export interface LineOaConfig {
   mediaDir: string;
   /** The official account's own chat history (JSONL, contract A of 2026-11-02), or null. */
   history: { file: string } | null;
-  /** Replies from Discord threads through the Bot (contract C of 2026-11-02), or null (no internal routes). */
-  discord: { key: string; threadMapFile: string } | null;
+  /**
+   * Replies from Discord threads through the Bot (contract C of 2026-11-02), or null (no internal routes). `auth` is
+   * how the Bot proves itself (discord.ts): "signed" (svc-auth/v1, a key of 32 bytes or more) or "bearer" (the first version).
+   */
+  discord: { auth: DiscordLineAuth; threadMapFile: string } | null;
 }
 
 const KNOWN = new Set(['version', 'account', 'receiver', 'send', 'history', 'discord']);
@@ -38,7 +43,7 @@ const ACCOUNT_KNOWN = new Set(['id', 'name', 'botUserId']);
 const RECEIVER_KNOWN = new Set(['url', 'pullTokenFile', 'pollSeconds', 'settleSeconds']);
 const SEND_KNOWN = new Set(['accessTokenFile', 'monthlyLimit', 'allowGroups', 'apiBase', 'publicBaseUrl']);
 const HISTORY_KNOWN = new Set(['file']);
-const DISCORD_KNOWN = new Set(['enabled', 'keyFile', 'threadMapFile']);
+const DISCORD_KNOWN = new Set(['enabled', 'keyFile', 'threadMapFile', 'auth']);
 
 /** An https origin, optionally with a path prefix (no query, no credentials, no trailing slash). */
 export function publicBaseUrlOf(value: unknown, where: string): string {
@@ -139,10 +144,18 @@ export function validateLineConfig(raw: unknown, dataDir: string, secrets: { pul
     const d = object(c.discord, 'line.json の discord', DISCORD_KNOWN);
     if (d.enabled !== undefined && typeof d.enabled !== 'boolean') throw new ConfigError('discord.enabled は true / false で指定してください。');
     const threadMapFile = filePath(d.threadMapFile, 'discord.threadMapFile');
+    const auth = d.auth ?? 'bearer';
+    if (auth !== 'bearer' && auth !== 'signed') throw new ConfigError('discord.auth は "signed"（署名付き・推奨）か "bearer" にしてください。');
     if (d.enabled === true) {
       if (!send) throw new ConfigError('discord を使うには send（公式LINE の送信）の設定が要ります。');
       if (!secrets.discordKey) throw new ConfigError('discord.keyFile（Bot との鍵）がありません。');
-      discord = { key: secrets.discordKey, threadMapFile };
+      if (auth === 'signed') {
+        const key = parseKeyMaterial(secrets.discordKey);
+        if (!key) throw new ConfigError('discord.auth が "signed" のとき、discord.keyFile の鍵は 32 バイト以上の乱数（16 進または base64）にしてください。');
+        discord = { auth: { mode: 'signed', key }, threadMapFile };
+      } else {
+        discord = { auth: { mode: 'bearer', key: secrets.discordKey }, threadMapFile };
+      }
     }
   }
 

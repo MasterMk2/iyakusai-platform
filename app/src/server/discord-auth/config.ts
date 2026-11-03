@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { ConfigError } from '../auth.js';
 import { parseKeyMaterial } from '../tasks/signing.js';
@@ -49,8 +49,12 @@ function keyFile(path: unknown, name: string): Buffer {
   if (typeof path !== 'string' || !path) throw new ConfigError(`${name} を指定してください。`);
   let text: string;
   try {
+    // Owner-only like every other key file (2026-11-03, review L1).
+    const stat = statSync(resolve(path));
+    if (process.platform !== 'win32' && (stat.mode & 0o077) !== 0) throw new ConfigError(`${name} の鍵ファイルは所有者だけが読める権限（600 など）にしてください。`);
     text = readFileSync(resolve(path), 'utf8');
-  } catch {
+  } catch (err) {
+    if (err instanceof ConfigError) throw err;
     throw new ConfigError(`${name} の鍵ファイルを読み込めません。`);
   }
   const key = parseKeyMaterial(text);

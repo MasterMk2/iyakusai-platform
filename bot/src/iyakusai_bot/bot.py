@@ -155,11 +155,17 @@ class IyakusaiBot(commands.Bot):
                                 roles_enabled=self.get_cog("RoleStatus") is not None))
         # F3: Discord 収集の常駐化(raw を最新化 → /ask の raw 検索に反映)
         if self.cfg.collect_enabled and self.cfg.knowledge_dir:
-            from .collector import Collector
-            script = self.cfg.knowledge_dir / "discord" / "tools" / "collect_discord_v2.py"
-            await self.add_cog(Collector(self, script, self.cfg.collect_interval_min))
-            log.info("Discord 収集を常駐化 (間隔=%d分, script=%s)",
-                     self.cfg.collect_interval_min, script.name)
+            from .collector import Collector, resolve_tools_dir
+            # 2026-11-03 セキュリティレビュー H1: 収集・保守スクリプトは共有ドライブ上の版ではなく、Bot と同じホストの
+            # ローカルの写し([collect] tools_dir。既定はリポジトリの collectors/discord)だけを実行する。
+            tools_dir = resolve_tools_dir(self.cfg)
+            if tools_dir is None:
+                log.error("Discord 収集を停止: ローカルの収集スクリプトが見つかりません。[collect] tools_dir に "
+                          "collectors/discord の写し(共有ドライブ・ミラーの外)を指定してください")
+            else:
+                await self.add_cog(Collector(self, tools_dir, self.cfg.collect_interval_min,
+                                             knowledge_dir=self.cfg.knowledge_dir))
+                log.info("Discord 収集を常駐化 (間隔=%d分, tools=%s)", self.cfg.collect_interval_min, tools_dir)
             # F8: 編集・削除を Gateway でリアルタイム記録(差分収集では拾えない穴を埋める)。
             # 収集が有効なときだけ意味があるので同じ条件下に置く。
             if self.cfg.edit_watch_enabled:

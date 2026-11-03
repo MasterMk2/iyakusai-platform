@@ -27,6 +27,7 @@ import { attachRentalDriveSync, SYNC_ACK_PATH } from '../rental/drive-sync.js';
 import { registerRentalRoutes, type RentalRuntime } from '../rental/routes.js';
 import { registerTaskRoutes, type TaskRuntime } from '../tasks/routes.js';
 import { registerAssistantRoutes, type AssistantRuntime } from '../assistant/routes.js';
+import { attachmentDisposition } from './content-disposition.js';
 import { HttpError } from './http-error.js';
 import { registerLineRoutes, type LineRuntime } from './line-routes.js';
 import { DISCORD_LINE_PATHS } from '../line/discord.js';
@@ -510,7 +511,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       const attachment = store.read((s) => getAttachment(s, user, receiptId, attachmentId));
       // Always a download, never rendered inline by the app origin.
       reply.header('Content-Type', 'application/octet-stream');
-      reply.header('Content-Disposition', `attachment; filename="attachment.bin"; filename*=UTF-8''${encodeURIComponent(attachment.filename)}`);
+      reply.header('Content-Disposition', attachmentDisposition(attachment.filename, 'attachment.bin'));
       reply.header('Content-Security-Policy', "default-src 'none'; sandbox");
       return reply.send(Buffer.from(attachment.content, 'utf8'));
     });

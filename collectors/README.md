@@ -10,6 +10,10 @@
 | `collect_discord_v2.py` | 読めるチャンネルのメッセージを、チャンネルごとの JSONL（1 行 1 メッセージ、リアクション付き）に差分で保存する。運用では Bot の `collector.py` が定期的に動かす |
 | `fetch_attachments.py` | 添付ファイルの中身を保存する。JSONL には添付の名前しか無いので、API でメッセージを取り直して新しい URL を得てから落とす |
 | `build_author_aliases.py` | 表示名とサーバーのニックネームの対応表（`_authors.json`）を作る。ユーザー ID を軸にして、過去の表示名も覚えておく。`/ask` の答えの著者名に使う |
+| `digest_staleness.py` | digest（要約）が raw にどれだけ遅れているかを数える。Bot の `collector.py` が収集のたびに動かし、しきい値を超えたら知らせる（再生成はしない） |
+| `build_semantic_indexes.py` | 意味検索（bge-m3）の索引を作り直す。Bot の `collector.py` が動かす。Bot の `iyakusai_bot.semantic_index` を使う |
+
+**Bot が動かすスクリプトは、Bot と同じホストに置いたこのフォルダの写しだけです**（`config.toml` の `[collect] tools_dir`。既定はリポジトリの `collectors/discord`）。資料の目録（共有ドライブ）に置いた写しを Bot が実行することはありません。資料の場所は環境変数 `IYAKUSAI_KNOWLEDGE_DIR` で渡されます。
 
 Bot のトークンは、トークンのファイルから読みます（場所は各スクリプトの冒頭の設定）。
 

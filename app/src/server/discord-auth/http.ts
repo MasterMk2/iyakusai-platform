@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { DiscordSessionResponse, LoginActivityResponse, SessionUser, SignInSummary } from '../../shared/api.js';
@@ -108,8 +109,49 @@ const studentIdBody = z.strictObject({ password: z.string().max(1024), studentId
 const reauthBody = z.strictObject({ password: z.string().min(1).max(1024) });
 const logoutBody = z.strictObject({ everywhere: z.boolean().optional() });
 
+/** Clients the limiters remember at most. Beyond it the entries whose window passed go first, then the least recently seen. */
+export const LIMITER_MAX_CLIENTS = 4096;
+
+/**
+ * Keeps the table bounded without ever forgetting everyone at once (2026-11-03, review M4: the old `clear()` let one
+ * client with many addresses reset every other client's count). `hits` is kept in least-recently-seen order.
+ */
+function pruneHits(hits: Map<string, number[]>, now: number, windowMs: number): void {
+  if (hits.size <= LIMITER_MAX_CLIENTS) return;
+  for (const [k, times] of hits) if (times.every((t) => t <= now - windowMs)) hits.delete(k);
+  while (hits.size > LIMITER_MAX_CLIENTS) {
+    const oldest = hits.keys().next().value;
+    if (oldest === undefined) break;
+    hits.delete(oldest);
+  }
+}
+
+/** Sixteen bytes of an IPv6 address in the canonical form normalizeAddress gives (hex groups, one `::` at most). */
+function ipv6Bytes(address: string): Buffer | null {
+  if (address.split('::').length > 2) return null;
+  const [head = '', tail] = address.split('::');
+  const h = head ? head.split(':') : [];
+  const t = tail ? tail.split(':') : [];
+  const groups = tail === undefined ? h : [...h, ...Array<string>(Math.max(0, 8 - h.length - t.length)).fill('0'), ...t];
+  if (groups.length !== 8 || groups.some((g) => !/^[0-9a-f]{1,4}$/i.test(g))) return null;
+  const bytes = Buffer.alloc(16);
+  groups.forEach((g, i) => bytes.writeUInt16BE(parseInt(g, 16), i * 2));
+  return bytes;
+}
+
+/**
+ * The client as the limiters count it: an IPv4 address as it is, an IPv6 address by its /64 (a person usually has a
+ * whole /64 to pick addresses from, so counting each address alone would count nothing).
+ */
+export function clientBucket(address: string | null): string | null {
+  if (address === null) return null;
+  if (isIP(address) === 4) return address;
+  const bytes = ipv6Bytes(address);
+  return bytes ? `${bytes.subarray(0, 8).toString('hex').replace(/(.{4})(?=.)/g, '$1:')}::/64` : null;
+}
+
 /** Per-client attempt limit for sign-in and registration (memory only; per-account limits are stored). */
-class AttemptLimiter {
+export class AttemptLimiter {
   private readonly hits = new Map<string, number[]>();
   constructor(private readonly limit: number, private readonly windowMs: number) {}
   allow(key: string | null, now = Date.now()): boolean {
@@ -117,14 +159,18 @@ class AttemptLimiter {
     const recent = (this.hits.get(k) ?? []).filter((t) => t > now - this.windowMs);
     if (recent.length >= this.limit) return false;
     recent.push(now);
+    this.hits.delete(k);
     this.hits.set(k, recent);
-    if (this.hits.size > 4096) this.hits.clear();
+    pruneHits(this.hits, now, this.windowMs);
     return true;
+  }
+  get size(): number {
+    return this.hits.size;
   }
 }
 
 /** Failures per client (memory only): refused once `limit` failures fall within the window. */
-class FailureLimiter {
+export class FailureLimiter {
   private readonly hits = new Map<string, number[]>();
   constructor(private readonly limit: number, private readonly windowMs: number) {}
   private recent(k: string, now: number): number[] {
@@ -137,8 +183,12 @@ class FailureLimiter {
     const k = key ?? 'unknown';
     const recent = this.recent(k, now);
     recent.push(now);
+    this.hits.delete(k);
     this.hits.set(k, recent);
-    if (this.hits.size > 4096) this.hits.clear();
+    pruneHits(this.hits, now, this.windowMs);
+  }
+  get size(): number {
+    return this.hits.size;
   }
 }
 
@@ -155,10 +205,16 @@ export function installDiscordAuth(app: FastifyInstance, rt: DiscordAuthRuntime,
 
   const expectedOrigin = (request: FastifyRequest) => rt.publicOrigin ?? `http://${request.headers.host ?? ''}`;
 
+  let forwardedWarned = false;
   function clientKey(request: FastifyRequest): string | null {
-    if (!production) return normalizeAddress(request.raw.socket.remoteAddress);
+    if (!production) return clientBucket(normalizeAddress(request.raw.socket.remoteAddress));
     const forwarded = rawHeaderValues(request, 'x-forwarded-for');
-    return forwarded.length === 1 ? normalizeAddress(forwarded[0]!.split(',').at(-1)?.trim()) : null;
+    if (forwarded.length !== 1 && !forwardedWarned) {
+      // Without the proxy's X-Forwarded-For every client shares one count (review L7): said once, so a proxy change is noticed.
+      forwardedWarned = true;
+      console.error('ログインの試行制限: リバースプロキシから X-Forwarded-For が 1 つ届きませんでした。すべての利用者が 1 つの枡で数えられます（プロキシの設定を確かめてください）。');
+    }
+    return forwarded.length === 1 ? clientBucket(normalizeAddress(forwarded[0]!.split(',').at(-1)?.trim())) : null;
   }
 
   function toUser(identity: AccountIdentity | Omit<AccountIdentity, 'degraded'>): User {

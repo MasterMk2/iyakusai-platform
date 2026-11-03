@@ -13,6 +13,8 @@ export interface SmtpSettings {
   security: 'tls' | 'starttls';
   user: string;
   password: string;
+  /** Host name said in EHLO (the app's public host); 'localhost' when unknown. */
+  ehloHost?: string;
 }
 
 export interface SmtpEnvelope {
@@ -213,7 +215,8 @@ export function smtpTransport(s: SmtpSettings, connect: Connector = connectSocke
       };
       try {
         await expect('greeting', (code) => code === 220);
-        let ehlo = await command('EHLO app.iyakusai.com', 'greeting', (code) => code === 250);
+        const ehloHost = s.ehloHost && /^[a-z0-9.-]{1,253}$/i.test(s.ehloHost) ? s.ehloHost : 'localhost';
+        let ehlo = await command(`EHLO ${ehloHost}`, 'greeting', (code) => code === 250);
         if (s.security === 'starttls') {
           if (!ehlo.lines.some((l) => /^250[ -]STARTTLS\b/i.test(l))) throw new SmtpError('starttls', null, 'no', 'メールサーバーが暗号化（STARTTLS）に対応していません。');
           await command('STARTTLS', 'starttls', (code) => code === 220);
@@ -226,7 +229,7 @@ export function smtpTransport(s: SmtpSettings, connect: Connector = connectSocke
             throw new SmtpError('starttls', null, 'no', 'メールサーバーとの暗号化に失敗しました。');
           }
           c.attach(secure);
-          ehlo = await command('EHLO app.iyakusai.com', 'greeting', (code) => code === 250);
+          ehlo = await command(`EHLO ${ehloHost}`, 'greeting', (code) => code === 250);
         }
         if (!ehlo.lines.some((l) => /^250[ -]AUTH\b.*\bPLAIN\b/i.test(l))) throw new SmtpError('auth', null, 'no', 'メールサーバーがこのログイン方式に対応していません。');
         const token = Buffer.from(`\u0000${s.user}\u0000${s.password}`, 'utf8').toString('base64');

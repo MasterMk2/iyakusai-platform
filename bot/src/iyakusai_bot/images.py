@@ -31,7 +31,7 @@ from discord.ext import commands
 
 from . import image_logic as IL
 from . import remind_logic as rl
-from .ai_provider import AIError, AIResult, elapsed_note
+from .ai_provider import AIError, AIResult, child_env, elapsed_note
 from .config import ImageSettings
 from .knowledge import safe_send
 
@@ -92,7 +92,7 @@ class ImageMaker:
                 proc = await asyncio.create_subprocess_exec(
                     self.python, "-I", str(self.script),
                     stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE, cwd=str(work))
+                    stderr=asyncio.subprocess.PIPE, cwd=str(work), env=child_env())
             except OSError as error:
                 log.error("/image 変換の起動に失敗: %s", type(error).__name__)
                 raise ImageFailure("RENDER_FAILED", "画像への変換を始められませんでした。") from None

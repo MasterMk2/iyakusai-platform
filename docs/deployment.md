@@ -104,7 +104,7 @@ services:
 | `names.json` | Discord の ID → 本名の名簿（任意）。画面とデータソースの名前に使う |
 | `student-ids.json` | Discord の ID → 学籍番号の名簿（任意）。はじめから学籍番号でログインできるようにする |
 | `mailbox.json` | 委員会のメールの設定（例は [`app/deploy/unified/mailbox.example.json`](../app/deploy/unified/mailbox.example.json)、説明は [mail.md](mail.md)） |
-| `line.json` | LINE 公式アカウント（`mailbox.json` と同じフォルダ）。あれば LINE をメールの画面に出す。`send` とチャネルのアクセストークンが無ければ読むだけ |
+| `line.json` | LINE 公式アカウント（`mailbox.json` と同じフォルダ）。あれば LINE をメールの画面に出す。`send` とチャネルのアクセストークンが無ければ読むだけ。Bot からの返信（`discord`）は `"auth": "signed"`（svc-auth/v1、鍵 32 バイト以上）にする |
 | `*.key` | 経路ごとの鍵。32 バイト以上の乱数 |
 | `bot-host-ca.crt` | Bot ホストの CA 証明書 |
 

@@ -80,6 +80,8 @@ class Config:
     # 制限を踏まないよう 3 秒未満にはしない。
     ai_progress: bool = True
     ai_progress_interval_sec: int = 7
+    # claude CLI に --strict-mcp-config を渡す(利用者の MCP サーバーを読ませない)。古い CLI では false にする。2026-11-03
+    ai_strict_mcp_config: bool = True
     mirror_dir: Path | None = None     # 無害化ミラー(既定: ~/.iyakusai/mirror。ドライブ外に置く)
     neta_dir: Path | None = None       # ネタ帳(既定: ~/.iyakusai/neta。個人の投稿=ドライブ外に置く)
     contact: str = CONTACT_DEFAULT     # 不具合・要望の連絡先([help] contact。名前はコードに書かない)
@@ -101,6 +103,11 @@ class Config:
     # F3 ログ収集の常駐化(要件定義 §6 F3)
     collect_enabled: bool = True               # Bot 内で Discord 収集を定期実行するか
     collect_interval_min: int = 30             # 収集間隔(分)
+    # 収集・保守スクリプト(collect_discord_v2.py など)の**ローカルの**置き場。共有ドライブ・ミラーの中は拒む。
+    # None なら collector.default_tools_dir()(リポジトリの collectors/discord)。2026-11-03 セキュリティレビュー H1
+    collect_tools_dir: Path | None = None
+    # 読み込んだ config.toml の場所(保守スクリプトへ IYAKUSAI_CONFIG として渡す)
+    config_path: Path | None = None
     # 独立した低優先度のネタ動画worker。省略時OFF、AI APIを使用しない。
     neta_video: dict = field(default_factory=lambda: {"enabled": False})
     # /todo 委員会タスク(task_store.TaskSettings で検証)。省略時OFF。
@@ -362,6 +369,9 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
     kn = raw.get("knowledge", {})
     org = _org_section(raw)
     collect = raw.get("collect", {})
+    tools_dir_raw = collect.get("tools_dir")
+    if tools_dir_raw is not None and (not isinstance(tools_dir_raw, str) or not tools_dir_raw.strip()):
+        sys.exit("config: collect.tools_dir は絶対パスの文字列で指定してください")
     haiku = raw.get("haiku", {})
     haiku_mode = str(haiku.get("mode", "react"))
     if haiku_mode not in ("react", "reply", "digest", "both"):
@@ -405,6 +415,7 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         ai_progress=bool(ai.get("progress", True)),
         ai_progress_interval_sec=max(3, _as_int(ai.get("progress_interval_sec"),
                                                 "ai.progress_interval_sec", 7)),
+        ai_strict_mcp_config=_as_bool(ai.get("strict_mcp_config"), "ai.strict_mcp_config", True),
         mirror_dir=Path(paths["mirror_dir"]).expanduser() if paths.get("mirror_dir")
                    else Path.home() / ".iyakusai" / "mirror",
         neta_dir=Path(paths["neta_dir"]).expanduser() if paths.get("neta_dir")
@@ -426,6 +437,11 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         kn_vector_topk=_as_int(kn.get("vector_topk"), "knowledge.vector_topk", 4),
         collect_enabled=bool(collect.get("enabled", True)),
         collect_interval_min=_as_int(collect.get("interval_min"), "collect.interval_min", 30),
+        collect_tools_dir=(_outside_shared(Path(tools_dir_raw.strip()).expanduser(), (
+            data_dir_path, knowledge_path,
+            Path(paths["mirror_dir"]).expanduser() if paths.get("mirror_dir") else Path.home() / ".iyakusai" / "mirror"),
+            "collect.tools_dir") if tools_dir_raw else None),
+        config_path=p.resolve(),
         neta_video=raw.get("neta_video", {"enabled": False}),
         tasks=raw.get("tasks", {"enabled": False}),
         task_screening=raw.get("task_screening", {"enabled": False}),
