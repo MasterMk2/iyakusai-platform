@@ -9,6 +9,7 @@ import { ContactsStore } from '../contacts/store.js';
 import { registerMinutesRoutes } from '../minutes/routes.js';
 import { MinutesStore } from '../minutes/store.js';
 import { DomainError, notFound, type User } from '../domain/types.js';
+import { attachmentDisposition } from '../http/content-disposition.js';
 import { HttpError } from '../http/http-error.js';
 import { registerLineRoutes } from '../http/line-routes.js';
 import { LineFileRefused, openCommitteeLine, type CommitteeLine } from '../line/committee-runtime.js';
@@ -152,7 +153,9 @@ const FORGET_USE_AFTER_MS = 15 * 86_400_000;
 export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, deps: MailboxRouteDeps): { service: MailboxService; cases: MailCaseSource } {
   const service = new MailboxService(rt.store, rt.addresses, deps.people, rt.config.send?.mailboxIds ?? null);
   const sendConfig = rt.config.send;
-  const sender = sendConfig ? new MailSender(rt.store, rt.addresses, { ...rt.config, send: sendConfig }, rt.transport ?? smtpTransport(sendConfig.smtp), service) : null;
+  // EHLO says the app's public host (2026-11-03, review M6); the SMTP account itself is in the configuration.
+  const ehloHost = deps.publicOrigin ? new URL(deps.publicOrigin).hostname : undefined;
+  const sender = sendConfig ? new MailSender(rt.store, rt.addresses, { ...rt.config, send: sendConfig }, rt.transport ?? smtpTransport({ ...sendConfig.smtp, ...(ehloHost ? { ehloHost } : {}) }), service) : null;
   const now = deps.now ?? Date.now;
   const idleMs = rt.config.idleHours * 3_600_000;
   const preview = new Set(rt.config.previewDiscordUserIds);
@@ -236,7 +239,7 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
         imageBaseUrl,
         media: opened.media,
         discord: lineConfig.discord
-          ? { key: lineConfig.discord.key, threadMapFile: lineConfig.discord.threadMapFile, memberByDiscordId, fromTrustedProxy: deps.fromTrustedProxy ?? (() => false) }
+          ? { auth: lineConfig.discord.auth, threadMapFile: lineConfig.discord.threadMapFile, memberByDiscordId, fromTrustedProxy: deps.fromTrustedProxy ?? (() => false), ...(deps.now ? { now: deps.now } : {}) }
           : null,
       },
     });
@@ -363,7 +366,7 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
     const attachment = service.attachment(user, receiptId, attachmentId);
     // Always a download, never rendered by the app's origin.
     reply.header('Content-Type', 'application/octet-stream');
-    reply.header('Content-Disposition', `attachment; filename="attachment.bin"; filename*=UTF-8''${encodeURIComponent(attachment.filename)}`);
+    reply.header('Content-Disposition', attachmentDisposition(attachment.filename, 'attachment.bin'));
     reply.header('Content-Security-Policy', "default-src 'none'; sandbox");
     return reply.send(attachment.content);
   });

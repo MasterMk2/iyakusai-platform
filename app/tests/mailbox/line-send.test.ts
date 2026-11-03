@@ -1,3 +1,4 @@
+import { createHash, createHmac } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -7,7 +8,7 @@ import { NameRoster } from '../../src/server/discord-auth/names.js';
 import { StateStore } from '../../src/server/domain/store.js';
 import { buildApp } from '../../src/server/http/app.js';
 import { committeeLineState } from '../../src/server/line/committee.js';
-import { bearerMatches, ThreadMap } from '../../src/server/line/discord.js';
+import { bearerMatches, DISCORD_LINE_CLIENT, ThreadMap } from '../../src/server/line/discord.js';
 import type { FeedRecord } from '../../src/server/line/feed.js';
 import { applyHistoryRows, historyArchiveId, LineHistoryImporter, parseHistoryRow } from '../../src/server/line/history.js';
 import { MEDIA_TTL_MS, sniffImage } from '../../src/server/line/media.js';
@@ -17,6 +18,7 @@ import { messagesOf } from '../../src/server/line/queries.js';
 import { LineStore } from '../../src/server/line/store.js';
 import { CommitteeAddresses } from '../../src/server/mailbox/addresses.js';
 import { MailboxStore } from '../../src/server/mailbox/store.js';
+import { signedHeaders } from '../../src/server/tasks/signing.js';
 import { CHAIR, MEMBER, OTHER, PASSWORD, register, ROLE_GENERAL_AFFAIRS, ROLE_PLANNING, setup } from '../discord-auth/helpers.js';
 import { seedState, TEST_HOST, TEST_PORT } from '../helpers.js';
 import { testMailboxConfig } from './helpers.js';
@@ -27,6 +29,8 @@ import { testMailboxConfig } from './helpers.js';
 const PULL = 'pull-token-synthetic-0001';
 const ACCESS = 'access-token-synthetic-0001';
 const BOT_KEY = 'bot-key-synthetic-0123456789abcdef';
+// A 32-byte key for the signed mode (hex; synthetic).
+const SIGNED_KEY_HEX = '00112233445566778899aabbccddeeff0123456789abcdef0123456789abcdef';
 const USER_A = `U${'a'.repeat(32)}`;
 const USER_B = `U${'b'.repeat(32)}`;
 const USER_C = `U${'c'.repeat(32)}`;
@@ -92,12 +96,17 @@ describe('line.json additions', () => {
     const c = cfg({ send: { publicBaseUrl: 'https://app.example.invalid/' }, history: { file: '/config/line-history.jsonl' }, discord: { enabled: true, keyFile: '/config/k', threadMapFile: '/config/threads.json' } }, BOT_KEY);
     expect(c.send?.publicBaseUrl).toBe('https://app.example.invalid');
     expect(c.history?.file).toBe(path.resolve('/config/line-history.jsonl'));
-    expect(c.discord).toEqual({ key: BOT_KEY, threadMapFile: path.resolve('/config/threads.json') });
+    expect(c.discord).toEqual({ auth: { mode: 'bearer', key: BOT_KEY }, threadMapFile: path.resolve('/config/threads.json') });
     expect(c.mediaDir).toBe(path.join('/data/mail', 'line-media'));
     expect(cfg({}).history).toBeNull();
     expect(cfg({}).discord).toBeNull();
     // Without enabled the routes do not exist (no key needed).
     expect(cfg({ discord: { threadMapFile: '/config/threads.json' } }).discord).toBeNull();
+    // 2026-11-03: "signed" needs a 32-byte key; "bearer" (the default) takes the first version's key.
+    expect(cfg({ send: {}, discord: { enabled: true, keyFile: '/config/k', threadMapFile: '/config/threads.json' } }, BOT_KEY).discord?.auth.mode).toBe('bearer');
+    expect(cfg({ send: {}, discord: { enabled: true, keyFile: '/config/k', threadMapFile: '/config/threads.json', auth: 'signed' } }, SIGNED_KEY_HEX).discord?.auth).toMatchObject({ mode: 'signed' });
+    expect(() => cfg({ send: {}, discord: { enabled: true, keyFile: '/config/k', threadMapFile: '/config/threads.json', auth: 'signed' } }, BOT_KEY)).toThrow(/32/);
+    expect(() => cfg({ send: {}, discord: { enabled: true, keyFile: '/config/k', threadMapFile: '/config/threads.json', auth: 'token' } }, BOT_KEY)).toThrow(/auth/);
   });
 
   it('refuses an http or query public URL, discord without a key or without send, and unknown keys', () => {
@@ -286,6 +295,7 @@ interface BuildOptions {
   send?: Record<string, unknown>;
   history?: boolean;
   discord?: boolean;
+  discordAuth?: 'bearer' | 'signed';
   publicOrigin?: string;
 }
 
@@ -297,10 +307,10 @@ async function build(o: BuildOptions = {}) {
       ...DOC,
       send: { apiBase: 'https://api.example.invalid', ...o.send },
       ...(o.history ? { history: { file: path.join(dir, 'history.jsonl') } } : {}),
-      ...(o.discord ? { discord: { enabled: true, keyFile: path.join(dir, 'bot.key'), threadMapFile: path.join(dir, 'threads.json') } } : {}),
+      ...(o.discord ? { discord: { enabled: true, keyFile: path.join(dir, 'bot.key'), threadMapFile: path.join(dir, 'threads.json'), ...(o.discordAuth ? { auth: o.discordAuth } : {}) } } : {}),
     },
     config.dataDir,
-    { pullToken: PULL, accessToken: ACCESS, discordKey: o.discord ? BOT_KEY : null },
+    { pullToken: PULL, accessToken: ACCESS, discordKey: o.discord ? (o.discordAuth === 'signed' ? SIGNED_KEY_HEX : BOT_KEY) : null },
   );
   mail = new MailboxStore(config.dataDir);
   const seed = await seedState();
@@ -357,14 +367,36 @@ async function call(method: 'GET' | 'POST' | 'PUT' | 'PATCH', url: string, optio
 }
 
 /** The Bot's call over the internal network (or, with `remote`, through the proxy). */
-async function bot(url: string, body: unknown, options: { key?: string | null; remote?: string } = {}) {
+interface SignedCall {
+  nonce?: string;
+  now?: number;
+  path?: string;
+  key?: string;
+}
+
+/** svc-auth/v1 headers of the signed mode (2026-11-03), over the path and the bytes of the body like the Bot host's other calls. */
+function signedCall(url: string, payload: string, o: SignedCall): Record<string, string> {
+  const key = Buffer.from(o.key ?? SIGNED_KEY_HEX, 'hex');
+  const input = { client: DISCORD_LINE_CLIENT, method: 'POST', path: o.path ?? url, body: payload, actor: '', now: o.now ?? ctx.clock.now };
+  const headers = signedHeaders(key, input);
+  if (o.nonce) {
+    // A chosen nonce (to replay it): sign again with that nonce.
+    const canonical = ['svc-auth/v1', input.client, 'POST', input.path, headers['x-svc-timestamp'], o.nonce, '', createHash('sha256').update(payload, 'utf8').digest('hex')].join('\n');
+    headers['x-svc-nonce'] = o.nonce;
+    headers['x-svc-signature'] = createHmac('sha256', key).update(canonical, 'utf8').digest('hex');
+  }
+  return headers;
+}
+
+async function bot(url: string, body: unknown, options: { key?: string | null; remote?: string; signed?: SignedCall } = {}) {
   const key = options.key === undefined ? BOT_KEY : options.key;
+  const payload = JSON.stringify(body);
   const res = await app.inject({
     method: 'POST',
     url,
     remoteAddress: options.remote ?? '172.18.0.4',
-    headers: { host: 'iyakusai-app:8080', 'content-type': 'application/json', ...(key ? { authorization: `Bearer ${key}` } : {}) },
-    payload: JSON.stringify(body),
+    headers: { host: 'iyakusai-app:8080', 'content-type': 'application/json', ...(key && !options.signed ? { authorization: `Bearer ${key}` } : {}), ...(options.signed ? signedCall(url, payload, options.signed) : {}) },
+    payload,
   });
   return { status: res.statusCode, json: res.json() as Json };
 }
@@ -662,6 +694,26 @@ describe('replies from Discord (contract C)', () => {
     expect((await bot('/internal/line/discord/preview', body, { remote: PROXY })).status).toBe(404);
     expect((await bot('/internal/line/discord/%70review', body, { remote: PROXY })).status).toBe(404);
     expect((await bot('/internal/line/discord/send', { consentId: 'x', discordUserId: CHAIR }, { remote: PROXY })).status).toBe(404);
+    expect(pushes).toHaveLength(0);
+  });
+
+  it('with "signed", takes only a fresh svc-auth/v1 signature: no bearer key, no replay, no other path or time', async () => {
+    const now = ctx.clock.now;
+    records = [record(now, 600)];
+    writeThreads({ [THREAD]: { sourceType: 'user', sourceId: USER_A, orgId: 'oa_synthetic_1', orgName: '合成商店' } });
+    await build({ discord: true, discordAuth: 'signed' });
+    const chair = await signIn(CHAIR, '21000001');
+    await lineItems(chair.cookie, 1);
+    // An unknown thread answers 404 only after the caller proved itself: it is the proof that the signature passed.
+    const body = { threadId: '999', discordUserId: CHAIR, text: '合成' };
+    expect((await bot('/internal/line/discord/preview', body, { key: SIGNED_KEY_HEX })).status).toBe(401);
+    expect(await bot('/internal/line/discord/preview', body, { signed: { nonce: 'synthetic-nonce-0000000000000001' } })).toMatchObject({ status: 404, json: { code: 'unknown_thread' } });
+    expect((await bot('/internal/line/discord/preview', body, { signed: { nonce: 'synthetic-nonce-0000000000000001' } })).status).toBe(401);
+    expect((await bot('/internal/line/discord/preview', body, { signed: { now: now - 31_000 } })).status).toBe(401);
+    expect((await bot('/internal/line/discord/preview', body, { signed: { path: '/internal/line/discord/send' } })).status).toBe(401);
+    expect((await bot('/internal/line/discord/preview', body, { signed: { key: '00112233445566778899aabbccddeeff0123456789abcdef0123456789abcdee' } })).status).toBe(401);
+    expect((await bot('/internal/line/discord/preview', body, { signed: {}, remote: PROXY })).status).toBe(404);
+    expect(await bot('/internal/line/discord/preview', body, { signed: {} })).toMatchObject({ status: 404, json: { code: 'unknown_thread' } });
     expect(pushes).toHaveLength(0);
   });
 

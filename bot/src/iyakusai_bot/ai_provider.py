@@ -497,7 +497,10 @@ def build_agent_prompt(question: str, persona_style: str | None = None,
 # 2026-10-14 セキュリティレビュー H-2: Glob/Grep も Read と同じくミラー配下に限定する。
 # 範囲なしの "Glob","Grep" はミラー外(ホームの秘密ファイル等)の検索を許していた(Pi の CLI 2.1.251 で再現)。
 _AGENT_ALLOWED_TOOLS = "Read(./**),Glob(./**),Grep(./**)"
-_AGENT_DENIED_TOOLS = "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch,Task"
+# 2026-11-03 セキュリティレビュー M1: Task は Agent に改名され、Skill・ToolSearch・Monitor も増えた。名前の列挙は
+# CLI の版に追随しないと素通りするので、ここと ONESHOT_DENIED_TOOLS を直すときは `claude --help` のツール名と見比べる。
+_AGENT_DENIED_TOOLS = ("Bash,Edit,MultiEdit,Write,NotebookEdit,WebFetch,WebSearch,Task,Agent,Skill,ToolSearch,Monitor,"
+                       "TodoWrite,BashOutput,KillShell,SlashCommand,ExitPlanMode,EnterPlanMode")
 
 # one-shot(/ask の AI 要約・/doc)で禁じるツール = **読み取り系も含めて全部**。
 # 要件定義 §5 は「ツールは全て無効化し、純粋なテキスト生成として使う」と定めているのに、
@@ -511,10 +514,30 @@ _AGENT_DENIED_TOOLS = "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch,Task"
 # **`--allowedTools ""` は使わない**: 空文字を「制限なし」と解釈する版があり得るうえ、
 # 引数エラーで one-shot が本番で全滅する可能性がある。存在しないツール名を並べても害は
 # 無いので、CLI の版が変わっても素通りしないよう既知の名前を広めに列挙しておく。
-_ONESHOT_DENIED_TOOLS = (
-    "Bash,Edit,MultiEdit,Write,NotebookEdit,Read,Glob,Grep,"
-    "WebFetch,WebSearch,Task,TodoWrite,BashOutput,KillShell,SlashCommand,ExitPlanMode"
+# 2026-11-03 セキュリティレビュー M1: one-shot の禁止リストは **ここ 1 か所**(screening_run・/image も import する)。
+# 統合アプリの議事録の処理役(app/deploy/minutes-worker/minutes_worker.py)と同じ内容にそろえる。
+ONESHOT_DENIED_TOOLS = (
+    "Bash,Edit,MultiEdit,Write,NotebookEdit,Read,Glob,Grep,LS,"
+    "WebFetch,WebSearch,Task,Agent,Skill,ToolSearch,Monitor,"
+    "TodoWrite,BashOutput,KillShell,SlashCommand,ExitPlanMode,EnterPlanMode"
 )
+_ONESHOT_DENIED_TOOLS = ONESHOT_DENIED_TOOLS
+
+# 利用者の MCP サーバー(~/.claude.json など)を読ませない。純テキスト生成と資料の検索に MCP は要らない。
+# 古い CLI で使えないときは [ai] strict_mcp_config = false で外す(起動の前に `claude --help` で確かめる)。
+STRICT_MCP_ARGS = ("--strict-mcp-config",)
+
+# Bot の環境変数のうち、子プロセス(claude CLI・画像の変換)に渡さないもの(2026-11-03 セキュリティレビュー L6)。
+# Discord のトークンは CLI にも変換にも要らない。
+_CHILD_ENV_DROP_PREFIXES = ("DISCORD_",)
+
+
+def child_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+    """子プロセスに渡す環境変数。Bot の環境から Discord のトークンなどを除いたもの。"""
+    env = {k: v for k, v in os.environ.items() if not k.startswith(_CHILD_ENV_DROP_PREFIXES)}
+    if extra:
+        env.update(extra)
+    return env
 
 
 # /ask の「考える深さ」(実行時の上書き)が取りうる値。config._EFFORT_LEVELS と同じ並び。
@@ -548,6 +571,7 @@ class ClaudeCLIProvider:
         effort: str = "",
         agent_effort: str = "",
         oneshot_cwd: Path | str | None = None,
+        strict_mcp: bool = True,
     ):
         self.model = model
         self.heavy_model = heavy_model
@@ -561,6 +585,8 @@ class ClaudeCLIProvider:
         # 未設定の環境の挙動は一切変わらない。値の妥当性は config._as_effort が起動時に検査済み。
         self.effort = effort
         self.agent_effort = agent_effort
+        # --strict-mcp-config を渡すか([ai] strict_mcp_config。既定 true)。2026-11-03
+        self.strict_mcp = strict_mcp
         # claude CLI は1本で数百MB。/ask のエージェント段は Cog 側でも2本に絞って
         # いるが、one-shot と /doc は無制限だったため、混み合うとホスト(RPi 4GB)の
         # メモリを持っていかれる。**CLI の起動そのもの**をここで2本に制限する。
@@ -656,7 +682,7 @@ class ClaudeCLIProvider:
         # --disallowedTools は要件定義 §5「ツールは全て無効化」を**引数で**担保するため
         # (プロンプト上の「指示に従わない」だけでは構造的な保証にならない・2026-08-12)。
         args = [exe, "-p", "--model", model, "--output-format", "json",
-                "--disallowedTools", _ONESHOT_DENIED_TOOLS]
+                "--disallowedTools", ONESHOT_DENIED_TOOLS, *(STRICT_MCP_ARGS if self.strict_mcp else ())]
         eff = self.effort if effort is None else effort
         if eff:
             args += ["--effort", eff]
@@ -721,6 +747,7 @@ class ClaudeCLIProvider:
             "--max-turns", str(self.agent_max_turns),
             "--allowedTools", _AGENT_ALLOWED_TOOLS,
             "--disallowedTools", _AGENT_DENIED_TOOLS,
+            *(STRICT_MCP_ARGS if self.strict_mcp else ()),
         ]
         if eff:
             args += ["--effort", eff]
@@ -830,6 +857,7 @@ class ClaudeCLIProvider:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(cwd),
+                env=child_env(),
             )
             out, err = await asyncio.wait_for(
                 proc.communicate(prompt.encode("utf-8")), timeout=timeout
@@ -917,6 +945,7 @@ class ClaudeCLIProvider:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(cwd),
+                env=child_env(),
             )
         except OSError as e:
             raise AIError(f"CLI 起動失敗: {e}") from e
@@ -1011,6 +1040,7 @@ def make_provider(cfg):
             agent_timeout_sec=getattr(cfg, "ai_agent_timeout_sec", 300),
             effort=getattr(cfg, "ai_effort", ""),
             agent_effort=getattr(cfg, "ai_agent_effort", ""),
+            strict_mcp=bool(getattr(cfg, "ai_strict_mcp_config", True)),
         )
     if cfg.ai_provider == "none":
         return None

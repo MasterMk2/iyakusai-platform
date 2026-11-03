@@ -26,11 +26,17 @@ Worker 版に対する違い(Pi 完結にしたことで良くなった点):
       "channel_secret":       "...",      # 署名検証。必須
       "channel_access_token": "...",      # 表示名・メディア取得。無くても受信はできる
       "pull_token":           "...",      # /export・/media の認証。必須
+      "pull_allowed_clients": ["127.0.0.1/32", "172.18.0.0/16"],  # /export・/media を受け付ける接続元(CIDR)。空なら制限なし
+      "pull_failure_limit":   10,         # 同じ接続元からトークン不一致がこの回数続いたら
+      "pull_failure_window_sec": 900,     #   この秒数の間 /export・/media を拒む(総当たりの抑止。2026-11-03)
       "listen_host":          "127.0.0.1",
       "listen_port":          8788,
       "store":                "/opt/iyakusai-line-oa",
       "retention_days":       0           # 0 = 無期限
     }
+
+⚠ /webhook だけを外(リバースプロキシ)へ出すこと。/export・/media はトークンだけで守られているので、
+   プロキシの経路がパスを限っていないなら pull_allowed_clients で接続元を限る。
 
 配置の例は ../systemd/ と collectors/README.md
 """
@@ -41,6 +47,7 @@ import argparse
 import base64
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import queue
@@ -353,6 +360,55 @@ def enrich(store: Store, cfg: dict, key: str) -> None:
         store.put_event(key, rec)
 
 
+# --------------------------------------------------------------------------- 取り込み口の守り
+
+class PullGuard:
+    """/export・/media の接続元の制限と、トークン不一致の連続に対する一時的な拒否(2026-11-03 セキュリティレビュー M2)。
+
+    allowed: CIDR の列。空なら接続元は限らない。
+    limit 回の不一致が window 秒の中に入ったら、その接続元からの要求を window 秒の間すべて拒む。
+    数えるのはソケットの接続元(転送ヘッダーは見ない)。トークンの値はどこにも残さない。
+    """
+
+    def __init__(self, allowed, limit: int = 10, window: int = 900, clock=time.time):
+        self.networks = [ipaddress.ip_network(str(a), strict=False) for a in (allowed or [])]
+        self.limit, self.window, self.clock = max(1, int(limit)), max(1, int(window)), clock
+        self._failures: dict[str, list[float]] = {}
+        self._lock = threading.Lock()
+
+    def permitted(self, client: str) -> bool:
+        if not self.networks:
+            return True
+        try:
+            address = ipaddress.ip_address(client)
+        except ValueError:
+            return False
+        return any(address in net for net in self.networks)
+
+    def _recent(self, client: str, now: float) -> list[float]:
+        return [t for t in self._failures.get(client, ()) if t > now - self.window]
+
+    def blocked(self, client: str) -> bool:
+        with self._lock:
+            return len(self._recent(client, self.clock())) >= self.limit
+
+    def record(self, client: str, ok: bool) -> None:
+        with self._lock:
+            now = self.clock()
+            if ok:
+                self._failures.pop(client, None)
+                return
+            recent = self._recent(client, now)
+            recent.append(now)
+            self._failures[client] = recent
+            # 表は接続元の数だけ伸びるので、古いものから落として 1024 件に抑える
+            if len(self._failures) > 1024:
+                for key in [k for k, v in self._failures.items() if not [t for t in v if t > now - self.window]]:
+                    del self._failures[key]
+                while len(self._failures) > 1024:
+                    del self._failures[next(iter(self._failures))]
+
+
 # --------------------------------------------------------------------------- HTTP
 
 def verify_signature(secret: str, body: bytes, signature: str | None) -> bool:
@@ -369,6 +425,7 @@ class Handler(BaseHTTPRequestHandler):
     cfg: dict = {}
     store: Store | None = None
     work_q: queue.Queue | None = None
+    guard: PullGuard | None = None
 
     def log_message(self, fmt, *args):   # 既定のアクセスログはパスを丸ごと出すので使わない
         pass
@@ -387,8 +444,22 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def _authed(self) -> bool:
-        return hmac.compare_digest(self.headers.get("Authorization") or "",
-                                   f"Bearer {self.cfg['pull_token']}")
+        """/export・/media の認証。接続元の制限 → 連続失敗の拒否 → トークンの定数時間比較。理由は log にだけ(トークンは書かない)。"""
+        client = str(self.client_address[0])
+        guard = self.guard
+        if guard is not None and not guard.permitted(client):
+            log("pull 403 許可外の接続元")
+            return False
+        if guard is not None and guard.blocked(client):
+            log("pull 401 トークン不一致が続いたため一時的に拒否")
+            return False
+        ok = hmac.compare_digest(self.headers.get("Authorization") or "",
+                                 f"Bearer {self.cfg['pull_token']}")
+        if guard is not None:
+            guard.record(client, ok)
+        if not ok:
+            log("pull 401 トークン不一致")
+        return ok
 
     # --- POST /webhook ----------------------------------------------------
 
@@ -514,6 +585,15 @@ def load_config(path: Path) -> dict:
     cfg.setdefault("api_data_base", "https://api-data.line.me")
     cfg.setdefault("channel_access_token", "")
     cfg.setdefault("retention_days", 0)
+    cfg.setdefault("pull_allowed_clients", [])
+    cfg.setdefault("pull_failure_limit", 10)
+    cfg.setdefault("pull_failure_window_sec", 900)
+    if not isinstance(cfg["pull_allowed_clients"], list):
+        sys.exit(f"[ERROR] {path} の pull_allowed_clients は CIDR の配列で指定してください")
+    try:
+        [ipaddress.ip_network(str(a), strict=False) for a in cfg["pull_allowed_clients"]]
+    except ValueError as e:
+        sys.exit(f"[ERROR] {path} の pull_allowed_clients に読めない値があります: {e}")
     return cfg
 
 
@@ -540,11 +620,14 @@ def serve(cfg: dict) -> int:
         log(f"保持期間を超えた {removed} 日分を削除しました")
 
     Handler.cfg, Handler.store, Handler.work_q = cfg, store, work_q
+    Handler.guard = PullGuard(cfg["pull_allowed_clients"], int(cfg["pull_failure_limit"]), int(cfg["pull_failure_window_sec"]))
     httpd = ThreadingHTTPServer((cfg["listen_host"], int(cfg["listen_port"])), Handler)
     log(f"listening on {cfg['listen_host']}:{cfg['listen_port']} / store={cfg['store']}")
     if cfg["listen_host"] not in ("127.0.0.1", "localhost", "::1"):
         log("⚠ ループバック以外で待ち受けています。/export と /media は PULL_TOKEN で守られていますが、"
             "外部へ出すのは /webhook だけにすること")
+        if not cfg["pull_allowed_clients"]:
+            log("⚠ pull_allowed_clients が空です。/export と /media はどの接続元からも(トークンがあれば)読めます")
     if not cfg["channel_access_token"]:
         log("⚠ channel_access_token が未設定です。送信者の表示名と添付の実体は取得しません")
     try:
@@ -574,6 +657,7 @@ def main() -> int:
         print(f"channel_secret   : {'あり' if cfg['channel_secret'] else 'なし'}")
         print(f"access_token     : {'あり' if cfg['channel_access_token'] else 'なし(表示名・実体を取らない)'}")
         print(f"pull_token       : {'あり' if cfg['pull_token'] else 'なし'}")
+        print(f"pull_allowed     : {', '.join(cfg['pull_allowed_clients']) or '(制限なし)'} / 不一致 {cfg['pull_failure_limit']} 回で {cfg['pull_failure_window_sec']} 秒拒否")
         print(f"retention_days   : {cfg['retention_days']}(0=無期限)")
         return 0
 

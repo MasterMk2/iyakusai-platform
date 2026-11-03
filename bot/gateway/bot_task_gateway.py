@@ -386,6 +386,8 @@ class SharedDiscordCache:
 
 
 
+# 役員(タスクを再開できる人)の判定。設定 officer_role_ids(ロール ID)があればそれだけを見る。無いときだけ
+# ロール名で判定する(名前はロールを作れる人が同名のロールを作れば名乗れる。2026-11-03 セキュリティレビュー L5)。
 OFFICER_ROLE_NAMES = {"委員長", "副委員長", "役員会"}
 MANAGE_GUILD = 1 << 5
 
@@ -412,10 +414,12 @@ class LiveContext:
     """
 
     def __init__(self, client, settings, actor_id: str, bot_id: str, cache: SharedDiscordCache | None = None,
-                 departments=None):
+                 departments=None, officer_role_ids=None):
         self.client, self.settings, self.actor_id, self.bot_id = client, settings, actor_id, bot_id
         self.cache = cache or SharedDiscordCache()
         self.departments = departments or {}
+        # ロール ID の集合(空なら OFFICER_ROLE_NAMES で判定)
+        self.officer_role_ids = frozenset(officer_role_ids or ())
         self.deadline = time.monotonic() + 7
         self.guilds, self.members = {}, {}
         self.guild_id = str(min(settings.guild_ids))
@@ -518,9 +522,10 @@ class LiveContext:
                 permissions |= permission_number(role["permissions"])
                 if rid in roles:
                     names.add(role.get("name"))
-        if member_id == guild["owner_id"] or permissions & (ADMIN | MANAGE_GUILD) or names & OFFICER_ROLE_NAMES:
+        if member_id == guild["owner_id"] or permissions & (ADMIN | MANAGE_GUILD):
             return "admin"
-        return "editor"
+        officer = (roles & self.officer_role_ids) if self.officer_role_ids else (names & OFFICER_ROLE_NAMES)
+        return "admin" if officer else "editor"
 
     def role(self, department: str | None = None, member_id: str | None = None):
         if department is not None and department not in self.departments:
@@ -962,7 +967,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                 payload = {}
             context = LiveContext(self.server.discord, self.server.settings, actor_id, self.server.bot_id,
                                   getattr(self.server, "discord_cache", None),
-                                  getattr(self.server.domain, "DEPARTMENTS", None))
+                                  getattr(self.server.domain, "DEPARTMENTS", None),
+                                  officer_role_ids=getattr(self.server, "officer_role_ids", None))
             # 2026-10-14 追加: Bot タブの連携口。連携口が無効なら、経路が無いのと同じ 404 にする。
             path = self.path.split("?", 1)[0]
             if path == ASSISTANT_PREFIX or path.startswith(ASSISTANT_PREFIX + "/"):
@@ -1069,6 +1075,16 @@ def assistant_settings(config: dict):
 PRIVATE_NETWORKS = tuple(ipaddress.IPv4Network(net) for net in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
 
 
+def officer_role_ids(config: dict) -> frozenset[str]:
+    """設定 officer_role_ids(役員のロール ID の配列)。無ければ空(ロール名で判定し、起動時に注意を出す)。"""
+    value = config.get("officer_role_ids")
+    if value is None:
+        return frozenset()
+    if type(value) is not list or not value or any(type(v) is not str or not ID_PATTERN.fullmatch(v) for v in value):
+        raise ValueError("invalid officer_role_ids")
+    return frozenset(value)
+
+
 def load_site(directory: Path) -> tuple[str, frozenset[str]]:
     """この配置だけの待ち受けと接続元。公開する木には置かず、配布フォルダの site.json から読む。
 
@@ -1130,6 +1146,9 @@ def main():
     server.auth, server.discord, server.settings, server.bot_id = ServiceAuth(key), discord, settings, bot_id
     server.domain, server.gateway = domain, SqliteGateway(domain, store)
     server.allowed_host = f"{config['host']}:{config['port']}"
+    server.officer_role_ids = officer_role_ids(config)
+    if not server.officer_role_ids:
+        sys.stderr.write("Task API: officer_role_ids が未設定のため、役員の判定はロール名で行います。\n")
     server.assistant = None
     if assistant_config is not None:
         # 同じフォルダの assistant_gateway.py は連携口が有効なときだけ読む(無効なら取り込まない)。

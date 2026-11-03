@@ -41,7 +41,10 @@ _CANDIDATES = [
 TOKEN_FILE = next((p for p in _CANDIDATES if p and Path(p).exists()), _CANDIDATES[1])
 
 API = "https://discord.com/api/v10"
-RAW_DIR = Path(__file__).resolve().parent.parent / "raw"
+# データの場所。Bot が動かすときは IYAKUSAI_KNOWLEDGE_DIR(資料の目録)を渡す(2026-11-03: スクリプトは
+# 目録の外のローカルな写しから動くので、置き場所から raw を決められない)。無ければ旧配置(目録/discord/tools)とみなす。
+_KNOWLEDGE_DIR = os.environ.get("IYAKUSAI_KNOWLEDGE_DIR")
+RAW_DIR = (Path(_KNOWLEDGE_DIR) / "discord" / "raw") if _KNOWLEDGE_DIR else Path(__file__).resolve().parent.parent / "raw"
 STATE_FILE = RAW_DIR / "_state.json"
 
 

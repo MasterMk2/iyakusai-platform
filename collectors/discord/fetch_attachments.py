@@ -49,8 +49,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from collect_discord_v2 import load_token, api_get, sanitize  # noqa: E402
 
-RAW_DIR = Path(__file__).resolve().parent.parent / "raw"
-ATT_DIR = Path(__file__).resolve().parent.parent / "attachments"
+_KNOWLEDGE_DIR = os.environ.get("IYAKUSAI_KNOWLEDGE_DIR")   # Bot が渡す資料の目録(2026-11-03)。無ければ旧配置
+_DISCORD_DIR = (Path(_KNOWLEDGE_DIR) / "discord") if _KNOWLEDGE_DIR else Path(__file__).resolve().parent.parent
+RAW_DIR = _DISCORD_DIR / "raw"
+ATT_DIR = _DISCORD_DIR / "attachments"
 INDEX = ATT_DIR / "_index.tsv"
 COLS = ["saved_rel", "channel", "msg_id", "ts", "author", "filename",
         "size", "sha256", "content_type", "status"]

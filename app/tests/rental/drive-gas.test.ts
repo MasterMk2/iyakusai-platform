@@ -173,11 +173,11 @@ function loadScript(handle: (request: SyncRequest) => SyncResponse, env: Env) {
   };
   const UrlFetchApp = {
     fetch: (url: string, o: { method: string; headers: Record<string, string>; payload?: Signed; contentType?: string; followRedirects: boolean; muteHttpExceptions: boolean }) => {
-      expect(url.startsWith('https://app.iyakusai.com/v1/rental/sync/')).toBe(true);
+      expect(url.startsWith('https://app.example.org/v1/rental/sync/')).toBe(true);
       expect([o.followRedirects, o.muteHttpExceptions]).toEqual([false, true]);
       const request: SyncRequest = {
         method: o.method.toUpperCase(),
-        url: url.slice('https://app.iyakusai.com'.length),
+        url: url.slice('https://app.example.org'.length),
         rawHeaders: [...Object.entries(o.headers).flat(), ...(o.contentType ? ['Content-Type', o.contentType] : [])],
         body: o.payload ? toBuffer(o.payload) : Buffer.alloc(0),
       };

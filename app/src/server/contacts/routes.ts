@@ -20,6 +20,7 @@ import {
 import { departmentsOfLabel, isMailAddress, TEMPORARY_STAFF_DEPARTMENT } from '../../shared/mailbox.js';
 import { isTemporaryStaffLoginId } from '../discord-auth/temporary-staff.js';
 import { DomainError, notFound, type User } from '../domain/types.js';
+import { attachmentDisposition } from '../http/content-disposition.js';
 import { HttpError } from '../http/http-error.js';
 import type { MailSession } from '../mailbox/routes.js';
 import type { People } from '../mailbox/service.js';
@@ -193,7 +194,7 @@ export function registerContactRoutes(app: FastifyInstance, opened: ContactsStor
     const csv = '\ufeff' + [head, ...rows].map((cells) => cells.map(csvCell).join(',')).join('\r\n') + '\r\n';
     const day = new Date(now).toLocaleDateString('sv-SE', { timeZone: 'Asia/Tokyo' }).replaceAll('-', '');
     reply.header('Content-Type', 'text/csv; charset=utf-8');
-    reply.header('Content-Disposition', `attachment; filename="contacts.csv"; filename*=UTF-8''${encodeURIComponent(`連絡先_${day}.csv`)}`);
+    reply.header('Content-Disposition', attachmentDisposition(`連絡先_${day}.csv`, 'contacts.csv'));
     reply.header('Cache-Control', 'no-store');
     return reply.send(csv);
   });

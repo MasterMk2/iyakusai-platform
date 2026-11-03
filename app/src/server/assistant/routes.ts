@@ -16,6 +16,7 @@ import {
   type AssistantJobResult,
 } from '../../shared/assistant.js';
 import { DomainError, type User } from '../domain/types.js';
+import { attachmentDisposition } from '../http/content-disposition.js';
 import { HttpError } from '../http/http-error.js';
 import type { TaskIdentityBridge } from '../tasks/bridge.js';
 import { ALLOWED_FILE_TYPES, AssistantServiceError, type AssistantAnswer, type AssistantServiceClient } from './client.js';
@@ -141,12 +142,8 @@ function browserCandidate(candidate: AssistantCandidate): AssistantCandidate {
   return { ...candidate, discordUrl: safeDiscordUrl(candidate.discordUrl) };
 }
 
-/** Content-Disposition for a download: an ASCII fallback plus the RFC 5987 name. */
-export function attachmentDisposition(name: string): string {
-  const ascii = name.replace(/[^\x20-\x7e]|["\\;]/g, '_');
-  const encoded = encodeURIComponent(name).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
-  return `attachment; filename="${ascii}"; filename*=UTF-8''${encoded}`;
-}
+/** Content-Disposition for a download (the shared helper, kept here for the existing imports). */
+export { attachmentDisposition };
 
 export function registerAssistantRoutes(app: FastifyInstance, ctx: AssistantRouteContext): void {
   const { parse, requireUser } = ctx;
