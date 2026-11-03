@@ -16,6 +16,7 @@ import type { AppState, User } from './domain/types.js';
 import { buildApp } from './http/app.js';
 import type { LineRuntime } from './http/line-routes.js';
 import { MockLinePushConnector } from './line/connector.js';
+import { MockInboundImages } from './line/inbound-media.js';
 import { createLineSeedState } from './line/seed.js';
 import { LineStore } from './line/store.js';
 import type { LineState } from './line/types.js';
@@ -287,7 +288,7 @@ export async function composeServer(config: ServerConfig, overrides: ComposeOver
   if (config.line.mode === 'mock') {
     const lineStore = new LineStore(lineExisting ?? createLineSeedState(now, lineSeedOptions), config.line.dataFile);
     if (!lineExisting) lineStore.replace(lineStore.current);
-    line = { store: lineStore, connector: new MockLinePushConnector(), seed: (at) => createLineSeedState(at, lineSeedOptions) };
+    line = { store: lineStore, connector: new MockLinePushConnector(), seed: (at) => createLineSeedState(at, lineSeedOptions), inboundImages: new MockInboundImages() };
   }
 
   let rental: RentalRuntime | null = null;

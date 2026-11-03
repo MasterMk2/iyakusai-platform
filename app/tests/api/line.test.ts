@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MockLinePushConnector } from '../../src/server/line/connector.js';
+import { MockInboundImages } from '../../src/server/line/inbound-media.js';
 import { LINE_SHOP, LINE_SUPPORT, LINE_USER } from '../../src/server/line/fixtures.js';
 import { applyEventBatch } from '../../src/server/line/ingest.js';
 import { RETRY_KEY_SAFE_WINDOW_MS, CONSENT_TTL_MS } from '../../src/server/line/reply.js';
@@ -111,6 +112,58 @@ describe('ACL on detail, notes, drafts and outbound state', () => {
     expect(d.notes.map((n: { body: string }) => n.body)).toContain('LINE の内部メモ（合成）');
     expect(JSON.stringify(d.history)).not.toContain('LINE の内部メモ');
     expect((await t.call(EDITOR_A, 'GET', '/api/inbox?pageSize=50')).json.counts.line).toBe(0);
+  });
+});
+
+describe('status from the list', () => {
+  it('LINE rows say whether the viewer may set the status and from which version; a stale version is refused', async () => {
+    const row = async (userId: string) =>
+      (await t.call(userId, 'GET', '/api/inbox?source=line&pageSize=50')).json.items.find((i: { conversationId: string }) => i.conversationId === CONV.l1);
+    const mine = await row(EDITOR_C);
+    expect(mine).toMatchObject({ canSetStatus: true, triageVersion: expect.any(Number) });
+    expect((await row(VIEWER_B)).canSetStatus).toBe(false);
+
+    const saved = await t.call(EDITOR_C, 'PATCH', `/api/line/conversations/${CONV.l1}/triage`, { expectedVersion: mine.triageVersion, status: 'done' });
+    expect(saved.status, saved.raw).toBe(200);
+    expect(saved.json.status).toBe('done');
+    const after = await row(EDITOR_C);
+    expect(after.statuses).toEqual(['done']);
+    expect(after.triageVersion).toBe(mine.triageVersion + 1);
+    // The same row clicked again from the old version: someone else came first.
+    expect((await t.call(EDITOR_C, 'PATCH', `/api/line/conversations/${CONV.l1}/triage`, { expectedVersion: mine.triageVersion, status: 'in_progress' })).status).toBe(409);
+  });
+});
+
+describe('received images', () => {
+  it('shows an event-feed image to those who may read the conversation, through a signed-in route only', async () => {
+    const t = await makeLineApp({ inboundImages: new MockInboundImages() });
+    const detail = await t.call(EDITOR_C, 'GET', `/api/line/conversations/${CONV.l1}`);
+    const images = detail.json.messages.filter((m: { imageUrl?: string }) => m.imageUrl);
+    expect(images.length).toBeGreaterThan(0);
+    const url: string = images[0].imageUrl;
+    expect(url).toBe(`/api/line/conversations/${CONV.l1}/messages/${images[0].id}/image`);
+    const text = detail.json.messages.find((m: { content: { kind: string } }) => m.content.kind === 'text');
+    expect(text.imageUrl).toBeUndefined();
+
+    const ok = await t.call(EDITOR_C, 'GET', url);
+    expect(ok.status, ok.raw).toBe(200);
+    expect(ok.headers['content-type']).toBe('image/png');
+    expect(ok.headers['cache-control']).toBe('no-store');
+    expect(ok.headers['x-content-type-options']).toBe('nosniff');
+    expect((await t.call(VIEWER_B, 'GET', url)).status).toBe(200);
+    for (const u of [EDITOR_A, NOACCESS_D, ADMIN]) expect((await t.call(u, 'GET', url)).status).toBe(404);
+    expect((await t.call(null, 'GET', url)).status).toBe(401);
+    // A text message, or a message of another conversation, is no image.
+    expect((await t.call(EDITOR_C, 'GET', `/api/line/conversations/${CONV.l1}/messages/${text.id}/image`)).status).toBe(404);
+    expect((await t.call(EDITOR_C, 'GET', `/api/line/conversations/${CONV.group}/messages/${images[0].id}/image`)).status).toBe(404);
+    // Legacy history has no image to show.
+    const legacy = await t.call(EDITOR_C, 'GET', `/api/line/conversations/${CONV.legacy}`);
+    expect(legacy.json.messages.some((m: { imageUrl?: string }) => m.imageUrl)).toBe(false);
+  });
+
+  it('without a source of images, images stay marked as not imported', async () => {
+    const detail = await t.call(EDITOR_C, 'GET', `/api/line/conversations/${CONV.l1}`);
+    expect(detail.json.messages.some((m: { imageUrl?: string }) => m.imageUrl)).toBe(false);
   });
 });
 

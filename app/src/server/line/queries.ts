@@ -4,6 +4,7 @@ import { normalizeForSearch } from '../domain/queries.js';
 import type { AppState, User } from '../domain/types.js';
 import { canEditLine, canReadLine, canReplyLine, canTriageLine, lineGrant, permittedConversations, readableConversation } from './access.js';
 import { shadowedHistory } from './history.js';
+import { isInboundImage } from './inbound-media.js';
 import { MEDIA_PATH } from './media.js';
 import { evaluateTarget, outboxView, targetView } from './reply.js';
 import type { LineAccount, LineConversation, LineMessage, LineState } from './types.js';
@@ -103,6 +104,8 @@ export function collectLineItems(state: LineState, names: NameOf, user: User, q:
       statuses: [conv.triage.status],
       labels: [...conv.triage.labels].sort(),
       assignees: conv.triage.assigneeId ? [names(conv.triage.assigneeId)] : [],
+      canSetStatus: canTriageLine(state, user, conv.accountId),
+      triageVersion: conv.triage.version,
     });
   }
   return items;
@@ -149,7 +152,10 @@ export function lineTriageView(state: LineState, mail: LinePeople, user: User, c
   };
 }
 
-function messageView(m: LineMessage): LineMessageView {
+/** Where the screen reads a received image (see inbound-media.ts). */
+export const inboundImagePath = (conversationId: string, messageId: string) => `/api/line/conversations/${conversationId}/messages/${messageId}/image`;
+
+function messageView(m: LineMessage, inboundImages: boolean): LineMessageView {
   return {
     id: m.id,
     direction: m.direction,
@@ -158,6 +164,7 @@ function messageView(m: LineMessage): LineMessageView {
     content: m.content,
     provenance: m.provenance.source,
     ...(m.history ? { history: { staff: m.history.staff, autoReply: m.history.autoReply } } : {}),
+    ...(inboundImages && isInboundImage(m) ? { imageUrl: inboundImagePath(m.conversationId, m.id) } : {}),
   };
 }
 
@@ -169,6 +176,7 @@ export function lineConversationDetail(
   now: string,
   inFlight: ReadonlySet<string>,
   imagesEnabled = false,
+  inboundImages = false,
 ): LineConversationDetail {
   const conv = readableConversation(state, user, conversationId);
   const account = accountOf(state, conv.accountId);
@@ -188,7 +196,7 @@ export function lineConversationDetail(
     title: conv.title,
     origin: conv.origin,
     target: targetView(conv),
-    messages: messagesOf(state, conv).map(messageView),
+    messages: messagesOf(state, conv).map((m) => messageView(m, inboundImages)),
     triage: lineTriageView(state, mail, user, conv),
     notes: conv.notes.map((n) => ({ id: n.id, authorName: names(n.authorId), createdAt: n.createdAt, body: n.body })),
     history: conv.history.map((h) => ({ id: h.id, at: h.at, actorName: names(h.actorId), action: h.action, from: h.from, to: h.to })),

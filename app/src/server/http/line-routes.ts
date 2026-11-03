@@ -4,12 +4,13 @@ import { z } from 'zod';
 import { HANDLING_STATUSES, LIMITS, type ApiError } from '../../shared/api.js';
 import { MOCK_PUSH_OUTCOMES, type BroadcastSendResponse, type LineIngestReport, type LineMediaResponse, type LineSendResponse, type OutboxView } from '../../shared/line.js';
 import { DomainError, type User } from '../domain/types.js';
-import { replyableConversation } from '../line/access.js';
+import { readableConversation, replyableConversation } from '../line/access.js';
 import { beginBroadcast, broadcastOptions, broadcastSummary, previewBroadcast, recordBroadcastAttempt } from '../line/broadcast.js';
 import { lineCommitteeAccess, setLineCommitteeGrant } from '../line/committee.js';
 import { MockLinePushConnector, type LinePushConnector, type LinePushOutcome } from '../line/connector.js';
 import { registerDiscordLineRoutes, type DiscordLineOptions } from '../line/discord.js';
 import { MAX_LINE_BATCH } from '../line/fixtures.js';
+import { isInboundImage, type InboundImageSource } from '../line/inbound-media.js';
 import { expireMedia, MEDIA_FILE, MEDIA_PATH, mediaExpired, mediaExpiresAt, mediaOfFile, ORIGINAL_MAX_BYTES, registerMedia, checkUploader, storeUpload, type LineMediaFiles } from '../line/media.js';
 import { sha256 } from '../line/normalize.js';
 import { lineAccountSummaries, lineConversationDetail, type LinePeople } from '../line/queries.js';
@@ -26,6 +27,8 @@ export interface LineRuntime {
   connector: LinePushConnector;
   /** Fresh synthetic state for the demo sample reset. */
   seed: (now: string) => LineState;
+  /** Received images (2026-11-04). Absent: shown as not imported. */
+  inboundImages?: InboundImageSource;
 }
 
 export interface LineRouteContext {
@@ -55,6 +58,7 @@ export interface LineRouteContext {
 }
 
 const convParams = z.strictObject({ conversationId: z.string().regex(/^lc_[0-9a-f]{16}$/) });
+const messageParams = z.strictObject({ conversationId: z.string().regex(/^lc_[0-9a-f]{16}$/), messageId: z.string().regex(/^lm_[0-9a-f]{16}$/) });
 const intentParams = z.strictObject({ intentId: z.string().regex(/^lo_[0-9a-f]{16}$/) });
 const shortId = z.string().min(1).max(40).regex(/^[a-z0-9-]+$/);
 const draftId = z.string().regex(/^ld_[0-9a-f]{16}$/);
@@ -166,7 +170,22 @@ export function registerLineRoutes(app: FastifyInstance, ctx: LineRouteContext):
   app.get('/api/line/conversations/:conversationId', async (request) => {
     const user = requireUser(request);
     const { conversationId } = parse(convParams, request.params);
-    return lineConversationDetail(store.current, mail.current, user, conversationId, clock(), inFlight, imageBaseUrl !== null);
+    return lineConversationDetail(store.current, mail.current, user, conversationId, clock(), inFlight, imageBaseUrl !== null, line.inboundImages !== undefined);
+  });
+
+  // A received image, for those who may read the conversation (never public; see inbound-media.ts).
+  app.get('/api/line/conversations/:conversationId/messages/:messageId/image', async (request, reply) => {
+    const user = requireUser(request);
+    const { conversationId, messageId } = parse(messageParams, request.params);
+    const conv = readableConversation(store.current, user, conversationId);
+    const message = store.current.messages.find((m) => m.id === messageId && m.conversationId === conv.id);
+    const image = message && isInboundImage(message) && line.inboundImages ? await line.inboundImages.get(message.externalMessageId) : null;
+    if (!image) throw new DomainError('not_found', '画像を取得できませんでした（受け取った側に残っていないか、画像ではありません）。');
+    return reply
+      .header('Content-Type', image.type)
+      .header('X-Content-Type-Options', 'nosniff')
+      .header('Content-Disposition', 'inline')
+      .send(image.data);
   });
 
   app.get('/api/line/conversations/:conversationId/assignees', async (request) => {

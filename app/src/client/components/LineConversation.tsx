@@ -6,6 +6,7 @@ import { useLoader } from '../useLoader';
 import { LineReplyPanel } from './LineReplyPanel';
 import { LoadStatus } from './LoadStatus';
 import { Notes } from './Notes';
+import { ThreadStatusButtons } from './ThreadStatusButtons';
 import { TriageForm } from './TriageForm';
 import { CaseTasks } from './tasks/CaseTasks';
 
@@ -20,11 +21,23 @@ const HISTORY_LABEL: Record<LineHistoryView['action'], string> = {
   reply_result: '返信の結果',
 };
 
+/** A received image; if it cannot be read (not kept by the receiver), the placeholder instead. */
+function ReceivedImage({ url, mediaType }: { url: string; mediaType: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return <span className="line-placeholder">［{mediaType}：画像を取得できませんでした］</span>;
+  return (
+    <a className="line-image" href={url} target="_blank" rel="noopener">
+      <img src={url} alt="受け取った画像" loading="lazy" onError={() => setFailed(true)} />
+    </a>
+  );
+}
+
 function Content({ m }: { m: LineMessageView }) {
   switch (m.content.kind) {
     case 'text':
       return <span className="line-text">{m.content.text}</span>;
     case 'unsupported':
+      if (m.imageUrl) return <ReceivedImage key={m.imageUrl} url={m.imageUrl} mediaType={m.content.mediaType} />;
       return <span className="line-placeholder">［{m.content.mediaType}：内容は取り込んでいません］</span>;
     case 'unavailable':
       return <span className="line-placeholder">{m.content.reason === 'e2ee' ? '［暗号化のため内容を取得できませんでした］' : '［本文がありません］'}</span>;
@@ -122,6 +135,7 @@ export function LineConversation({
   const notFound = conv.error && (conv.error.status === 404 || conv.error.status === 400);
   const d = conv.data;
   const basePath = `/api/line/conversations/${conversationId}`;
+  const canTriage = d ? (d.canTriage ?? d.access === 'edit') : false;
 
   return (
     <div className="thread-detail">
@@ -160,6 +174,29 @@ export function LineConversation({
           {d.origin === 'legacy_export' && (
             <p className="hint">旧履歴から取り込んだ記録です。過去のすべてのやり取りを再現するものではなく、画像などの内容は取り込んでいません。</p>
           )}
+          {/* Handling before the messages, as in mail, so it is changed without scrolling past a long conversation. */}
+          {canTriage && (
+            <section className="thread-status" aria-label="会話の対応状況">
+              <h3 className="section-label">
+                対応状況<span className="hint">押すとすぐ保存</span>
+              </h3>
+              <ThreadStatusButtons target={{ kind: 'line', conversationId: d.conversationId, version: d.triage.version }} subject={d.title} statuses={[d.triage.status]} onChanged={onChanged} />
+              <p className="hint">「完了」はアプリ内の対応状況です。返信の送信や配信を意味しません。</p>
+            </section>
+          )}
+          <section className="handling" aria-label="対応情報">
+            {canTriage ? (
+              <TriageForm basePath={basePath} triage={d.triage} onSaved={onChanged} showStatus={false} doneHint="" />
+            ) : (
+              <div className="triage readonly">
+                <p className="status info">閲覧のみの権限です。対応情報とメモは編集できません。</p>
+                <p>
+                  対応状況: <strong>{STATUS_LABELS[d.triage.status]}</strong> ／ 担当者: {d.triage.assignee?.displayName ?? '担当なし'} ／ ラベル:{' '}
+                  {d.triage.labels.join(', ') || 'なし'}
+                </p>
+              </div>
+            )}
+          </section>
           <ol className="line-timeline" aria-label="メッセージ">
             {timeline(d).map((e) =>
               e.kind === 'message' ? (
@@ -198,19 +235,7 @@ export function LineConversation({
               </ul>
             </section>
           )}
-          <section className="handling" aria-label="対応情報">
-            <h4>対応情報（この会話に適用）</h4>
-            {(d.canTriage ?? d.access === 'edit') ? (
-              <TriageForm basePath={basePath} triage={d.triage} onSaved={onChanged} doneHint="「完了」はアプリ内の対応状況です。返信の送信や配信を意味しません。" />
-            ) : (
-              <div className="triage readonly">
-                <p className="status info">閲覧のみの権限です。対応情報とメモは編集できません。</p>
-                <p>
-                  対応状況: <strong>{STATUS_LABELS[d.triage.status]}</strong> ／ 担当者: {d.triage.assignee?.displayName ?? '担当なし'} ／ ラベル:{' '}
-                  {d.triage.labels.join(', ') || 'なし'}
-                </p>
-              </div>
-            )}
+          <section className="mail-activity" aria-label="内部メモと変更履歴">
             <Notes basePath={basePath} notes={d.notes} canEdit={d.access === 'edit'} onAdded={onChanged} heading="内部メモ（この LINE アカウントの閲覧者だけに表示・相手には送信されません）" />
             <details className="history">
               <summary>変更履歴（{d.history.length} 件）</summary>

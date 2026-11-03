@@ -41,6 +41,9 @@ export interface LineInboxItem {
   statuses: HandlingStatus[];
   labels: string[];
   assignees: string[];
+  /** The viewer may change the status here (list rows' buttons, 2026-11-04), and the version to change it from. */
+  canSetStatus?: boolean;
+  triageVersion?: number;
 }
 
 export type InboxItem = ({ source: 'email' } & ThreadListItem) | LineInboxItem;
@@ -72,6 +75,8 @@ export interface LineMessageView {
   provenance: 'legacy_export' | 'event_feed' | 'oa_history';
   /** oa_history only: the committee member who sent it (outgoing rows) and whether it was an automatic answer. */
   history?: { staff: string | null; autoReply: boolean };
+  /** A received image the app can show (2026-11-04): signed-in route, read access checked. */
+  imageUrl?: string;
 }
 
 export type LineHistoryAction =
