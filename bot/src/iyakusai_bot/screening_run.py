@@ -41,6 +41,14 @@ log = logging.getLogger("iyakusai.screening")
 
 # 純テキスト生成なのでツールは全部止める。禁止リストは ai_provider.ONESHOT_DENIED_TOOLS の 1 か所(2026-11-03)。
 from .ai_provider import ONESHOT_DENIED_TOOLS as DENIED_TOOLS, STRICT_MCP_ARGS, child_env  # noqa: E402
+STATUS_LABELS = {"todo": "未着手", "in_progress": "進行中", "blocked": "保留", "done": "完了"}
+STATE_LABELS = {"new": "未投稿", "publishing": "投稿中", "posted": "承認待ち", "creating": "起票中",
+                "created": "起票済み", "rejected": "不要", "returned": "差し戻し", "revised": "修正版あり",
+                "undoing": "取消中", "undone": "誤起票", "failed": "失敗"}
+ACTION_LABELS = {"auto": "自動起票", "ok": "起票", "ng": "不要", "return": "差し戻し",
+                 "undo": "誤起票として閉じた", "revised": "修正版を投稿"}
+DECISIONS_FILE = "判定記録.tsv"
+SOURCE_TEXT_MAX = 400
 
 
 def load_config(path: Path) -> dict:
