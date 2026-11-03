@@ -199,6 +199,8 @@ test('task detail: the status saves on one press; a field shows its save button 
   const detail = page.getByRole('region', { name: 'タスク詳細', exact: true });
   await expect(detail.getByTestId('task-version')).toHaveText(String(world.tasks.find((t) => t.id === 'T-101')!.version));
   const version = Number(await detail.getByTestId('task-version').innerText());
+  // The creator (起票者): this Task service sends none, so the history's first entry names them.
+  await expect(detail.getByTestId('task-creator')).toHaveText(/^合成 太郎（/);
   // Nothing changed: no save buttons and no unsaved note.
   await expect(detail.getByRole('button', { name: /を保存$/ })).toHaveCount(0);
   await expect(detail.getByTestId('task-unsaved')).toHaveCount(0);

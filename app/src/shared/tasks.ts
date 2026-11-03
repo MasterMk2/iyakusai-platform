@@ -85,6 +85,8 @@ export interface TaskView {
   updatedAt: string;
   updatedBy: string;
   assignee: { id: string; displayName: string; active: boolean } | null;
+  /** Who made the task (起票者, 2026-11-03), shaped like the assignee. Absent from an older Task service. */
+  creator?: { id: string; displayName: string; active: boolean };
   overdue: boolean;
   missingRequirements: RequirementField[];
   /** Department keys (only from a Task service with department tags). */

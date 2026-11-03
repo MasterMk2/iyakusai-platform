@@ -826,6 +826,9 @@ class ListPrefetchTests(unittest.TestCase):
         status, rows = self.gateway.dispatch("GET", "/api/integration/v1/tasks", {}, ctx())
         self.assertEqual(status, 200)
         self.assertEqual([r["assignee"]["displayName"] for r in rows], ["Synthetic Alice", "Discordユーザー"])
+        # 2026-11-03: 起票者も同じ形で名前を付けて出す
+        self.assertEqual([(r["creator"]["id"], r["creator"]["displayName"]) for r in rows],
+                         [(api.uid(BOT), "Synthetic member")] * 2)
         status, entries = self.gateway.dispatch("GET", f"/api/integration/v1/tasks/{rows[0]['id']}/history", {}, ctx())
         self.assertEqual(status, 200)
         updated = next(e for e in entries if e["action"] == "updated")

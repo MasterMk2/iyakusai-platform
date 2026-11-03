@@ -67,6 +67,7 @@ const view = ({ tags, ...t }: FakeTask) => ({
   ...(tags.length ? { tags, tagLabels: tags.map((k) => `部局${k}`) } : {}),
   assignee: t.assigneeId ? { id: t.assigneeId, displayName: t.assigneeId, active: true } : null,
   ...(t.helperIds ? { helpers: t.helperIds.map((id) => ({ id, displayName: id, active: true })) } : {}),
+  creator: { id: t.createdBy, displayName: t.createdBy, active: true },
   overdue: false,
   missingRequirements: Object.entries(t.requirements)
     .filter(([, v]) => v === '')

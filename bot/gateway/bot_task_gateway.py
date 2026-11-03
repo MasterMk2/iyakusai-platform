@@ -598,8 +598,8 @@ class SqliteGateway:
 
     @staticmethod
     def people(views) -> set:
-        """一覧に出る担当者(主担当と副担当)。名簿をまとめて読むかの判断に使う。"""
-        return {u for v in views for u in (v.task.assignee_id, *getattr(v.task, "helpers", ())) if u is not None}
+        """一覧に出る人(主担当・副担当・起票者)。名簿をまとめて読むかの判断に使う。"""
+        return {u for v in views for u in (v.task.assignee_id, *getattr(v.task, "helpers", ()), v.task.created_by) if u is not None}
 
     def task_view(self, view, context, _department=None):
         task = view.task
@@ -615,6 +615,8 @@ class SqliteGateway:
             "version": task.version, "createdAt": task.created_at, "createdBy": uid(task.created_by),
             "updatedAt": task.updated_at, "updatedBy": uid(task.updated_by),
             "assignee": assignee, "overdue": view.overdue,
+            # 2026-11-03 追加: 起票者(担当者と同じ形)
+            "creator": self.person(task.created_by, context),
             "missingRequirements": [REVERSE_FIELDS.get(key, key) for key in view.missing],
             # 2026-10-14 追加(共通 Web は未使用): 部局タグ
             "tags": tags, "tagLabels": [self.departments[t][0] for t in tags if t in self.departments],
