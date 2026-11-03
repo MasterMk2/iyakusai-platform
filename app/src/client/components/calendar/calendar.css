@@ -1,0 +1,487 @@
+/*
+ * Committee calendar (components/calendar). Colours are the app's own tokens (styles.css), so the dark theme follows.
+ * Layout: a month table from 680px; below that the same days as a vertical list (one week). Rules: ../docs/ui-guidelines.md
+ */
+.cal {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.cal h3 {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+
+.cal-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.cal-title {
+  flex: 1 1 100%;
+  margin: 0;
+  font-size: 18px;
+}
+
+.cal-title-week {
+  display: none;
+  margin-left: 6px;
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.cal-nav,
+.cal-modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* A switch like the task views' (.view-switch): the chosen one filled, the other plain, so only 予定を追加 reads as
+   the main button. */
+.cal-modes button {
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--field);
+  font-weight: 400;
+}
+
+.cal-modes button:hover:not(:disabled) {
+  background: var(--hover-strong);
+  color: var(--ink);
+  border-color: var(--field);
+}
+
+.cal-modes button[aria-pressed='true'],
+.cal-modes button[aria-pressed='true']:hover:not(:disabled) {
+  background: var(--navy-fill);
+  color: #fff;
+  border-color: var(--navy-fill);
+  font-weight: 700;
+}
+
+.cal-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  font-size: 16px;
+}
+
+.cal-filters select {
+  min-height: 40px;
+}
+
+.cal-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 16px;
+}
+
+.cal-check input {
+  width: 20px;
+  height: 20px;
+}
+
+.cal button:focus-visible,
+.cal input:focus-visible,
+.cal select:focus-visible,
+.cal textarea:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 5px var(--focus);
+}
+
+/* ---- the month table */
+
+.cal-month {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  background: var(--surface);
+}
+
+.cal-month th {
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.cal-month td {
+  min-width: 0;
+  height: 104px;
+  padding: 2px;
+  vertical-align: top;
+  overflow: hidden;
+  border: 1px solid var(--line-soft);
+}
+
+.cal-cell.is-out {
+  background: var(--surface-sunken);
+  color: var(--muted);
+}
+
+.cal-cell.is-today {
+  box-shadow: inset 0 0 0 2px var(--blue);
+}
+
+.cal-cell.is-selected {
+  background: var(--selected);
+}
+
+/* The day number is a button: it has a frame, so it reads as one (it opens that day's list). */
+.cal-day {
+  min-width: 36px;
+  min-height: 36px;
+  padding: 2px 6px;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: var(--surface);
+  color: inherit;
+  font-weight: 600;
+}
+
+.cal-day[aria-pressed='true'] {
+  border-color: var(--blue);
+  box-shadow: inset 0 0 0 1px var(--blue);
+}
+
+.cal-chips {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cal-chip {
+  display: block;
+  width: 100%;
+  min-height: 24px;
+  padding: 2px 4px;
+  border: 0;
+  background: var(--info-bg);
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.4;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.cal-chip-label {
+  font-weight: 700;
+  color: var(--navy);
+}
+
+/* "ほか N 件を見る": a button that opens the day's list, so it reads as a link. */
+.cal-more {
+  min-height: 28px;
+  padding: 2px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--navy);
+  font-size: 14px;
+  text-decoration: underline;
+}
+
+.cal-done {
+  color: var(--muted);
+  background: var(--neutral-bg);
+}
+
+/* ---- the phone list (one week) and the day panel (PC) */
+
+.cal-week-list {
+  display: none;
+}
+
+.cal-week-day {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.cal-week-day.is-today h3 {
+  color: var(--blue);
+}
+
+.cal-items {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 6px;
+  padding: 0;
+  list-style: none;
+}
+
+.cal-item {
+  display: grid;
+  /* The button rule centres its content; one full-width column keeps every line starting at the left. */
+  grid-template-columns: minmax(0, 1fr);
+  justify-content: stretch;
+  justify-items: start;
+  gap: 2px;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  text-align: left;
+}
+
+.cal-item-time,
+.cal-item-label,
+.cal-item-sub,
+.cal-item-date {
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.cal-item-date {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.cal-item-title {
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+
+/* ---- forms and panels */
+
+.cal-form,
+.cal-subscribe,
+.cal-yearly,
+.cal-day-panel {
+  padding: 12px 14px;
+}
+
+.cal-field {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 10px;
+  min-width: 0;
+}
+
+.cal-field label,
+.cal-yearly-head label,
+.cal-filters label {
+  font-weight: 600;
+}
+
+.cal-field input,
+.cal-field select,
+.cal-field textarea,
+.cal-add-row input,
+.cal-url input {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  padding: 8px;
+  border: 1px solid var(--field);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 16px;
+}
+
+.cal-field-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.cal-field-row .cal-field {
+  flex: 1 1 160px;
+}
+
+.cal-fieldset {
+  min-width: 0;
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.cal-fieldset legend {
+  padding: 0 4px;
+  font-weight: 600;
+}
+
+.cal-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+}
+
+.cal-add {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.cal-add-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.cal-add-row input {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+.cal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.cal-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.cal .danger {
+  border-color: var(--red-fill);
+  background: var(--red-fill);
+  color: #fff;
+}
+
+.cal .quiet.danger {
+  border-color: transparent;
+  background: transparent;
+  color: var(--red);
+}
+
+.cal-url input {
+  font-size: 14px;
+}
+
+.cal-yearly-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.cal-yearly-head select {
+  min-height: 40px;
+  margin-left: 6px;
+}
+
+.cal-yearly-list {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+}
+
+/* ---- the home card (near deadlines) */
+
+.upcoming-card {
+  display: grid;
+  gap: 8px;
+}
+
+.upcoming-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+
+.upcoming-head h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.upcoming-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.upcoming-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px 10px;
+  min-height: 44px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.upcoming-item.tone-warn {
+  background: var(--amber-bg);
+  border-color: var(--amber);
+}
+
+.upcoming-when {
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.upcoming-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.upcoming-label,
+.upcoming-date {
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.upcoming-label {
+  grid-column: 2;
+}
+
+.upcoming-date {
+  grid-column: 2;
+}
+
+@media (pointer: coarse) {
+  .cal button,
+  .cal input:not([type='checkbox']),
+  .cal select,
+  .cal textarea {
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 679px) {
+  .cal-title-week {
+    display: inline;
+  }
+
+  .cal-month,
+  .cal-day-panel {
+    display: none;
+  }
+
+  .cal-week-list {
+    display: block;
+  }
+
+  .cal-field-row .cal-field {
+    flex-basis: 100%;
+  }
+}

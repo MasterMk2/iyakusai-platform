@@ -77,12 +77,12 @@ export const treeKeys = (nodes: TreeNode[]): string[] => nodes.flatMap((n) => [n
 const VIEW_KEY = 'iyakusai.tasks.view';
 const FOLDED_KEY = 'iyakusai.tasks.treeFolded';
 
-export type ListView = 'list' | 'tree' | 'bowtie';
+export type ListView = 'list' | 'tree' | 'bowtie' | 'people' | 'calendar';
 
 export function storedView(): ListView {
   try {
     const view = localStorage.getItem(VIEW_KEY);
-    return view === 'tree' || view === 'bowtie' ? view : 'list';
+    return view === 'tree' || view === 'bowtie' || view === 'people' || view === 'calendar' ? view : 'list';
   } catch {
     return 'list';
   }
@@ -107,3 +107,9 @@ function store(key: string, value: string): void {
 
 export const storeView = (view: ListView): void => store(VIEW_KEY, view);
 export const storeFolded = (folded: ReadonlySet<string>): void => store(FOLDED_KEY, JSON.stringify([...folded]));
+
+/**
+ * The view a link opens with: a link that sets a filter (the home counts' focus= and remaining=) opens the list,
+ * since the people view does not show the filters; otherwise the view kept in this browser.
+ */
+export const openingView = (stored: ListView, filtered: boolean): ListView => (filtered ? 'list' : stored);

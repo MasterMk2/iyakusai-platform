@@ -6,6 +6,7 @@ import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { NameRoster } from '../../src/server/discord-auth/names.js';
 import { StateStore } from '../../src/server/domain/store.js';
+import { DecisionsStore } from '../../src/server/decisions/store.js';
 import { buildApp } from '../../src/server/http/app.js';
 import { CommitteeAddresses } from '../../src/server/mailbox/addresses.js';
 import { MailboxStore } from '../../src/server/mailbox/store.js';
@@ -28,7 +29,7 @@ let app: FastifyInstance;
 let workerKey: Buffer;
 const ORIGIN = `http://${TEST_HOST}`;
 
-async function build(options: { minutes?: boolean } = {}) {
+async function build(options: { minutes?: boolean; decisions?: DecisionsStore } = {}) {
   const base = testMailboxConfig(path.join(dir, 'mail'), {}, randomBytes(32));
   const config = options.minutes === false ? base : { ...base, minutes: { workerKey, audioRetentionDays: 14, dataDir: base.dataDir } };
   mail = new MailboxStore(config.dataDir);
@@ -41,6 +42,7 @@ async function build(options: { minutes?: boolean } = {}) {
     auth: { mode: 'discord', publicOrigin: 'https://app.example.invalid', publicHost: 'app.example.invalid', trustedProxies: new Set() },
     discord: { service: ctx.service, store: ctx.store, config: ctx.config, names: new NameRoster(path.join(dir, 'names.json')), publicOrigin: null, publicHost: null, trustedProxies: new Set() },
     mailbox: { store: mail, config, addresses: new CommitteeAddresses(config.mailboxes, config.domainAliases) },
+    ...(options.decisions ? { decisions: options.decisions } : {}),
   });
 }
 
@@ -303,5 +305,93 @@ describe('meeting minutes', () => {
     const refused = await call('POST', '/api/minutes/uploads', { cookie: recorder, body: { filename: 'a.webm', type: 'audio/webm', bytes: 3 } });
     expect(refused.status).toBe(409);
     expect(refused.json.message).toContain('確定していない議事録が 10 件');
+  });
+});
+
+// Each case takes a meeting through the worker and signs in twice, which runs past 5 s on a busy machine.
+describe('the decision register from confirmed minutes (Discord login)', { timeout: 20_000 }, () => {
+  let decisions: DecisionsStore;
+  beforeEach(() => {
+    decisions = new DecisionsStore(path.join(dir, 'decisions'));
+  });
+  afterEach(() => {
+    decisions.close();
+  });
+
+  /** A meeting taken through the worker to a draft whose decisions are the given texts. */
+  async function draftWithItems(recorder: string, items: string[], fields: Record<string, unknown>): Promise<string> {
+    const created = await upload(recorder, audio, fields);
+    expect(created.status).toBe(201);
+    const id = created.json.id as string;
+    const transcribe = (await worker(WORKER_PATHS.claim, { stages: ['transcribe', 'summarize'] })).json.job;
+    const done = await worker(WORKER_PATHS.result, { id, leaseToken: transcribe.leaseToken, stage: 'transcribe', transcript: { segments, durationSec: 310, model: 'large-v3' } });
+    expect(done.status).toBe(200);
+    const summarize = (await worker(WORKER_PATHS.claim, { stages: ['summarize'] })).json.job;
+    const drafted = await worker(WORKER_PATHS.result, {
+      id,
+      leaseToken: summarize.leaseToken,
+      stage: 'summarize',
+      draft: { summary: '決めた。', decisions: items.map((text) => ({ text, evidence: [{ at: 301, quote: '総務部が十一月二十日までに作る' }] })), todos: [] },
+    });
+    expect(drafted.status).toBe(200);
+    return id;
+  }
+
+  it('registers chosen items of a confirmed, everyone-visible meeting as the server reads them, each once', async () => {
+    await build({ decisions });
+    const recorder = await signIn(MEMBER, '21000002');
+    const member = await signIn(OTHER, '21000003');
+    const ITEM = '協賛の依頼文は総務部が 11 月 20 日までに作る';
+    const LONG = `${'あ'.repeat(100)}という決定が続く`;
+    const id = await draftWithItems(recorder, [ITEM, LONG], { title: '役員会', heldOn: '2026-11-02', visibility: 'members', viewers: [] });
+    const pick = (items: number[], departments = ['somu'], venue = 'board') => call('POST', `/api/minutes/${id}/decisions`, { cookie: recorder, body: { items, departments, venue } });
+
+    // Not before the minutes are confirmed: the draft is the AI's text, and nothing is registered.
+    expect((await pick([0])).status).toBe(409);
+    expect(decisions.count()).toBe(0);
+
+    expect((await call('POST', `/api/minutes/${id}/confirm`, { cookie: recorder, body: { expectedVersion: 2 } })).status).toBe(200);
+    const first = await pick([0, 0]);
+    expect(first.status).toBe(200);
+    expect(first.json.results).toHaveLength(1);
+    const made = first.json.results[0];
+    expect(made).toMatchObject({ index: 0, replayed: false });
+    expect(decisions.get(made.decisionId)!.input).toMatchObject({ title: ITEM, body: '', departments: ['somu'], decidedOn: '2026-11-02', venue: 'board' });
+    expect(decisions.get(made.decisionId)!.input.sources).toEqual([expect.objectContaining({ kind: 'minutes', refId: id, label: '議事録：役員会' })]);
+
+    // The same item again is the decision already made, whatever the departments the second time.
+    const again = await pick([0], ['naimu'], 'regular');
+    expect(again.json.results).toEqual([{ index: 0, decisionId: made.decisionId, replayed: true }]);
+    expect(decisions.get(made.decisionId)!.input.departments).toEqual(['somu']);
+
+    // The part of a long item beyond the title limit is kept in the body.
+    const long = (await pick([1])).json.results[0];
+    const longInput = decisions.get(long.decisionId)!.input;
+    expect(longInput.title).toHaveLength(100);
+    expect(longInput.title + longInput.body).toBe(LONG);
+    expect(decisions.count()).toBe(2);
+
+    // Every member reads them in the register; an item that is not in the draft is refused.
+    const list = await call('GET', '/api/decisions', { cookie: member });
+    expect(list.json.items.map((i: { title: string }) => i.title)).toEqual(expect.arrayContaining([ITEM]));
+    expect((await pick([5])).status).toBe(422);
+    expect(decisions.count()).toBe(2);
+  });
+
+  it('refuses a meeting limited to chosen people, and temporary staff, in the register and in the minutes', async () => {
+    await build({ decisions });
+    const recorder = await signIn(MEMBER, '21000002');
+    const staff = await signIn(OTHER, '21000003', [ROLE_STAFF]);
+    const limited = await draftWithItems(recorder, ['限られた人だけの決定'], { title: '部会', heldOn: '2026-11-02', visibility: 'selected', viewers: [] });
+    expect((await call('POST', `/api/minutes/${limited}/confirm`, { cookie: recorder, body: { expectedVersion: 2 } })).status).toBe(200);
+    const refused = await call('POST', `/api/minutes/${limited}/decisions`, { cookie: recorder, body: { items: [0], departments: ['somu'], venue: 'board' } });
+    expect(refused.status).toBe(403);
+    expect(decisions.count()).toBe(0);
+
+    // Temporary staff: no read and no write of the register (the Discord login's own check), and no registration.
+    expect((await call('GET', '/api/decisions', { cookie: staff })).status).toBe(403);
+    expect((await call('POST', '/api/decisions', { cookie: staff, body: {} })).status).toBe(403);
+    expect((await call('POST', `/api/minutes/${limited}/decisions`, { cookie: staff, body: { items: [0], departments: ['somu'], venue: 'board' } })).status).toBe(403);
+    expect(decisions.count()).toBe(0);
   });
 });

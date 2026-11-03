@@ -28,6 +28,7 @@ import base64
 import binascii
 import hashlib
 import hmac
+import http.client
 import json
 import logging
 import os
@@ -44,6 +45,7 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 from .mirror import _JST, _scrub_plain, _to_jst, _transform_doc_text
+from .decisions_logic import parse_decisions
 from .task_domain import DEPARTMENTS, REQUIREMENT_FIELDS, REQUIREMENT_LABELS, STATUS_LABELS, STATUS_ORDER, department_filter, today_jst
 
 log = logging.getLogger("iyakusai.kiban")
@@ -52,11 +54,16 @@ KIBAN_DIR = "kiban"
 TASKS_FILE = "tasks.md"
 RENTAL_FILE = "rental.md"
 MAILBOX_FILE = "mailbox.md"
+DECISIONS_FILE = "decisions.md"
 STATUS_FILE = "_status.md"
 
 CLIENT = "iyakusai-bot-datasource"
 API_PATH = "/v1/bot/datasource"
+# 既定の要求(物品・受信箱)。2026-11-03: 決定・変更(decisions)は KNOWN_SOURCES にだけ入れ、
+# 既定の要求には入れない(アプリが未対応のとき 401 で物品・受信箱まで止まるため)。
 APP_SOURCES = ("rental", "mailbox")
+DECISIONS_SOURCE = "decisions"
+KNOWN_SOURCES = (*APP_SOURCES, DECISIONS_SOURCE)
 MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 MIN_KEY_BYTES = 32
 
@@ -128,9 +135,9 @@ class KibanSettings:
                 ca_file = Path(ca_raw).expanduser()
             src = raw.get("sources", list(APP_SOURCES))
             if (not isinstance(src, list) or not src or len(set(src)) != len(src)
-                    or any(s not in APP_SOURCES for s in src)):
-                raise KibanConfigError("kiban: sources は rental / mailbox の配列で指定してください")
-            sources = tuple(s for s in APP_SOURCES if s in src)
+                    or any(s not in KNOWN_SOURCES for s in src)):
+                raise KibanConfigError("kiban: sources は rental / mailbox / decisions の配列で指定してください")
+            sources = tuple(s for s in KNOWN_SOURCES if s in src)
         interval = raw.get("interval_sec", 300)
         timeout = raw.get("timeout_sec", 20)
         if type(interval) is not int or interval < 60:
@@ -241,6 +248,8 @@ def fetch_app(settings: KibanSettings, key: bytes) -> dict:
                               else f"応答 {e.code}") from None
     except (urllib.error.URLError, OSError, ssl.SSLError) as e:
         raise KibanFetchError(f"接続できない({type(e).__name__})") from None
+    except http.client.HTTPException as e:   # 応答の途中で切れた・HTTP の形が壊れている(OSError ではない)
+        raise KibanFetchError(f"応答が途中で壊れた({type(e).__name__})") from None
     if len(raw) > MAX_RESPONSE_BYTES:
         raise KibanFetchError("応答が大きすぎる")
     try:
@@ -262,6 +271,9 @@ def check_snapshot(data) -> dict:
     if mailbox is not None and not (isinstance(mailbox, dict) and isinstance(mailbox.get("mailboxes"), list)
                                     and isinstance(mailbox.get("messages"), list)):
         raise KibanFetchError("応答の形式が契約と違う(mailbox)")
+    decisions = data.get("decisions")
+    if decisions is not None and not (isinstance(decisions, dict) and isinstance(decisions.get("items"), list)):
+        raise KibanFetchError("応答の形式が契約と違う(decisions)")
     return data
 
 
@@ -518,6 +530,26 @@ def _task_ref(task_id, titles: dict[int, str] | None) -> str:
 
 
 # ---------------------------------------------------------------------------
+# 決定・変更(decisions)
+
+def render_decisions(block: dict, generated_at: str, now: datetime, interval_min: int) -> str:
+    """統合アプリの決定・変更 → kiban/decisions.md。本文は写さない(件名・状態・部局・決定日・変更の要点だけ)。"""
+    items = parse_decisions(block)
+    out = _header("基盤システムの写し: 決定・変更", now, [
+        f"- 正本: アプリ(決定の一覧)。アプリ側の時刻 {_jst(generated_at)} JST に取得。約{interval_min}分ごとに作り直す",
+        f"- 写しは直近 {len(items)} 件の変更。決定の本文は写していない(詳細はアプリで見る)",
+    ])
+    out += ["| 状態 | 件名 | 部局 | 決定日 | 変更の要点 |", "|---|---|---|---|---|"]
+    for d in items:
+        note = _one_line(d.change_note) if d.change_note else ""
+        out.append(f"| {_one_line(d.status_label)} | {_one_line(d.title)} | {_one_line('・'.join(d.departments))} "
+                   f"| {_one_line(d.decided_at)} | {note} |")
+    if not items:
+        out.append("| - | （まだ決定・変更はありません） | | | |")
+    return "\n".join(out) + "\n"
+
+
+# ---------------------------------------------------------------------------
 # 同期
 
 @dataclass
@@ -565,6 +597,9 @@ class KibanSync:
             "rental": SourceState("物品貸出", RENTAL_FILE),
             "mailbox": SourceState("受信箱の対応状況", MAILBOX_FILE),
         }
+        # 決定・変更は設定したときだけ状態に載せる(設定が無い既存の写し・_status.md の出力を変えないため)
+        if DECISIONS_SOURCE in self.settings.sources:
+            self.states[DECISIONS_SOURCE] = SourceState("決定・変更", DECISIONS_FILE)
 
     def run_once(self, now: datetime | None = None) -> dict[str, str]:
         now = now or datetime.now(timezone.utc)
@@ -594,15 +629,18 @@ class KibanSync:
             try:
                 data = self.fetch(self.settings, self.key)
             except KibanFetchError as e:
-                for k in APP_SOURCES:
-                    if k in self.settings.sources:
+                for k in KNOWN_SOURCES:
+                    if k in self.settings.sources and k in self.states:
                         s = self.states[k]
                         s.status, s.note = "失敗", f"{e}。前回の写しのまま"
                 log.warning("kiban: アプリから取得できません: %s", e)
             else:
                 gen = str(data.get("generatedAt"))
                 for k, render in (("rental", lambda d: render_rental(d, gen, now, interval_min)),
-                                  ("mailbox", lambda d: render_mailbox(d, gen, now, interval_min, task_titles))):
+                                  ("mailbox", lambda d: render_mailbox(d, gen, now, interval_min, task_titles)),
+                                  (DECISIONS_SOURCE, lambda d: render_decisions(d, gen, now, interval_min))):
+                    if k not in self.states:          # 決定・変更は設定したときだけ
+                        continue
                     s = self.states[k]
                     if k not in self.settings.sources:
                         self._drop(s, "未設定(sources に無い)")
@@ -616,8 +654,9 @@ class KibanSync:
                             s.status, s.note = "失敗", f"整形できない({type(e).__name__})。前回の写しのまま"
                             log.warning("kiban: %s の整形に失敗: %s", k, type(e).__name__)
         else:
-            for k in APP_SOURCES:
-                self._drop(self.states[k], "未設定(アプリ連携が無効)")
+            for k in KNOWN_SOURCES:
+                if k in self.states:
+                    self._drop(self.states[k], "未設定(アプリ連携が無効)")
 
         self._write_status(now)
         return {k: s.status for k, s in self.states.items()}

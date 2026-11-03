@@ -15,8 +15,11 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .access import AccessConfigError, AccessSettings
 from .contact import DEFAULT as CONTACT_DEFAULT
+from .notify import NotifyConfigError, NotifySettings
 from .org import valid_domain
+from .weekly_logic import WeeklyConfigError, WeeklySettings
 
 DEFAULT_CONFIG_PATH = Path.home() / ".iyakusai" / "config.toml"
 
@@ -118,8 +121,13 @@ class Config:
     assistant: AssistantSettings = field(default_factory=AssistantSettings)
     # /image(Claude が描く図・ポスター風の画像・2026-10-14)。省略時は OFF。
     image: ImageSettings = field(default_factory=ImageSettings)
+    # 操作の種類ごとの権限と監査ログ([permissions]・2026-11-03)。省略時は全部許可・監査のみ(今と同じ動き)。
+    access: AccessSettings = field(default_factory=AccessSettings)
     # 基盤システム(統合アプリ)の写しをミラーの kiban/ に置く(kiban.KibanSettings で検証)。省略時OFF。2026-10-14
     kiban: dict = field(default_factory=lambda: {"enabled": False})
+    # Bot が自分から投稿する先([notify]・2026-11-03)と、週1回のタスク一覧([weekly])。省略時は従来どおり・OFF
+    notify: NotifySettings = field(default_factory=NotifySettings)
+    weekly: WeeklySettings = field(default_factory=WeeklySettings)
     # digest 本文の鮮度リマインド(収集後に「digest が raw に遅れていないか」を通知)
     collect_staleness_threshold: int = 30      # 未反映がこの件数以上で digest 再生成を促す
     collect_staleness_channel_id: int | None = None  # 通知先チャンネルID(未設定ならログのみ)
@@ -330,6 +338,35 @@ def _image_settings(raw: dict, roots) -> ImageSettings:
     )
 
 
+# ---- Bot の投稿先([notify])と週1回のタスク一覧([weekly])(2026-11-03 追加)----
+
+def _notify_section(raw: dict) -> NotifySettings:
+    try:
+        return NotifySettings.from_mapping(raw.get("notify"))
+    except NotifyConfigError as e:
+        sys.exit(f"config: {e}")
+
+
+def _weekly_section(raw: dict) -> WeeklySettings:
+    try:
+        return WeeklySettings.from_mapping(raw.get("weekly"))
+    except WeeklyConfigError as e:
+        sys.exit(f"config: {e}")
+
+
+def _access_settings(raw: dict, roots) -> AccessSettings:
+    """[permissions]（2026-11-03）。綴りの誤りは起動を止める。監査ログの既定は ~/.iyakusai/audit（ドライブの外）。"""
+    section = raw.get("permissions")
+    # 型の誤り（文字列で書いた等）は from_mapping が起動を止める。ここでは既定値を選ぶだけ
+    admin_roles = (section.get("admin_roles", ["役員", "システム課"]) if isinstance(section, dict)
+                   else ["役員", "システム課"])
+    try:
+        return AccessSettings.from_mapping(raw.get("permissions"), admin_roles=admin_roles, shared_roots=roots,
+                                           default_audit_dir=Path.home() / ".iyakusai" / "audit")
+    except AccessConfigError as e:
+        sys.exit(f"config: {e}")
+
+
 def load_config(path: str | os.PathLike | None = None) -> Config:
     p = Path(path or os.environ.get("IYAKUSAI_CONFIG") or DEFAULT_CONFIG_PATH)
     if not p.exists():
@@ -453,7 +490,13 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
             data_dir_path, knowledge_path,
             Path(paths["mirror_dir"]).expanduser() if paths.get("mirror_dir")
             else Path.home() / ".iyakusai" / "mirror")),
+        access=_access_settings(raw, roots=(
+            data_dir_path, knowledge_path,
+            Path(paths["mirror_dir"]).expanduser() if paths.get("mirror_dir")
+            else Path.home() / ".iyakusai" / "mirror")),
         kiban=raw.get("kiban", {"enabled": False}),
+        notify=_notify_section(raw),
+        weekly=_weekly_section(raw),
         collect_staleness_threshold=_as_int(collect.get("staleness_threshold"),
                                             "collect.staleness_threshold", 30),
         # チャンネルIDは「未設定・0・空文字なら None(通知しない)」の判定をそのまま残す

@@ -1,0 +1,211 @@
+/* The people view of the tasks list (人ごと, 2026-11-03). Colors are the shared tokens, and a state is also written as text.
+   Everything wraps, so a 320px phone has no sideways scroll. */
+
+.people-view {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.people-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.people-tools .sort-field {
+  margin-left: auto;
+}
+
+.people-note {
+  margin: 0;
+  font-size: 14px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.people-heading {
+  margin: 0;
+  font-size: 1.2rem;
+  overflow-wrap: anywhere;
+}
+
+.people-subheading {
+  margin: 8px 0 2px;
+  font-size: 1rem;
+}
+
+.people-back {
+  align-self: flex-start;
+  min-height: 44px;
+}
+
+.people-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--line);
+}
+
+.people-list > li {
+  border-bottom: 1px solid var(--line);
+}
+
+.people-view .person-row {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 6px;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 6px;
+  text-align: left;
+  background: transparent;
+  color: var(--ink);
+  border: 0;
+  border-radius: 0;
+  font-weight: 400;
+}
+
+.people-view .person-row:hover:not(:disabled) {
+  background: var(--hover-strong);
+  color: var(--ink);
+}
+
+.person-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  align-self: stretch;
+  gap: 4px 8px;
+  min-width: 0;
+}
+
+.person-name {
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.person-self {
+  margin-left: 4px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.person-load {
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.person-free {
+  background: var(--info-bg);
+  color: var(--navy);
+}
+
+.person-stats {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  align-self: stretch;
+  gap: 2px 12px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.person-stats strong {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.person-stats .count-overdue strong {
+  color: var(--red);
+}
+
+.people-task-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.people-task-list > li {
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.people-view .people-task {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 6px 4px;
+  text-align: left;
+  background: transparent;
+  color: var(--ink);
+  border: 0;
+  border-radius: 0;
+  font-weight: 400;
+}
+
+.people-view .people-task:hover:not(:disabled) {
+  background: var(--hover-strong);
+  color: var(--ink);
+}
+
+.people-task .subject {
+  flex: 1 1 12em;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.people-task-meta {
+  flex-basis: 100%;
+  font-size: 14px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.people-assign {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px 8px;
+}
+
+.people-assign-field {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.people-assign-field select {
+  min-height: 44px;
+  max-width: 100%;
+}
+
+/* The home card's own-tasks block (自分の持ち, 2026-11-03), under the total. */
+.home-task-summary .task-mine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-left: 3px solid var(--navy);
+  background: var(--info-bg);
+  font-size: 14px;
+}
+
+.home-task-summary .task-mine-title {
+  font-weight: 700;
+}
+
+.home-task-summary .task-mine .hint {
+  margin: 0;
+}

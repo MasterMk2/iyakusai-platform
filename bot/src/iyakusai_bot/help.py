@@ -9,6 +9,14 @@ from discord.ext import commands
 
 from . import contact
 from . import __version__
+from . import access as A
+from . import access_check
+
+
+def _restricted_kinds() -> list[str]:
+    """表で絞っている操作の種類の名前（「*」だけの種類は全員なので数えない）。表が無ければ空。"""
+    roles = access_check.settings().roles
+    return [A.KIND_LABELS[k] for k in A.KINDS if k in roles and A.EVERYONE not in roles[k]]
 
 
 def _haiku_how(mode: str) -> str:
@@ -136,6 +144,16 @@ def build_help_embed(ai_enabled: bool, haiku_enabled: bool = False,
             name="🌐 統合アプリの「Bot」タブ",
             value=("同じ機能を https://app.iyakusai.com の「Bot」タブからも使えます。\n"
                    "-# アプリから出した質問・文書・画像は #bottest にも投稿されます"),
+            inline=False,
+        )
+    restricted = _restricted_kinds()
+    if restricted:
+        # メニューと /help には全員に出る。役割で使えないときは、実行したときに本人にだけ拒否の返事が出る
+        e.add_field(
+            name="🔐 役割により使えない操作があります",
+            value=(f"表で絞っている操作: {'、'.join(restricted)}\n"
+                   "使えないときは、実行したときに「あなたの役割では許可されていません」と本人にだけ返します。\n"
+                   "-# 役割の決まりは役員に確かめてください"),
             inline=False,
         )
     if not ai_enabled:

@@ -11,15 +11,17 @@ import {
   type MailSendRequest,
   type MailSendResponse,
 } from '../../shared/mailbox.js';
+import { isDueDate, jstDay } from '../../shared/mailDue.js';
 import { DomainError, notFound, type User } from '../domain/types.js';
 import { HttpError } from '../http/http-error.js';
 import type { CommitteeAddresses } from './addresses.js';
 import { buildRawMail, ComposeError, isMessageId, newMessageId, type OutgoingAddress, type OutgoingAttachment } from './compose.js';
 import type { MailboxConfig, MailboxDefinition, MailSendConfig } from './config.js';
+import { loadDue, startReplyWait } from './due.js';
 import { parseRawMail } from './parse.js';
 import type { MailboxService } from './service.js';
 import { SmtpError, type MailTransport } from './smtp.js';
-import type { MailboxStore } from './store.js';
+import { messageIdFor, type MailboxStore } from './store.js';
 
 // Sending from the committee mailbox: new mail, replies and attachments,
 // From a committee address the person holds a send grant for, through the committee's Gmail account.
@@ -60,9 +62,13 @@ export class MailSender {
   }
 
   options(user: User): MailSendOptions {
+    const from = this.fromMailboxes(user);
+    const editable = this.service.grantedMailboxes(user, 'edit');
     return {
       enabled: true,
-      from: this.fromMailboxes(user).map((m) => ({ mailboxId: m.id, name: m.name, address: m.address })),
+      from: from.map((m) => ({ mailboxId: m.id, name: m.name, address: m.address })),
+      // Only these From mailboxes may carry a reply deadline: the sender also holds the mailbox's edit grant (2026-11-03).
+      dueMailboxIds: from.filter((m) => editable.has(m.id)).map((m) => m.id),
       fromName: this.send.fromName,
       bcc: this.config.draftBccAddress,
       maxAttachmentBytes: this.send.maxAttachmentBytes,
@@ -115,6 +121,16 @@ export class MailSender {
     if (known && known.status !== 'failed') return this.answerKnown(user, request.clientToken, now);
     const from = this.fromMailboxes(user).find((m) => m.id === request.mailboxId);
     if (!from) throw new DomainError('forbidden', 'この受信箱のアドレスから送る権限がありません。権限管理者に、受信箱の送信権限を依頼してください。');
+    // A reply deadline is checked before anything is sent: it must be a real day from today, and the sender
+    // must also hold the mailbox's edit grant (the same right as the deadlines on the screen).
+    const replyDue = request.replyDue ?? null;
+    if (replyDue !== null) {
+      if (!isDueDate(replyDue)) throw validation('回答期限は、実在する日付（例：2026-11-10）で指定してください。', 'replyDue');
+      if (replyDue < jstDay(now)) throw validation('回答期限は今日以降の日付にしてください。', 'replyDue');
+      if (!this.service.grantedMailboxes(user, 'edit').has(from.id)) {
+        throw new DomainError('forbidden', 'この受信箱で回答期限を付ける権限がありません。期限を付けずに送るか、権限管理者に編集権限を依頼してください。');
+      }
+    }
 
     const to = this.recipients(request.to, 'to');
     const cc = this.recipients(request.cc, 'cc');
@@ -228,7 +244,17 @@ export class MailSender {
         // The message is sent; the status stays as it was and can be set on the screen.
       }
     }
-    return { status: 'sent', receiptId, threadId, threadDone };
+    // The reply wait is keyed by the Message-ID (the same ID whether or not the copy was stored above).
+    let replyWait: MailSendResponse['replyWait'] = replyDue === null ? 'none' : 'failed';
+    if (replyDue !== null) {
+      try {
+        startReplyWait(this.store, messageIdFor(messageId), replyDue, nowIso, user.id);
+        replyWait = 'set';
+      } catch {
+        // The message is sent; the answer says the wait was not kept, and the screen can set it again.
+      }
+    }
+    return { status: 'sent', receiptId, threadId, threadDone, replyWait };
   }
 
   /** The same message (clientToken) again: the earlier result, or why it cannot be sent now. */
@@ -237,7 +263,11 @@ export class MailSender {
     if (!known || known.user_id !== user.id) throw new HttpError(409, { error: SEND_DUPLICATE, message: 'このメールは送信の受付が重なりました。画面を読み込み直してください。' });
     if (known.status === 'sent') {
       const row = known.message_id ? this.store.message(known.message_id) : null;
-      return { status: 'sent', receiptId: row?.id ?? null, threadId: row?.thread_id ?? null, threadDone: false };
+      // The reply wait is keyed by the Message-ID (as in sendMail). It is named only when it is kept: the outgoing
+      // record does not say whether a deadline was asked for, so a wait that failed is not claimed here.
+      const key = messageIdFor(known.internet_message_id);
+      const waiting = (loadDue(this.store, [key]).get(key)?.replySince ?? null) !== null;
+      return { status: 'sent', receiptId: row?.id ?? null, threadId: row?.thread_id ?? null, threadDone: false, ...(waiting ? { replyWait: 'set' as const } : {}) };
     }
     // A send still "sending" after ten minutes was cut off (the app stopped): it may have gone out.
     if (known.status === 'unknown' || now.getTime() - Date.parse(known.created_at) > 10 * 60_000) {

@@ -1,0 +1,335 @@
+/*
+ * Year rollover (components/rollover, settings). Colours are the app's own tokens (styles.css), so the dark theme
+ * follows. One column at every width: the lists wrap instead of scrolling sideways (checked at 320 px).
+ */
+.rollover-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.rollover-head h3 {
+  margin: 0;
+}
+
+.rollover-body {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  margin-top: 8px;
+}
+
+.rollover-year {
+  display: grid;
+  gap: 4px;
+  max-width: 28rem;
+}
+
+.rollover-year label {
+  font-weight: 700;
+}
+
+.rollover-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--line);
+}
+
+.rollover-step {
+  border-bottom: 1px solid var(--line);
+  padding: 10px 0;
+  min-width: 0;
+}
+
+.rollover-step-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.rollover-step-no {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid var(--field);
+  color: var(--ink);
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.rollover-step-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.rollover-step-text h4 {
+  margin: 0;
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+
+.rollover-step-state {
+  margin: 2px 0 0;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.rollover-step-state.is-done {
+  color: var(--green);
+}
+
+.rollover-step-body {
+  margin: 10px 0 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  min-width: 0;
+}
+
+.rollover-step-inner {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.rollover-step-inner > p,
+.rollover-step-inner .status {
+  margin: 0;
+}
+
+.rollover-standing {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+}
+
+.rollover-choices {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  min-width: 0;
+}
+
+.rollover-choices legend {
+  padding: 0 4px;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.rollover-choice {
+  display: grid;
+  gap: 6px;
+}
+
+.rollover-choice-kind {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.rollover-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.rollover-chips .status-option {
+  min-height: 40px;
+}
+
+.rollover-counts {
+  font-size: 14px;
+}
+
+.rollover-items,
+.rollover-holders,
+.rollover-groups {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--line-soft);
+}
+
+.rollover-item,
+.rollover-holder {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line-soft);
+  min-width: 0;
+}
+
+.rollover-groups > li {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.rollover-groups summary,
+.rollover-runs summary,
+.rollover-step-inner details summary {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.rollover-groups summary {
+  display: list-item;
+  padding: 10px 0;
+}
+
+.rollover-item.is-skip .rollover-item-name,
+.rollover-item.is-excluded .rollover-item-name {
+  color: var(--muted);
+}
+
+.rollover-item-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  cursor: pointer;
+}
+
+.rollover-item-name {
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.rollover-item-meta,
+.rollover-item-dates,
+.rollover-item-note,
+.rollover-item-reason {
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.rollover-item-meta {
+  color: var(--muted);
+}
+
+.rollover-item-note {
+  color: var(--amber);
+}
+
+.rollover-item-reason {
+  display: block;
+  color: var(--muted);
+}
+
+.rollover-rule {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+}
+
+.rollover-rule select {
+  max-width: 100%;
+}
+
+.rollover-holder.is-attention {
+  border-left: 4px solid var(--amber-line);
+  padding-left: 10px;
+}
+
+.rollover-holder-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+
+.rollover-attention {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--amber);
+}
+
+.rollover-grants {
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 0;
+  font-size: 14px;
+}
+
+.rollover-grants li {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  overflow-wrap: anywhere;
+}
+
+.rollover-notes,
+.rollover-reasons {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 14px;
+}
+
+.rollover-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  font-size: 14px;
+}
+
+.rollover-result {
+  display: grid;
+  gap: 8px;
+}
+
+.rollover-download {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+}
+
+.rollover-md {
+  margin: 8px 0 0;
+  padding: 10px;
+  max-height: 360px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.rollover-runs ul {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+}
+
+.rollover-runs li {
+  display: grid;
+  gap: 2px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.rollover-run-step {
+  color: var(--muted);
+}

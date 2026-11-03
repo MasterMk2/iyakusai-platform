@@ -4,8 +4,14 @@ import { z } from 'zod';
 import { HANDLING_STATUSES, LIMITS } from '../../shared/api.js';
 import type { InboxResponse } from '../../shared/line.js';
 import { MAIL_ATTACHMENTS_MAX, MAIL_BODY_MAX, MAIL_SUBJECT_MAX, REAUTH_REQUIRED, type MailSendOptions, type MailStatusResponse } from '../../shared/mailbox.js';
+import { DUE_DATE_PATTERN } from '../../shared/mailDue.js';
 import { registerContactRoutes } from '../contacts/routes.js';
 import { ContactsStore } from '../contacts/store.js';
+import type { DecisionsStore } from '../decisions/store.js';
+import { registerOrganizationRoutes } from '../organizations/routes.js';
+import { OrganizationsStore } from '../organizations/store.js';
+import { accountingPermissionsOf, registerPaymentRoutes } from '../payments/routes.js';
+import { PaymentsStore } from '../payments/store.js';
 import { registerMinutesRoutes } from '../minutes/routes.js';
 import { MinutesStore } from '../minutes/store.js';
 import { DomainError, notFound, type User } from '../domain/types.js';
@@ -45,6 +51,10 @@ export interface MailboxRuntime {
   minutes?: MinutesStore;
   /** Replaces fetching images on other servers for a mail's HTML (tests). */
   remoteImages?: RemoteImageFetch;
+  /** Replaces the organizations file next to mail.sqlite3 (tests). */
+  organizations?: OrganizationsStore;
+  /** Replaces the payments file next to organizations.sqlite3 (tests). */
+  payments?: PaymentsStore;
   /** Replace LINE's HTTP (the receiver and the Messaging API) or its push connector (tests). */
   lineFetch?: Fetch;
   lineConnector?: LinePushConnector;
@@ -70,6 +80,8 @@ export interface MailboxRouteDeps {
   publicOrigin?: string | null;
   /** The request came through the trusted reverse proxy (socket address); the internal routes refuse it. */
   fromTrustedProxy?: (request: FastifyRequest) => boolean;
+  /** The decision register, for the minutes' decision items (null or absent: the register is off). */
+  decisions?: DecisionsStore | null;
 }
 
 /** Mail as a source of committee tasks (the task routes check it before linking or showing a task's origin). */
@@ -90,7 +102,11 @@ const filters = {
   status: z.enum(HANDLING_STATUSES).optional(),
   label: z.string().min(1).max(LIMITS.labelMaxLength).optional(),
   assignee: z.string().min(1).max(40).regex(/^[a-z0-9-]+$/).optional(),
+  // Deadlines (2026-11-03): threads awaiting a reply or past a deadline; the nearest deadline first.
+  due: z.enum(['awaiting', 'overdue']).optional(),
+  sort: z.enum(['latest', 'due']).default('latest'),
 };
+const dueDay = z.string().regex(DUE_DATE_PATTERN);
 const threadQuery = z.strictObject({ ...filters, ...page });
 const inboxQuery = z.strictObject({ ...filters, ...page, source: z.enum(['all', 'email', 'line']).default('all'), lineAccountId: shortId.optional() });
 // `source` narrows the labels to one tab's kind (2026-11-03: メール and 公式LINE are separate tabs).
@@ -131,7 +147,12 @@ const sendBody = z.strictObject({
   markThreadDone: z.boolean(),
   // Optional: screens opened before 2026-10-26 do not send it.
   replyTo: z.string().max(400).nullable().optional(),
+  // Reply deadline (2026-11-03), optional: screens opened before it do not send it.
+  replyDue: dueDay.nullable().optional(),
 });
+const dueBody = z
+  .strictObject({ expectedVersion: z.number().int().min(1), responseDue: dueDay.nullable().optional(), replyDue: dueDay.nullable().optional() })
+  .refine((b) => b.responseDue !== undefined || b.replyDue !== undefined, { message: '変更内容がありません' });
 
 // eslint-disable-next-line no-control-regex
 const FILENAME_CONTROL = /[\u0000-\u001f\u007f]/g;
@@ -154,8 +175,8 @@ function sendFormError(err: unknown, send: MailSendConfig): never {
 const USE_RECORD_INTERVAL_MS = 60_000;
 const FORGET_USE_AFTER_MS = 15 * 86_400_000;
 
-export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, deps: MailboxRouteDeps): { service: MailboxService; cases: MailCaseSource } {
-  const service = new MailboxService(rt.store, rt.addresses, deps.people, rt.config.send?.mailboxIds ?? null);
+export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, deps: MailboxRouteDeps): { service: MailboxService; cases: MailCaseSource; organizations: OrganizationsStore | null; line: CommitteeLine['store'] | null } {
+  const service = new MailboxService(rt.store, rt.addresses, deps.people, rt.config.send?.mailboxIds ?? null, deps.clock);
   const sendConfig = rt.config.send;
   // EHLO says the app's public host (2026-11-03, review M6); the SMTP account itself is in the configuration.
   const ehloHost = deps.publicOrigin ? new URL(deps.publicOrigin).hostname : undefined;
@@ -183,6 +204,38 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
   }
   registerContactRoutes(app, contacts, { requireUser: deps.requireUser, session: deps.session, people: deps.people, discordUserIdOf: deps.discordUserIdOf, clock: deps.clock, parse: deps.parse });
 
+  // Organizations (団体の台帳, 2026-11-03): their own file next to contacts.sqlite3. A batch mail goes through the same
+  // sending service and the same sign-in gate as the mail screens (mailGate). A file that cannot be opened turns off
+  // organizations only (503).
+  let organizations: OrganizationsStore | null = rt.organizations ?? null;
+  if (!organizations) {
+    try {
+      const opened = new OrganizationsStore(rt.config.dataDir);
+      organizations = opened;
+      app.addHook('onClose', async () => opened.close());
+    } catch {
+      organizations = null;
+    }
+  }
+  // Payments (入金確認, 2026-11-03): their own file next to organizations.sqlite3, with the accounting permissions. A file
+  // that cannot be opened turns off the payments only (503). Opened before the organizations' routes, whose history
+  // shows the amounts of a payment only to the people with 会計を見る.
+  let payments: PaymentsStore | null = rt.payments ?? null;
+  if (!payments) {
+    try {
+      const opened = new PaymentsStore(rt.config.dataDir);
+      payments = opened;
+      app.addHook('onClose', async () => opened.close());
+    } catch {
+      payments = null;
+    }
+  }
+  const paymentsStore = payments;
+  const paymentsVisible = (user: User) => paymentsStore !== null && accountingPermissionsOf(paymentsStore, user).includes('accounting.view');
+  registerOrganizationRoutes(app, organizations, { requireUser: deps.requireUser, session: deps.session, people: deps.people, discordUserIdOf: deps.discordUserIdOf, clock: deps.clock, parse: deps.parse, contacts, sender, mailGate: (request) => reader(request, true), mailPeek: (request) => reader(request, false), mail: service, attachmentBytes: sendConfig?.maxAttachmentBytes ?? 0, now: deps.now ?? Date.now, paymentsVisible });
+
+  registerPaymentRoutes(app, payments, { requireUser: deps.requireUser, session: deps.session, people: deps.people, discordUserIdOf: deps.discordUserIdOf, clock: deps.clock, parse: deps.parse, organizations, contacts, now: deps.now ?? Date.now });
+
   // Meeting minutes (α, 2026-11-02), when minutes.json is next to the mail configuration: their own file in the
   // mail folder, with the same people and sign-in as the contacts. A file that cannot be opened turns off the
   // minutes only (503).
@@ -197,7 +250,7 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
         minutes = null;
       }
     }
-    registerMinutesRoutes(app, rt.config.minutes, minutes, { requireUser: deps.requireUser, session: deps.session, people: deps.people, discordUserIdOf: deps.discordUserIdOf, clock: deps.clock, ...(deps.now ? { now: deps.now } : {}), parse: deps.parse });
+    registerMinutesRoutes(app, rt.config.minutes, minutes, { requireUser: deps.requireUser, session: deps.session, people: deps.people, discordUserIdOf: deps.discordUserIdOf, clock: deps.clock, ...(deps.now ? { now: deps.now } : {}), parse: deps.parse, decisions: deps.decisions ?? null });
   }
 
   // The official LINE account (2026-10-28), when line.json is next to the mail configuration. It shares the mail
@@ -300,6 +353,12 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
     return service.mailboxSummaries(reader(request, false));
   });
 
+  // The home screen's deadline lists (2026-11-03): mail only; not mail use, like the mailbox list.
+  app.get('/api/mail/due', async (request) => {
+    const user = reader(request, false);
+    return service.dueSummary(user);
+  });
+
   app.get('/api/threads', async (request) => {
     const user = reader(request, true);
     return service.listThreads(user, deps.parse(threadQuery, request.query));
@@ -311,8 +370,9 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
     if (q.mailboxId !== undefined && q.lineAccountId !== undefined) throw new DomainError('validation', '受信箱と LINE アカウントは同時に指定できません');
     if (q.lineAccountId !== undefined && !line) throw notFound();
     const withMail = q.source !== 'line' && q.lineAccountId === undefined;
+    // Deadlines (2026-11-03) are mail only: a deadline filter or order leaves the LINE conversations out.
     const lineItems =
-      line && q.source !== 'email' && q.mailboxId === undefined
+      line && q.source !== 'email' && q.mailboxId === undefined && q.due === undefined && q.sort === 'latest'
         ? collectLineItems(line.store.current, lineNames(), user, { accountId: q.lineAccountId, q: q.q, status: q.status, label: q.label, assignee: q.assignee })
         : [];
     if (lineItems.length === 0) {
@@ -395,6 +455,13 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
     return service.updateTriage(user, receiptId, deps.parse(triageBody, request.body), deps.clock());
   });
 
+  // Deadlines of one message (2026-11-03): needs the mailbox edit grant; the version must be the current one.
+  app.patch('/api/receipts/:receiptId/due', async (request) => {
+    const user = reader(request, true);
+    const { receiptId } = deps.parse(messageParams, request.params);
+    return service.updateDue(user, receiptId, deps.parse(dueBody, request.body), deps.clock());
+  });
+
   app.post('/api/receipts/:receiptId/notes', async (request, reply) => {
     const user = reader(request, true);
     const { receiptId } = deps.parse(messageParams, request.params);
@@ -475,5 +542,6 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
     readable: (user, messageId) => caseReader(user) && service.provenance(user, messageId) !== null,
     provenance: (user, messageId) => (caseReader(user) ? service.provenance(user, messageId) : null),
   };
-  return { service, cases };
+  // The year rollover (rollover/) reads these stores; it never opens a second copy of their files.
+  return { service, cases, organizations, line: line?.store ?? null };
 }

@@ -136,6 +136,20 @@ export interface AccountIdentity {
   degraded: boolean;
 }
 
+/** One stored account in any status, as the year rollover's grant stocktaking reads it (no secrets). */
+export interface StoredAccount {
+  initialLoginId: string;
+  discordUserId: string;
+  studentId: string | null;
+  status: Account['status'];
+  /** Last time the Bot host confirmed membership (epoch ms): at a sign-in, a registration or a session check. */
+  memberVerifiedAt: number | null;
+  temporaryStaff: boolean;
+  departments: string[];
+  /** This service's clock when the account was read (epoch ms), to measure memberVerifiedAt against the same clock. */
+  asOf: number;
+}
+
 /** A signed-in session: the account plus server-side facts about this sign-in (never sent to the browser). */
 export interface SessionIdentity extends AccountIdentity {
   /** Stable key of this session (the stored digest of its token); a new sign-in or re-entry gets a new key. */
@@ -622,6 +636,19 @@ export class DiscordAccountService {
     if (!a || a.status !== 'active') return null;
     const studentId = this.o.store.read((s) => this.studentIdOf(s, s.accounts[a.discordUserId]!));
     return { initialLoginId: a.initialLoginId, discordUserId: a.discordUserId, studentId, temporaryStaff: isTemporaryStaffAccount(a), departments: isTemporaryStaffAccount(a) ? ['臨時スタッフ'] : this.departments(a.existingRoleIds), admin: this.isAdmin(a.discordUserId, a.existingRoleIds) };
+  }
+
+  /**
+   * A stored account in any status (pending and retired too), without any check and without asking the Bot host: for
+   * the year rollover's stocktaking of grants, never for authorization.
+   */
+  storedAccount(initialLoginId: string): StoredAccount | null {
+    return this.o.store.read((s) => {
+      const a = Object.values(s.accounts).find((x) => x.initialLoginId === initialLoginId);
+      if (!a) return null;
+      const temporaryStaff = isTemporaryStaffAccount(a);
+      return { initialLoginId: a.initialLoginId, discordUserId: a.discordUserId, studentId: this.studentIdOf(s, a), status: a.status, memberVerifiedAt: a.memberVerifiedAt, temporaryStaff, departments: temporaryStaff ? ['臨時スタッフ'] : this.departments(a.existingRoleIds), asOf: this.now() };
+    });
   }
 
   /** The password typed again on a signed-in device; counted and limited like a sign-in. */

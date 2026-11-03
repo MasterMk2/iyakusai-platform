@@ -104,3 +104,5 @@ button.danger{background:var(--red);color:white;border-color:var(--red)}button.d
 /* return-sheets-print link */
 .info-actions a.info-print{display:inline-flex;align-items:center;min-height:46px;padding:9px 14px;border:1px solid var(--line);border-radius:6px;background:#fff;color:var(--ink);font-weight:700;font-size:.85rem;text-decoration:none;white-space:nowrap}.info-actions a.info-print:focus-visible{outline:3px solid #000;outline-offset:2px}
 @media(max-width:340px){.global-nav a{padding-left:0;padding-right:0;font-size:13px}}
+/* Entry to the counted supplies screen (supplies.html) */
+.supplies-entry a{display:inline-flex;align-items:center;min-height:44px;font-weight:700;color:var(--blue)}

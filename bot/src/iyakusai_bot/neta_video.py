@@ -9,6 +9,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from . import access_check
 from .neta_video_core import VideoError, VideoQueue, VideoSettings
 
 log = logging.getLogger("iyakusai.neta_video")
@@ -47,12 +48,18 @@ class NetaVideo(commands.Cog):
             return None
 
     @app_commands.command(name="ネタ動画", description="短い文言を壮大なファンファーレ付き動画にする（本人に返却）")
+    @access_check.require("neta_video")
     @app_commands.guild_only()
     @app_commands.describe(文言="80文字・3行以内。\\nで改行。絵文字は文字表記に変換", テンプレート="動画の演出")
     @app_commands.choices(テンプレート=[app_commands.Choice(name="壮大なファンファーレ", value="fanfare")])
     async def neta_video(self, itx: discord.Interaction, 文言: app_commands.Range[str, 1, 80],
                          テンプレート: app_commands.Choice[str] | None = None):
+        with access_check.audited("neta_video", itx) as rec:
+            await self._neta_video(itx, 文言, テンプレート, rec)
+
+    async def _neta_video(self, itx: discord.Interaction, 文言: str, テンプレート, rec: access_check.Outcome):
         if not self.settings.allows(itx.guild_id, itx.channel_id):
+            rec.fail("PLACE_DISALLOWED")
             await self._send(itx, "この場所ではネタ動画を使えません。")
             return
         job = None
@@ -71,6 +78,7 @@ class NetaVideo(commands.Cog):
             finally:
                 attachment.close()
         except VideoError as error:
+            rec.fail("VIDEO_" + str(error).upper())
             await self._send(itx, ERRORS.get(str(error), "動画を生成できませんでした。設定を確認するか、時間をおいて再度指定してください。"))
         except asyncio.CancelledError:
             if job:
@@ -78,16 +86,22 @@ class NetaVideo(commands.Cog):
             raise
         except Exception as error:
             log.warning("ネタ動画の処理に失敗: %s", type(error).__name__)
+            rec.fail("INTERNAL")
             if job:
                 self.manager.cancel(job.id, itx.guild_id, itx.user.id)
             await self._send(itx, "動画の処理に失敗しました。時間をおいて再度指定してください。")
 
     @app_commands.command(name="ネタ動画キャンセル", description="自分が依頼した動画の待機・生成を止める")
+    @access_check.require("neta_video.cancel")
     @app_commands.guild_only()
     @app_commands.describe(id="受付に表示された動画ID")
     async def cancel_video(self, itx: discord.Interaction, id: app_commands.Range[str, 16, 16]):
-        if not self.settings.allows(itx.guild_id, itx.channel_id):
-            await self._send(itx, "この場所ではネタ動画を使えません。")
-            return
-        changed = self.manager.cancel(id, itx.guild_id, itx.user.id)
-        await self._send(itx, "停止を受け付けました。" if changed else "キャンセルできる自分の動画が見つかりません。")
+        with access_check.audited("neta_video.cancel", itx) as rec:
+            if not self.settings.allows(itx.guild_id, itx.channel_id):
+                rec.fail("PLACE_DISALLOWED")
+                await self._send(itx, "この場所ではネタ動画を使えません。")
+                return
+            changed = self.manager.cancel(id, itx.guild_id, itx.user.id)
+            if not changed:
+                rec.fail("NOT_FOUND")
+            await self._send(itx, "停止を受け付けました。" if changed else "キャンセルできる自分の動画が見つかりません。")

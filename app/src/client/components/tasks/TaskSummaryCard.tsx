@@ -4,6 +4,7 @@ import { formatDateOnly } from '../../../task-service/shared/dates';
 import { fmtDate } from '../../api';
 import type { useLoader } from '../../useLoader';
 import { LoadStatus } from '../LoadStatus';
+import './people.css';
 
 const tasksHref = (workspaceId: string, extra: string) => `#/tasks?ws=${encodeURIComponent(workspaceId)}&${extra}`;
 
@@ -37,6 +38,17 @@ export function TaskSummaryCard({ context, loader, onOpenTasks }: { context: Tas
                 </strong>
                 <span className="hint">{formatDateOnly(s.today)} 時点（未着手・進行中・保留）</span>
               </div>
+              {/* 自分の持ち (2026-11-03): only from a Task API that counts it; an older one sends no `mine`, so none is shown. */}
+              {s.mine && (
+                <div className="task-mine" data-testid="task-mine">
+                  <span className="task-mine-title">自分の持ち</span>
+                  <span data-testid="task-mine-remaining">未完了 {s.mine.remaining} 件</span>
+                  <span className="hint">主担当 {s.mine.lead} 件・副担当 {s.mine.helper} 件</span>
+                  <span className={s.mine.overdue > 0 ? 'count-overdue' : undefined}>期限超過 {s.mine.overdue} 件</span>
+                  <span className={s.mine.today > 0 ? 'count-today' : undefined}>今日まで {s.mine.today} 件</span>
+                  <a href="#/tasks?focus=mine">自分の担当を開く</a>
+                </div>
+              )}
               {(loader.loading || loader.error || loader.cancelled) && <p className="hint">前回取得した件数を表示しています。取得時刻：{fmtDate(s.generatedAt)}</p>}
               <dl className="deadline-strip" aria-label="期限別">
                 {(Object.entries(TASK_DEADLINE_LABELS) as [TaskDeadlineBucket, string][]).map(([key, label]) => (

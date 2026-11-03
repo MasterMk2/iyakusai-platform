@@ -43,6 +43,19 @@ import { seedRentalDemo } from './rental/seed.js';
 import { CommitteeAddresses } from './mailbox/addresses.js';
 import type { MailboxRuntime } from './mailbox/routes.js';
 import { MailboxStore } from './mailbox/store.js';
+import { DecisionsStore } from './decisions/store.js';
+import { seedDecisionsDemo } from './decisions/seed.js';
+import { openDemoBooks } from './payments/demo.js';
+import { CalendarStore } from './calendar/store.js';
+import { seedCalendarDemo } from './calendar/seed.js';
+import type { CalendarRuntime } from './calendar/routes.js';
+import { DayOfStore } from './dayof/store.js';
+import { seedDayOfDemo } from './dayof/seed.js';
+import { RolloverStore } from './rollover/store.js';
+import { seedRolloverDemo } from './rollover/seed.js';
+import { OrganizationsStore } from './organizations/store.js';
+import { defaultSourceYear } from '../shared/rollover.js';
+import { jstDate } from '../shared/calendar.js';
 
 // Server composition from a validated configuration (used by main.ts and by tests that exercise
 // the real production composition). Nothing here listens or installs signal handlers.
@@ -314,6 +327,77 @@ export async function composeServer(config: ServerConfig, overrides: ComposeOver
     }
   }
 
+  // Decision register (2026-11-03): decisions.sqlite3 next to mail.sqlite3 in production (so the mail folder's backup
+  // carries it); in the demo, next to the demo data file, starting with synthetic decisions. Off in other modes.
+  // A file that cannot be opened turns the register off only (meta enabled: false), like the calendar below.
+  let decisions: DecisionsStore | null = null;
+  const decisionsDir = config.mailbox ? config.mailbox.dataDir : config.auth.mode === 'demo' ? path.dirname(config.dataFile) : null;
+  if (decisionsDir) {
+    try {
+      decisions = new DecisionsStore(decisionsDir);
+    } catch {
+      console.error('決定事項の保存ファイル（decisions.sqlite3）を開けないか、形式が正しくないため、決定事項だけを止めました。ファイルは変更していません。ほかの機能は動きます。');
+    }
+    if (decisions && config.auth.mode === 'demo') seedDecisionsDemo(decisions, initial.users.find((u) => u.canManageAccess)?.id ?? initial.users[0]?.id ?? 'system', now);
+  }
+
+  // Committee calendar (2026-11-03): its own SQLite file in the mail folder (Discord login, the production backup covers it),
+  // or beside the state file in the other modes (the demos and the integrated demo, with synthetic data). A file that cannot
+  // be opened turns the calendar off only (503), never the rest of the app. The Discord login without the mail folder has
+  // no calendar either (like the decisions): a file beside the state file would not be backed up, and would hide the
+  // events once the mail folder is back.
+  let calendar: CalendarRuntime | null = null;
+  const calendarDir = config.mailbox ? config.mailbox.dataDir : config.auth.mode === 'discord' ? null : path.dirname(config.dataFile);
+  if (calendarDir) {
+    try {
+      const store = new CalendarStore(calendarDir);
+      if (config.auth.mode === 'demo') seedCalendarDemo(store, now);
+      calendar = { store, icalEnabled: config.calendar.ical };
+    } catch {
+      calendar = null;
+    }
+  }
+
+  // Festival-day board (2026-11-03): dayof.sqlite3 beside the decision register (the mail folder in production, so its
+  // backup carries it; the demo's data folder, with a synthetic board whose period includes today). Off in other modes.
+  let dayof: DayOfStore | null = null;
+  if (decisionsDir) {
+    try {
+      dayof = new DayOfStore(decisionsDir);
+    } catch {
+      if (config.mailbox) refuse('当日の連絡板の保存先（受信箱の保存先）を開けないか、保存ファイルの形式が正しくありません。ファイルは変更していません。');
+    }
+    if (dayof && config.auth.mode === 'demo') seedDayOfDemo(dayof, decisions, initial.users.find((u) => u.canManageAccess)?.id ?? initial.users[0]?.id ?? 'system', now);
+  }
+
+  // Contacts, organizations and payments on synthetic data next to the demo data file (2026-11-03); null if they cannot be opened.
+  const demoBooks = config.auth.mode === 'demo' ? openDemoBooks(path.dirname(config.dataFile), initial.users, now) : null;
+
+  // Year rollover (2026-11-04): rollover.sqlite3 in the mail folder (Discord login; the backup covers it), or beside the
+  // demo data file (the demo has no committee mailbox). The demo's rollover uses the demo books' organizations ledger
+  // (the same organizations.sqlite3; buildApp passes it), and opens one of its own only when those could not be opened.
+  // Off in the other modes. A file that cannot be opened turns the rollover off only.
+  let rollover: { store: RolloverStore; organizations: OrganizationsStore | null } | null = null;
+  const rolloverDir = config.mailbox ? config.mailbox.dataDir : config.auth.mode === 'demo' ? path.dirname(config.dataFile) : null;
+  if (rolloverDir) {
+    let organizations: OrganizationsStore | null = null;
+    try {
+      const rolloverStore = new RolloverStore(rolloverDir);
+      if (!config.mailbox && !demoBooks) {
+        try {
+          organizations = new OrganizationsStore(rolloverDir);
+          seedRolloverDemo(organizations, defaultSourceYear(jstDate(new Date(now))), now);
+        } catch {
+          organizations?.close();
+          organizations = null;
+        }
+      }
+      rollover = { store: rolloverStore, organizations };
+    } catch {
+      rollover = null;
+    }
+  }
+
   // Bot tab: the Bot host's signed assistant API, on the task API's host and key, with the same identity bridge.
   const assistant: AssistantRuntime | null =
     config.assistant.mode === 'on' && tasks
@@ -329,10 +413,30 @@ export async function composeServer(config: ServerConfig, overrides: ComposeOver
     assistant,
     rental,
     mailbox,
+    calendar,
     botDatasourceKey: config.botDatasourceKey,
+    decisions,
+    demoBooks,
+    dayof,
+    rollover,
     ...(discord ? { discord } : {}),
     ...(account ? { account } : {}),
     ...(line ? { line } : {}),
   });
+  if (decisions) {
+    const opened = decisions;
+    app.addHook('onClose', async () => opened.close());
+  }
+  if (dayof) {
+    const board = dayof;
+    app.addHook('onClose', async () => board.close());
+  }
+  if (rollover) {
+    const opened = rollover;
+    app.addHook('onClose', async () => {
+      opened.store.close();
+      opened.organizations?.close();
+    });
+  }
   return { app, account, hosted };
 }

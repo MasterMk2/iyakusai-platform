@@ -11,6 +11,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from . import access_check
 from .persona import PRESETS, PersonaStore
 
 PRESET_CHOICES = [
@@ -30,6 +31,7 @@ class Persona(commands.Cog):
         self.store = store
 
     @persona.command(name="show", description="現在の口調設定を表示")
+    @access_check.require("persona.show")
     async def show(self, itx: discord.Interaction):
         presets = "、".join(f"{v['emoji']}{k}" for k, v in PRESETS.items())
         await itx.response.send_message(
@@ -40,6 +42,7 @@ class Persona(commands.Cog):
         )
 
     @persona.command(name="set", description="口調を設定(役員のみ)。プリセットかカスタム文のどちらか")
+    @access_check.require("persona.set")
     @app_commands.describe(プリセット="用意された口調から選ぶ", カスタム="自由に口調を指定(例: 語尾に「にゃ」を付ける)")
     @app_commands.choices(プリセット=PRESET_CHOICES)
     async def set_(
@@ -48,22 +51,28 @@ class Persona(commands.Cog):
         プリセット: app_commands.Choice[str] | None = None,
         カスタム: str | None = None,
     ):
-        if not _is_admin(itx.user):
-            await itx.response.send_message("⚠️ 口調の恒久変更は役員のみです(単発は `/ask` の `口調:` で)。", ephemeral=True)
-            return
-        if カスタム:
-            self.store.set_custom(カスタム)
-        elif プリセット:
-            self.store.set_preset(プリセット.value)
-        else:
-            await itx.response.send_message("⚠️ プリセットかカスタムのどちらかを指定してください。", ephemeral=True)
-            return
-        await itx.response.send_message(f"✅ 口調を **{self.store.describe()}** に設定しました(/ask に反映)。")
+        with access_check.audited("persona.set", itx) as rec:
+            if not _is_admin(itx.user):
+                rec.fail("FORBIDDEN")
+                await itx.response.send_message("⚠️ 口調の恒久変更は役員のみです(単発は `/ask` の `口調:` で)。", ephemeral=True)
+                return
+            if カスタム:
+                self.store.set_custom(カスタム)
+            elif プリセット:
+                self.store.set_preset(プリセット.value)
+            else:
+                rec.fail("VALIDATION")
+                await itx.response.send_message("⚠️ プリセットかカスタムのどちらかを指定してください。", ephemeral=True)
+                return
+            await itx.response.send_message(f"✅ 口調を **{self.store.describe()}** に設定しました(/ask に反映)。")
 
     @persona.command(name="off", description="口調を標準に戻す(役員のみ)")
+    @access_check.require("persona.off")
     async def off(self, itx: discord.Interaction):
-        if not _is_admin(itx.user):
-            await itx.response.send_message("⚠️ 口調の恒久変更は役員のみです。", ephemeral=True)
-            return
-        self.store.off()
-        await itx.response.send_message("✅ 口調を標準に戻しました。")
+        with access_check.audited("persona.off", itx) as rec:
+            if not _is_admin(itx.user):
+                rec.fail("FORBIDDEN")
+                await itx.response.send_message("⚠️ 口調の恒久変更は役員のみです。", ephemeral=True)
+                return
+            self.store.off()
+            await itx.response.send_message("✅ 口調を標準に戻しました。")

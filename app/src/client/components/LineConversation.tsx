@@ -1,6 +1,8 @@
 import { useCallback, useState } from 'react';
 import { STATUS_LABELS } from '../../shared/api';
 import type { LineConversationDetail, LineHistoryView, LineMessageView, OutboxView } from '../../shared/line';
+import { DecisionRegisterLink } from './decisions/DecisionRegisterLink';
+import { japanDay, todayInJapan } from './decisions/decisionLinks';
 import { api, fmtDate, toFailure } from '../api';
 import { useLoader } from '../useLoader';
 import { LineReplyPanel } from './LineReplyPanel';
@@ -52,6 +54,12 @@ function sender(m: LineMessageView, accountName: string): string {
   if (m.direction === 'inbound') return m.senderLabel;
   if (m.history?.autoReply) return `${accountName}（自動応答）`;
   return m.history?.staff ? `${accountName}（${m.history.staff}）` : accountName;
+}
+
+/** The day of the conversation's last message (Japan time), for a decision made in it; today when there is no message. */
+function dayOfLastMessage(d: LineConversationDetail): string {
+  const last = d.messages.reduce<string | null>((latest, m) => (latest === null || m.sentAt > latest ? m.sentAt : latest), null);
+  return (last ? japanDay(last) : '') || todayInJapan();
 }
 
 /** Received messages and what the app sent, in time order (a sent reply shows where it was written). */
@@ -153,6 +161,12 @@ export function LineConversation({
             <span className="source-badge source-line">LINE</span>
             <span className="mailbox-badge">{d.account.name}</span>
           </h2>
+          {/* A mock conversation shows synthetic text: it is not registered as a decision. */}
+          {d.sending !== 'mock' && (
+            <div className="actions">
+              <DecisionRegisterLink prefill={{ title: '', decidedOn: dayOfLastMessage(d), source: { kind: 'line', refId: conversationId, label: d.title || '公式LINE', link: `#/line/${encodeURIComponent(d.account.id)}?conv=${encodeURIComponent(conversationId)}` } }} />
+            </div>
+          )}
           {d.sending === 'mock' ? (
             <p className="status info" data-testid="line-mock-notice">
               LINE は模擬モードです。表示は合成データで、返信は模擬送信だけです。実際の LINE への送信は接続されていません。

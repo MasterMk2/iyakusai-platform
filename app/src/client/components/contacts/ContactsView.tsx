@@ -23,6 +23,7 @@ import { isMailAddress } from '../../../shared/mailbox';
 import { api, ApiFailure, fmtDate, toFailure } from '../../api';
 import { useLoader } from '../../useLoader';
 import { LoadStatus } from '../LoadStatus';
+import { OrganizationsPanel } from '../organizations/OrganizationsPanel';
 
 // Committee contacts (2026-10-26): a list to search on the left, the opened contact on the right (one column on a
 // phone). Every committee member adds and edits; access administrators also delete, import and export.
@@ -57,16 +58,7 @@ function savedPageSize(): number {
 
 const ACTIONS: Record<ContactHistoryAction, string> = { created: '登録', updated: '変更', deleted: '削除', imported: '取り込み' };
 
-export function ContactsView({
-  route,
-  initialQuery,
-  prefill,
-  onPrefillUsed,
-  canWriteMail,
-  onWriteMail,
-  onNavigate,
-  refresh,
-}: {
+type ContactsPeopleProps = {
   route: ContactsRoute;
   initialQuery: string;
   prefill: ContactPrefill | null;
@@ -76,7 +68,75 @@ export function ContactsView({
   onWriteMail: (recipient: string) => void;
   onNavigate: (route: ContactsRoute) => void;
   refresh: number;
-}) {
+};
+
+/**
+ * The 連絡先 tab: 連絡先 (the people and addresses) or 団体 (the organizations, 2026-11-03). Both sections sit in the
+ * same tab; the switch is a choice inside the tab, not a new tab.
+ */
+/** The section is kept in the address (#/contacts?section=organizations), so going back to it returns to the same section. */
+function sectionFromHash(): 'people' | 'organizations' {
+  try {
+    const query = window.location.hash.split('?')[1] ?? '';
+    return new URLSearchParams(query).get('section') === 'organizations' ? 'organizations' : 'people';
+  } catch {
+    return 'people';
+  }
+}
+
+function keepSectionInHash(section: 'people' | 'organizations'): void {
+  try {
+    const parts = window.location.hash.split('?');
+    const path = parts[0] ?? '';
+    const query = parts[1] ?? '';
+    if (!path.startsWith('#/contacts')) return;
+    const params = new URLSearchParams(query);
+    if (section === 'organizations') params.set('section', 'organizations');
+    else params.delete('section');
+    const text = params.toString();
+    window.history.replaceState(null, '', `${path}${text ? `?${text}` : ''}`);
+  } catch {
+    // The address only remembers the section; without it the section is the people's.
+  }
+}
+
+export function ContactsView(props: ContactsPeopleProps) {
+  const [section, setSectionState] = useState<'people' | 'organizations'>(sectionFromHash);
+  // A contact opened by address (an organization's 相手の担当者 links to #/contacts?c=…) is shown in the people's section.
+  const [shownContact, setShownContact] = useState(props.route.contactId);
+  if (props.route.contactId !== shownContact) {
+    setShownContact(props.route.contactId);
+    if (props.route.contactId && section === 'organizations') setSectionState('people');
+  }
+  const setSection = (next: 'people' | 'organizations') => {
+    setSectionState(next);
+    keepSectionInHash(next);
+  };
+  return (
+    <>
+      <div className="contacts-switch" role="group" aria-label="連絡先の種類">
+        <button type="button" aria-pressed={section === 'people'} onClick={() => setSection('people')}>
+          連絡先
+        </button>
+        <button type="button" aria-pressed={section === 'organizations'} onClick={() => setSection('organizations')} data-testid="contacts-organizations">
+          団体
+        </button>
+      </div>
+      {section === 'people' ? <ContactsPeople {...props} /> : <OrganizationsPanel />}
+    </>
+  );
+}
+
+function ContactsPeople({
+  route,
+  initialQuery,
+  prefill,
+  onPrefillUsed,
+  canWriteMail,
+  onWriteMail,
+  onNavigate,
+  refresh,
+}: ContactsPeopleProps) {
   const [typed, setTyped] = useState(initialQuery);
   const [q, setQ] = useState(initialQuery.trim());
   const [category, setCategory] = useState<ContactCategory | 'all'>('all');

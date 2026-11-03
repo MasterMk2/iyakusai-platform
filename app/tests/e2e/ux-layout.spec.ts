@@ -60,6 +60,8 @@ async function syntheticWorkspace(page: Page, options: { role?: 'viewer' | 'edit
     if (path === '/api/mail/send/options') return respond({ enabled: false, from: [], fromName: '', bcc: null, maxAttachmentBytes: 0, maxRecipients: 0, senderName: '合成 太郎' });
     // Committee contacts (2026-10-26): the thread asks once which senders are contacts; none here.
     if (path === '/api/contacts/by-address') return respond([]);
+    // The decision register (2026-11-03) is off on this synthetic server (no 「決定として登録」 in the thread).
+    if (path === '/api/decisions/meta') return respond({ enabled: false, canRegister: false, canAdminister: false, departments: [] });
     if (path === '/api/mailboxes') return respond(boxes.map((b, i) => ({ ...b, access: 'edit', threadCount: i ? 1 : 3, unhandledCount: i ? 0 : 1 })));
     if (path === '/api/tasks/context') return respond({ enabled: true, bound: true, tagging: true, memberships: [{ workspace: { id: WORKSPACE, name: '総務部', description: '' }, role }, { workspace: { id: 'dept-koho', name: '広報課', description: '' }, role }] });
     if (path === '/api/rental/me') return respond({ permissions: [] });
@@ -136,7 +138,7 @@ async function settleAndCheck(page: Page) {
   });
   const size = await page.evaluate(() => ({ content: document.documentElement.scrollWidth, viewport: innerWidth }));
   expect(size.content, 'the page does not overflow horizontally').toBeLessThanOrEqual(size.viewport);
-  const overflowingPanels = await page.locator('.list-pane, .detail-pane, .task-fields-section, .handling').evaluateAll(panels => panels
+  const overflowingPanels = await page.locator('.list-pane, .detail-pane, .orgs-list-pane, .orgs-detail-pane, .task-fields-section, .handling').evaluateAll(panels => panels
     .filter(panel => panel.getClientRects().length > 0 && panel.scrollWidth > panel.clientWidth + 1)
     .map(panel => ({ classes: panel.className, content: panel.scrollWidth, viewport: panel.clientWidth })));
   expect(overflowingPanels, 'visible content panels do not hide horizontal overflow').toEqual([]);

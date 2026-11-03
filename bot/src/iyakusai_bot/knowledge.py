@@ -19,6 +19,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from . import contact
+from . import access_check
 from . import docgen
 from .ai_provider import (
     AIError,
@@ -338,6 +339,7 @@ class Knowledge(commands.Cog):
         self._agent_sem = asyncio.Semaphore(2)  # エージェント検索の同時実行上限
 
     @app_commands.command(name="ask", description="委員会資料から探して答える(「あの決定どこ?」)")
+    @access_check.require("ask")
     @app_commands.describe(
         質問="知りたいこと(例: 発電機のレンタルはどうなってる?)",
         形式="回答をファイルで受け取る場合の形式(省略時は通常のメッセージ)",

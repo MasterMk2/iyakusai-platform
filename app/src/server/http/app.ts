@@ -4,8 +4,15 @@ import cookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import { z } from 'zod';
 import { HANDLING_STATUSES, LIMITS, type ApiError, type FaultState, type SessionResponse, type SessionUser } from '../../shared/api.js';
+import { departmentsOfLabel, TEMPORARY_STAFF_DEPARTMENT } from '../../shared/mailbox.js';
 import { installAccount, type AccountRuntime } from '../account/http.js';
 import { installDiscordAuth, type DiscordAuthRuntime } from '../discord-auth/http.js';
+import { isTemporaryStaffLoginId } from '../discord-auth/temporary-staff.js';
+import { registerDecisionRoutes } from '../decisions/routes.js';
+import type { DecisionsStore } from '../decisions/store.js';
+import { registerDemoBooks, type DemoBooks } from '../payments/demo.js';
+import { registerDayOfRoutes } from '../dayof/routes.js';
+import type { DayOfStore } from '../dayof/store.js';
 import { assertMappedUsers, ConfigError, IDENTITY_HEADER, isValidIdentity, normalizeAddress, type AuthConfig, type TrustedProxyAuth } from '../auth.js';
 import { MockInboundConnector, type MockConnectorOptions } from '../connector/mock.js';
 import type { InboundConnector } from '../connector/types.js';
@@ -28,8 +35,13 @@ import { registerRentalRoutes, type RentalRuntime } from '../rental/routes.js';
 import { registerTaskRoutes, type TaskRuntime } from '../tasks/routes.js';
 import { registerAssistantRoutes, type AssistantRuntime } from '../assistant/routes.js';
 import { attachmentDisposition } from './content-disposition.js';
+import { registerCalendarRoutes, type CalendarRuntime } from '../calendar/routes.js';
 import { HttpError } from './http-error.js';
 import { registerLineRoutes, type LineRuntime } from './line-routes.js';
+import { discordPeople, rolloverRuntime, statePeople } from '../rollover/compose.js';
+import { registerRolloverRoutes } from '../rollover/routes.js';
+import type { RolloverStore } from '../rollover/store.js';
+import type { OrganizationsStore } from '../organizations/store.js';
 import { DISCORD_LINE_PATHS } from '../line/discord.js';
 
 export const SESSION_COOKIE = 'smm_demo_persona';
@@ -58,8 +70,18 @@ export interface AppOptions {
   discord?: DiscordAuthRuntime;
   /** Discord login only: the committee mailbox (SQLite). Replaces the synthetic inbox routes. */
   mailbox?: MailboxRuntime | null;
+  /** The committee calendar (SQLite beside the mail, or the demo's). Absent: the calendar API answers 404. */
+  calendar?: CalendarRuntime | null;
   /** Discord login only: key of the Bot's read-only data source (POST /v1/bot/datasource). Absent: the route does not exist. */
   botDatasourceKey?: Buffer | null;
+  /** The decision register (decisions.sqlite3). Absent: the register is off (its meta route answers enabled: false). */
+  decisions?: DecisionsStore | null;
+  /** Demo only: contacts, organizations and payments on synthetic data (2026-11-03). Absent: those routes do not exist. */
+  demoBooks?: DemoBooks | null;
+  /** The festival-day board (dayof.sqlite3). Absent: its routes do not exist (404). */
+  dayof?: DayOfStore | null;
+  /** The year rollover (rollover.sqlite3 beside the mail, or the demo's), with the demo's organizations file. Absent: no rollover routes. */
+  rollover?: { store: RolloverStore; organizations: OrganizationsStore | null } | null;
 }
 
 const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '[::1]']);
@@ -421,13 +443,76 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
         parse,
         publicOrigin: auth.mode === 'discord' ? auth.publicOrigin : null,
         fromTrustedProxy: (request) => discordApi!.fromTrustedProxy(request),
+        decisions: options.decisions ?? null,
       })
     : null;
 
   const taskRoutes = registerTaskRoutes(app, { tasks: options.tasks ?? null, mail: store, mailCases: committeeMail?.cases ?? null, line: options.line, clock, parse, requireUser });
   registerAssistantRoutes(app, { assistant: options.assistant ?? null, mailDraftBcc: options.mailbox?.config.draftBccAddress ?? null, parse, requireUser });
+  // The committee calendar (2026-11-03): events, the yearly schedule, the home reminders, the personal iCal feed (see calendar/routes.ts).
+  registerCalendarRoutes(app, options.calendar ?? null, {
+    requireUser,
+    isTemporary: (user, request) => !!discordApi && (departmentsOfLabel(user.roleLabel).includes(TEMPORARY_STAFF_DEPARTMENT) || (request !== null && discordApi.currentSession(request)?.temporaryStaff === true)),
+    lookupUser: (userId) => (discordApi ? discordApi.lookupUser(userId) : findUser(store.current, userId)),
+    listUsers: () => (discordApi ? discordApi.listUsers() : store.current.users.filter((u) => !u.disabled)),
+    tasks: options.tasks ?? null,
+    fromTrustedProxy: (request) => (discordApi ? discordApi.fromTrustedProxy(request) : false),
+    clock,
+    parse,
+  });
+  if (options.calendar) app.addHook('onClose', async () => options.calendar!.store.close());
 
   await registerRentalRoutes(app, { rental: options.rental ?? null, requireUser, lookupUser: (userId) => (discordApi ? discordApi.lookupUser(userId) : findUser(store.current, userId)), listUsers: () => discordApi ? discordApi.listUsers() : store.current.users.filter((u) => !u.disabled) });
+  // Decision register (2026-11-03): committee members only. Temporary staff and a Discord-less account are refused, reads too.
+  registerDecisionRoutes(app, options.decisions ?? null, {
+    viewer: (request) => {
+      const user = requireUser(request);
+      if (user.disabled || isTemporaryStaffLoginId(user.id) || departmentsOfLabel(user.roleLabel).includes(TEMPORARY_STAFF_DEPARTMENT)) return null;
+      if (discordApi && (discordApi.discordUserIdOf(user.id) === null || discordApi.currentSession(request)?.discordUserId.startsWith('staff:'))) return null;
+      return user;
+    },
+    nameOf: (userId) => (discordApi ? discordApi.lookupUser(userId)?.displayName : findUser(store.current, userId)?.displayName) ?? '（不明な利用者）',
+    clock,
+    parse,
+  });
+  if (demo && options.demoBooks) registerDemoBooks(app, options.demoBooks, { requireUser, lookupUser: (userId) => findUser(store.current, userId), listUsers: () => store.current.users.filter((u) => !u.disabled), clock, parse });
+  // Festival-day board (2026-11-03, dayof/routes.ts). Members as for the decision register above; temporary staff read the notices marked for them.
+  registerDayOfRoutes(app, options.dayof ?? null, {
+    viewer: (request) => {
+      const user = requireUser(request);
+      if (user.disabled) return null;
+      const session = discordApi?.currentSession(request) ?? null;
+      if (isTemporaryStaffLoginId(user.id) || departmentsOfLabel(user.roleLabel).includes(TEMPORARY_STAFF_DEPARTMENT) || session?.temporaryStaff === true || session?.discordUserId.startsWith('staff:')) return { user, staff: true };
+      return discordApi && discordApi.discordUserIdOf(user.id) === null ? null : { user, staff: false };
+    },
+    listUsers: () => (discordApi ? discordApi.listUsers() : store.current.users.filter((u) => !u.disabled)),
+    nameOf: (userId) => (discordApi ? discordApi.lookupUser(userId)?.displayName : findUser(store.current, userId)?.displayName) ?? '（不明な利用者）',
+    decisions: options.decisions ?? null,
+    calendar: options.calendar?.store ?? null,
+    rental: options.rental ?? null,
+    clock,
+    parse,
+  });
+  // Year rollover (2026-11-04): access administrators only, on the settings screen (see rollover/routes.ts).
+  if (options.rollover) {
+    const people = discordApi ? discordPeople(discordApi) : statePeople(store);
+    registerRolloverRoutes(app, rolloverRuntime({
+      store: options.rollover.store,
+      organizations: committeeMail?.organizations ?? (demo ? options.demoBooks?.organizations : null) ?? options.rollover.organizations,
+      calendar: options.calendar?.store ?? null,
+      decisions: options.decisions ?? null,
+      tasks: options.tasks ?? null,
+      people,
+      mail: committeeMail && mailbox ? { kind: 'committee', store: mailbox.store, mailboxes: mailbox.config.mailboxes } : { kind: 'synthetic', store },
+      line: committeeMail?.line && discordApi ? { kind: 'committee', store: committeeMail.line, people: () => discordApi!.listUsers() } : options.line ? { kind: 'synthetic', store: options.line.store, mail: store } : null,
+      rental: options.rental ? { store: options.rental.store, allMembersAdmin: options.rental.allMembersAdmin ?? false } : null,
+    }), {
+      requireUser,
+      isTemporary: (user, request) => isTemporaryStaffLoginId(user.id) || departmentsOfLabel(user.roleLabel).includes(TEMPORARY_STAFF_DEPARTMENT) || (!!discordApi && discordApi.currentSession(request)?.temporaryStaff === true),
+      clock,
+      parse,
+    });
+  }
   // Copy to Google Drive: signed requests of the committee's Apps Script, Discord login only (the gate lets its report through).
   if (options.rental?.driveSyncKey) {
     if (auth.mode !== 'discord') throw new ConfigError('物品の Drive 同期は discord モードでだけ使えます。');
@@ -440,6 +525,8 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       rental: options.rental ?? null,
       mailbox,
       tasks: options.tasks ?? null,
+      decisions: options.decisions ?? null,
+      origin: auth.mode === 'discord' ? auth.publicOrigin : null,
       displayName: (userId) => discordApi!.rosterNameOf(userId),
       now: () => Date.parse(clock()),
     });

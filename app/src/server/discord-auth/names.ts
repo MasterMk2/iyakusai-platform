@@ -54,6 +54,11 @@ export class NameRoster {
 
   constructor(private readonly file: string | null) {}
 
+  /** A roster file is set (without one, nobody has a roster name). */
+  get configured(): boolean {
+    return this.file !== null;
+  }
+
   nameOf(discordUserId: string): string | null {
     if (!this.file) return null;
     try {

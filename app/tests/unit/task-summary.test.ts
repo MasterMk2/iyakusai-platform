@@ -28,3 +28,19 @@ describe('remaining task counts', () => {
     expect(s.byDate).toEqual([]);
   });
 });
+
+describe('the viewer’s own open tasks (自分の持ち)', () => {
+  const me = 'user-me';
+  const held = (id: string, deadline: string | null, assigneeId: string | null, helperIds: string[] = [], status: TaskView['status'] = 'todo') =>
+    ({ id, deadline, status, assigneeId, helperIds } as TaskView);
+  it('counts open tasks as lead or helper, once each even when a task is in two departments, and leaves completed ones out', () => {
+    const tasks = [held('1', '2026-10-13', me), held('2', '2026-10-14', 'user-x', [me], 'in_progress'), held('3', null, me, [], 'done'), held('4', null, 'user-x')];
+    const s = summarizeTaskGroups([group(tasks), group(tasks, 'dept-kaijo')], '2026-10-13T15:00:00Z', me);
+    expect(s.mine).toEqual({ remaining: 2, lead: 1, helper: 1, overdue: 1, today: 1 });
+    expect(s.total).toBe(3);
+  });
+  it('leaves mine out when no viewer is given, so an older Bot host answer reads the same', () => {
+    const s = summarizeTaskGroups([group([held('1', null, me)])], '2026-10-14T00:00:00Z');
+    expect('mine' in s).toBe(false);
+  });
+});

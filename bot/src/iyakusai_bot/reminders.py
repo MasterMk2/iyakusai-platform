@@ -12,6 +12,8 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from . import remind_logic as rl
+from .notify import routed_channel_id
+from . import access_check
 from .storage import ReminderStore
 
 log = logging.getLogger("iyakusai.reminders")
@@ -57,6 +59,7 @@ class Reminders(commands.Cog):
     # ---------- スラッシュコマンド ----------
 
     @remind.command(name="add", description="リマインドを登録する")
+    @access_check.require("remind.add")
     @app_commands.describe(
         期限="例: 7/20 18:00 / 明日 / 2026-08-01 / +3d",
         内容="何をリマインドするか",
@@ -72,30 +75,33 @@ class Reminders(commands.Cog):
         対象: discord.Member | None = None,
         繰り返し: app_commands.Choice[str] | None = None,
     ):
-        try:
-            due = rl.parse_due(期限)
-        except rl.ParseError as e:
-            await itx.response.send_message(f"⚠️ {e}", ephemeral=True)
-            return
-        rem = self.store.add({
-            "text": 内容,
-            "due": due.isoformat(),
-            "creator_id": itx.user.id,
-            "target_id": 対象.id if 対象 else itx.user.id,
-            "channel_id": itx.channel_id,
-            "repeat": 繰り返し.value if 繰り返し else "none",
-            "flags": {},
-            "last_ping": None,
-            "created_at": rl.now_jst().isoformat(),
-            "done": False,
-        })
-        rep = f"(繰り返し: {繰り返し.name})" if 繰り返し and 繰り返し.value != "none" else ""
-        await itx.response.send_message(
-            f"⏰ 登録しました {_fmt_item(rem)} {rep}\n"
-            f"通知: 前日・期限時刻・超過中は24時間ごとに催促(`/remind done id:{rem['id']}` で完了)"
-        )
+        with access_check.audited("remind.add", itx) as rec:
+            try:
+                due = rl.parse_due(期限)
+            except rl.ParseError as e:
+                rec.fail("VALIDATION")
+                await itx.response.send_message(f"⚠️ {e}", ephemeral=True)
+                return
+            rem = self.store.add({
+                "text": 内容,
+                "due": due.isoformat(),
+                "creator_id": itx.user.id,
+                "target_id": 対象.id if 対象 else itx.user.id,
+                "channel_id": itx.channel_id,
+                "repeat": 繰り返し.value if 繰り返し else "none",
+                "flags": {},
+                "last_ping": None,
+                "created_at": rl.now_jst().isoformat(),
+                "done": False,
+            })
+            rep = f"(繰り返し: {繰り返し.name})" if 繰り返し and 繰り返し.value != "none" else ""
+            await itx.response.send_message(
+                f"⏰ 登録しました {_fmt_item(rem)} {rep}\n"
+                f"通知: 前日・期限時刻・超過中は24時間ごとに催促(`/remind done id:{rem['id']}` で完了)"
+            )
 
     @remind.command(name="list", description="リマインド一覧(未完了)")
+    @access_check.require("remind.list")
     async def list_(self, itx: discord.Interaction):
         items = sorted(self.store.active(), key=lambda r: r["due"])
         if not items:
@@ -106,36 +112,44 @@ class Reminders(commands.Cog):
         await itx.response.send_message("\n".join(lines) + more, ephemeral=True)
 
     @remind.command(name="done", description="リマインドを完了にする(登録者・催促対象または役員)")
+    @access_check.require("remind.done")
     @app_commands.describe(id="対象のリマインドID(/remind list で確認)")
     async def done(self, itx: discord.Interaction, id: int):
-        rem = self.store.get(id)
-        if not rem:
-            await itx.response.send_message(f"⚠️ #{id} は見つかりません。", ephemeral=True)
-            return
-        # 催促された本人(target_id)も完了にできる。超過催促の本文(_notify の "overdue")が
-        # **催促対象に向けて**「完了したら `/remind done id:N`」と案内しているので、ここを
-        # 登録者・役員だけに絞ると Bot 自身の案内どおりに操作した委員が弾かれる(2026-08-12)。
-        # target_id は .get で読む(古いレコードに欠けていても落とさないため)。
-        if not (_is_owner_or_admin(itx, rem) or itx.user.id == rem.get("target_id")):
-            await itx.response.send_message(
-                "⚠️ 完了にできるのは登録者・催促対象か役員だけです。", ephemeral=True)
-            return
-        self.store.update(id, done=True)
-        await itx.response.send_message(f"✅ 完了にしました: `#{id}` {rem['text']}")
+        with access_check.audited("remind.done", itx) as rec:
+            rem = self.store.get(id)
+            if not rem:
+                rec.fail("NOT_FOUND")
+                await itx.response.send_message(f"⚠️ #{id} は見つかりません。", ephemeral=True)
+                return
+            # 催促された本人(target_id)も完了にできる。超過催促の本文(_notify の "overdue")が
+            # **催促対象に向けて**「完了したら `/remind done id:N`」と案内しているので、ここを
+            # 登録者・役員だけに絞ると Bot 自身の案内どおりに操作した委員が弾かれる(2026-08-12)。
+            # target_id は .get で読む(古いレコードに欠けていても落とさないため)。
+            if not (_is_owner_or_admin(itx, rem) or itx.user.id == rem.get("target_id")):
+                rec.fail("FORBIDDEN")
+                await itx.response.send_message(
+                    "⚠️ 完了にできるのは登録者・催促対象か役員だけです。", ephemeral=True)
+                return
+            self.store.update(id, done=True)
+            await itx.response.send_message(f"✅ 完了にしました: `#{id}` {rem['text']}")
 
     @remind.command(name="delete", description="リマインドを削除する(登録者または役員)")
+    @access_check.require("remind.delete")
     @app_commands.describe(id="対象のリマインドID")
     async def delete(self, itx: discord.Interaction, id: int):
-        rem = self.store.get(id)
-        if not rem:
-            await itx.response.send_message(f"⚠️ #{id} は見つかりません。", ephemeral=True)
-            return
-        # delete は done と違い催促対象を含めない(記録ごと消える操作なので狭いまま)。
-        if not _is_owner_or_admin(itx, rem):
-            await itx.response.send_message("⚠️ 削除できるのは登録者か役員だけです。", ephemeral=True)
-            return
-        self.store.delete(id)
-        await itx.response.send_message(f"🗑️ 削除しました: `#{id}` {rem['text']}")
+        with access_check.audited("remind.delete", itx) as rec:
+            rem = self.store.get(id)
+            if not rem:
+                rec.fail("NOT_FOUND")
+                await itx.response.send_message(f"⚠️ #{id} は見つかりません。", ephemeral=True)
+                return
+            # delete は done と違い催促対象を含めない(記録ごと消える操作なので狭いまま)。
+            if not _is_owner_or_admin(itx, rem):
+                rec.fail("FORBIDDEN")
+                await itx.response.send_message("⚠️ 削除できるのは登録者か役員だけです。", ephemeral=True)
+                return
+            self.store.delete(id)
+            await itx.response.send_message(f"🗑️ 削除しました: `#{id}` {rem['text']}")
 
     # ---------- 通知ループ ----------
 
@@ -154,10 +168,16 @@ class Reminders(commands.Cog):
         await self.bot.wait_until_ready()
 
     async def _notify(self, rem: dict, act: str):
-        channel = self.bot.get_channel(rem["channel_id"])
+        # 送り先は登録したチャンネル。[notify] の reminder が設定されていればそこ(2026-11-03)。
+        # 上書き先が見えないときは登録のチャンネルに戻す(上書き先の不調で全部のリマインドを止めない)。
+        target_id = routed_channel_id(self.bot, "reminder", rem["channel_id"])
+        if target_id != rem["channel_id"] and self.bot.get_channel(target_id) is None:
+            log.warning("リマインド #%s: 上書き先が見えないため登録のチャンネルに送ります", rem.get("id"))
+            target_id = rem["channel_id"]
+        channel = self.bot.get_channel(target_id)
         if channel is None:
             try:
-                channel = await self.bot.fetch_channel(rem["channel_id"])
+                channel = await self.bot.fetch_channel(target_id)
             except discord.NotFound:
                 # チャンネルが削除済み = 何度試しても届かない。従来はここが汎用 except に
                 # 落ちるだけで、check_loop が **毎tick(60秒)エラーログを吐き続け**、その

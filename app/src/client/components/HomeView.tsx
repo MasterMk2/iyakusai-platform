@@ -1,5 +1,9 @@
+import { DecisionsHomeCard } from './decisions/DecisionsHomeCard';
+import { DayOfPanel } from './dayof/DayOfPanel';
 import { useCallback, useState, type FormEvent, type ReactNode } from 'react';
 import type { MailboxSummary } from '../../shared/api';
+import type { UpcomingItem } from '../../shared/calendar';
+import type { MailDueResponse } from '../../shared/mailDue';
 import type { AssistantSummary } from '../../shared/assistant';
 import type { InboxResponse, LineAccountSummary } from '../../shared/line';
 import type { TaskContextResponse } from '../../shared/tasks';
@@ -9,7 +13,9 @@ import { useLoader } from '../useLoader';
 import { BotSummaryCard } from './bot/BotSummaryCard';
 import { isBotDisabled } from './bot/BotView';
 import { LoadStatus } from './LoadStatus';
+import { MailDueCard } from './MailDueCard';
 import { TaskSummaryCard } from './tasks/TaskSummaryCard';
+import { UpcomingCard } from './calendar/UpcomingCard';
 import type { InboxFilter } from './ThreadList';
 
 /** Answer of GET /api/rental/summary (src/server/rental/store.ts). */
@@ -113,6 +119,10 @@ export function HomeView({
     [mailOpen, refresh],
   );
   const unhandled = useLoader(loadUnhandled);
+  // The mail deadlines and the near events come from their own cards (one request each), which hand their counts up
+  // for the attention line. undefined: not known yet; null: nothing to count (a failure, or the card is left out).
+  const [mailDue, setMailDue] = useState<MailDueResponse['counts'] | null | undefined>(undefined);
+  const [upcoming, setUpcoming] = useState<UpcomingItem[] | null | undefined>(undefined);
 
   const t = taskSummary.data;
   const b = bot.data && !bot.data.hidden ? bot.data.summary : null;
@@ -130,7 +140,11 @@ export function HomeView({
     if (t.deadlines.overdue > 0) items.push({ key: 'overdue', label: 'タスクの期限超過', n: t.deadlines.overdue, tone: 'error', onOpen: scrollTo('home-tasks'), testId: 'attention-task-overdue' });
     if (t.deadlines.today > 0) items.push({ key: 'today', label: '今日が期限のタスク', n: t.deadlines.today, tone: 'warning', onOpen: scrollTo('home-tasks'), testId: 'attention-task-today' });
   }
+  // Events of today and tomorrow, and the person's own tasks due tomorrow (those due today are counted just above).
+  const soon = (upcoming ?? []).filter((i) => i.daysLeft <= 1 && !(t && i.kind === 'task' && i.daysLeft === 0)).length;
+  if (soon > 0) items.push({ key: 'soon', label: '今日・明日の予定と期限', n: soon, tone: 'warning', onOpen: scrollTo('home-upcoming'), testId: 'attention-soon' });
   if (mailOpen && mailTotal !== null && mailTotal > 0) items.push({ key: 'mail', label: '未対応のメール', n: mailTotal, tone: 'error', onOpen: () => onOpenInbox('unhandled'), testId: 'attention-mail' });
+  if (mailOpen && mailDue && mailDue.replyOverdue > 0) items.push({ key: 'mail-due', label: '返事待ちで期限を過ぎたメール', n: mailDue.replyOverdue, tone: 'error', onOpen: scrollTo('home-mail-due'), testId: 'attention-mail-due' });
   const lineTotal = lineAccounts.reduce((n, a) => n + a.unhandledCount, 0);
   if (mailOpen && onOpenLine && lineTotal > 0) items.push({ key: 'line', label: '未対応の公式LINE', n: lineTotal, tone: 'error', onOpen: () => onOpenLine(), testId: 'attention-line' });
   if (b) {
@@ -141,7 +155,7 @@ export function HomeView({
     if (r.loanedByGroup.length > 0) items.push({ key: 'loan', label: '返却待ちの団体', n: r.loanedByGroup.length, tone: 'info', onOpen: scrollTo('home-rental'), testId: 'attention-loans' });
     if (r.counts.review > 0) items.push({ key: 'review', label: '要確認の物品', n: r.counts.review, tone: 'warning', onOpen: scrollTo('home-rental'), testId: 'attention-review' });
   }
-  const settled = !taskSummary.loading && !bot.loading && !rentalSummary.loading && !unhandled.loading;
+  const settled = !taskSummary.loading && !bot.loading && !rentalSummary.loading && !unhandled.loading && (!mailOpen || mailDue !== undefined) && upcoming !== undefined;
   const failed = !!(taskSummary.error || bot.error || rentalSummary.error || unhandled.error);
 
   return (
@@ -155,6 +169,7 @@ export function HomeView({
           最新の状態にする
         </button>
       </div>
+      <DayOfPanel refresh={refresh} tasks={tasks} />
       <section className="attention" aria-label="対応が必要な件数" data-testid="home-attention">
         {items.length > 0 ? (
           <ul>
@@ -168,7 +183,7 @@ export function HomeView({
             ))}
           </ul>
         ) : settled && !failed ? (
-          <p className="status ok">いま期限を過ぎたタスクや未対応のメールはありません。</p>
+          <p className="status ok">いま期限を過ぎたタスクや返事待ち、未対応のメール、今日・明日の予定と期限はありません。</p>
         ) : !settled ? (
           <p className="hint">件数を確認しています…</p>
         ) : null}
@@ -189,12 +204,15 @@ export function HomeView({
               onOpenLine={onOpenLine}
             />
           )}
+          {mailOpen && <MailDueCard onOpenThread={onOpenThread} onCounts={setMailDue} />}
+          <UpcomingCard onItems={setUpcoming} />
           {tasks?.enabled && <TaskSummaryCard context={tasks} loader={taskSummary} onOpenTasks={onOpenTasks} />}
         </div>
         <div className="home-side">
           {rental && <RentalCard loader={rentalSummary} />}
           <BotSummaryCard loader={bot} onOpenBot={onOpenBot} />
           {onOpenContacts && <ContactsCard onOpen={onOpenContacts} />}
+          <DecisionsHomeCard />
         </div>
       </div>
     </main>

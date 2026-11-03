@@ -128,6 +128,78 @@ async function main(): Promise<void> {
     manifest.files['mailbox/contacts.sqlite3'] = { bytes: readFileSync(dest).length, sha256: sha256(readFileSync(dest)) };
   }
 
+  // Decision register (2026-11-03): decisions.sqlite3 next to mail.sqlite3, with its change history.
+  const decisionsDb = path.join(data, 'mailbox', 'decisions.sqlite3');
+  if (existsSync(decisionsDb)) {
+    const dest = path.join(target, 'mailbox', 'decisions.sqlite3');
+    mkdirSync(path.dirname(dest), { recursive: true, mode: 0o700 });
+    const source = new DatabaseSync(decisionsDb, { readOnly: true });
+    try {
+      await backup(source, dest);
+    } finally {
+      source.close();
+    }
+    const copy = new DatabaseSync(dest, { readOnly: true });
+    try {
+      const check = copy.prepare('PRAGMA integrity_check').get() as { integrity_check: string };
+      if (check.integrity_check !== 'ok') throw new Error('決定事項の複製の整合性を確認できませんでした。');
+      for (const table of ['decisions', 'decision_history']) {
+        manifest.counts[`decisions.${table}`] = Number((copy.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n);
+      }
+    } finally {
+      copy.close();
+    }
+    manifest.files['mailbox/decisions.sqlite3'] = { bytes: readFileSync(dest).length, sha256: sha256(readFileSync(dest)) };
+  }
+
+  // Organizations (団体の台帳, 2026-11-03): organizations.sqlite3 next to contacts.sqlite3, with its history and mail batches.
+  const organizationsDb = path.join(data, 'mailbox', 'organizations.sqlite3');
+  if (existsSync(organizationsDb)) {
+    const dest = path.join(target, 'mailbox', 'organizations.sqlite3');
+    mkdirSync(path.dirname(dest), { recursive: true, mode: 0o700 });
+    const source = new DatabaseSync(organizationsDb, { readOnly: true });
+    try {
+      await backup(source, dest);
+    } finally {
+      source.close();
+    }
+    const copy = new DatabaseSync(dest, { readOnly: true });
+    try {
+      const check = copy.prepare('PRAGMA integrity_check').get() as { integrity_check: string };
+      if (check.integrity_check !== 'ok') throw new Error('団体の複製の整合性を確認できませんでした。');
+      for (const table of ['organizations', 'organization_history', 'mail_batches']) {
+        manifest.counts[`organizations.${table}`] = Number((copy.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n);
+      }
+    } finally {
+      copy.close();
+    }
+    manifest.files['mailbox/organizations.sqlite3'] = { bytes: readFileSync(dest).length, sha256: sha256(readFileSync(dest)) };
+  }
+
+  // Payments (入金確認, 2026-11-03): payments.sqlite3 next to organizations.sqlite3, with its invoices, deposits and history.
+  const paymentsDb = path.join(data, 'mailbox', 'payments.sqlite3');
+  if (existsSync(paymentsDb)) {
+    const dest = path.join(target, 'mailbox', 'payments.sqlite3');
+    mkdirSync(path.dirname(dest), { recursive: true, mode: 0o700 });
+    const source = new DatabaseSync(paymentsDb, { readOnly: true });
+    try {
+      await backup(source, dest);
+    } finally {
+      source.close();
+    }
+    const copy = new DatabaseSync(dest, { readOnly: true });
+    try {
+      const check = copy.prepare('PRAGMA integrity_check').get() as { integrity_check: string };
+      if (check.integrity_check !== 'ok') throw new Error('会計の複製の整合性を確認できませんでした。');
+      for (const table of ['invoices', 'deposits', 'allocations', 'history']) {
+        manifest.counts[`payments.${table}`] = Number((copy.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n);
+      }
+    } finally {
+      copy.close();
+    }
+    manifest.files['mailbox/payments.sqlite3'] = { bytes: readFileSync(dest).length, sha256: sha256(readFileSync(dest)) };
+  }
+
   // Meeting minutes (α 2026-11-02): minutes.sqlite3 next to mail.sqlite3. The recordings (minutes-audio/) are
   // not backed up: they are deleted a fixed number of days after confirmation.
   const minutesDb = path.join(data, 'mailbox', 'minutes.sqlite3');
@@ -151,6 +223,81 @@ async function main(): Promise<void> {
       copy.close();
     }
     manifest.files['mailbox/minutes.sqlite3'] = { bytes: readFileSync(dest).length, sha256: sha256(readFileSync(dest)) };
+  }
+
+  // Committee calendar (2026-11-03): calendar.sqlite3 next to mail.sqlite3, with its history and the iCal URLs' hashes
+  // (the URLs themselves are never stored). Without this, a restore from this backup would lose every event.
+  const calendarDb = path.join(data, 'mailbox', 'calendar.sqlite3');
+  if (existsSync(calendarDb)) {
+    const dest = path.join(target, 'mailbox', 'calendar.sqlite3');
+    mkdirSync(path.dirname(dest), { recursive: true, mode: 0o700 });
+    const source = new DatabaseSync(calendarDb, { readOnly: true });
+    try {
+      await backup(source, dest);
+    } finally {
+      source.close();
+    }
+    const copy = new DatabaseSync(dest, { readOnly: true });
+    try {
+      const check = copy.prepare('PRAGMA integrity_check').get() as { integrity_check: string };
+      if (check.integrity_check !== 'ok') throw new Error('カレンダーの複製の整合性を確認できませんでした。');
+      for (const table of ['events', 'event_history', 'ical_subscriptions', 'event_requests']) {
+        manifest.counts[`calendar.${table}`] = Number((copy.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n);
+      }
+    } finally {
+      copy.close();
+    }
+    manifest.files['mailbox/calendar.sqlite3'] = { bytes: readFileSync(dest).length, sha256: sha256(readFileSync(dest)) };
+  }
+
+  // Festival-day board (2026-11-03): dayof.sqlite3 next to mail.sqlite3 (the period, the rules, the posters, the
+  // notices and their history). The decisions recorded on the day are in decisions.sqlite3 above.
+  const dayofDb = path.join(data, 'mailbox', 'dayof.sqlite3');
+  if (existsSync(dayofDb)) {
+    const dest = path.join(target, 'mailbox', 'dayof.sqlite3');
+    mkdirSync(path.dirname(dest), { recursive: true, mode: 0o700 });
+    const source = new DatabaseSync(dayofDb, { readOnly: true });
+    try {
+      await backup(source, dest);
+    } finally {
+      source.close();
+    }
+    const copy = new DatabaseSync(dest, { readOnly: true });
+    try {
+      const check = copy.prepare('PRAGMA integrity_check').get() as { integrity_check: string };
+      if (check.integrity_check !== 'ok') throw new Error('当日の連絡板の複製の整合性を確認できませんでした。');
+      for (const table of ['posts', 'post_history', 'poster_grants', 'admin_history']) {
+        manifest.counts[`dayof.${table}`] = Number((copy.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n);
+      }
+    } finally {
+      copy.close();
+    }
+    manifest.files['mailbox/dayof.sqlite3'] = { bytes: readFileSync(dest).length, sha256: sha256(readFileSync(dest)) };
+  }
+
+  // Year rollover (2026-11-04): rollover.sqlite3 next to mail.sqlite3, the record of each run (who, when, what) and
+  // what each copy made, which an undo needs.
+  const rolloverDb = path.join(data, 'mailbox', 'rollover.sqlite3');
+  if (existsSync(rolloverDb)) {
+    const dest = path.join(target, 'mailbox', 'rollover.sqlite3');
+    mkdirSync(path.dirname(dest), { recursive: true, mode: 0o700 });
+    const source = new DatabaseSync(rolloverDb, { readOnly: true });
+    try {
+      await backup(source, dest);
+    } finally {
+      source.close();
+    }
+    const copy = new DatabaseSync(dest, { readOnly: true });
+    try {
+      const check = copy.prepare('PRAGMA integrity_check').get() as { integrity_check: string };
+      if (check.integrity_check !== 'ok') throw new Error('年度の切り替えの記録の複製の整合性を確認できませんでした。');
+      for (const table of ['runs', 'run_items']) {
+        manifest.counts[`rollover.${table}`] = Number((copy.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n);
+      }
+    } finally {
+      copy.close();
+    }
+    manifest.files['mailbox/rollover.sqlite3'] = { bytes: readFileSync(dest).length, sha256: sha256(readFileSync(dest)) };
   }
 
   writeFileSync(path.join(target, 'manifest.json'), `${JSON.stringify(manifest, null, 1)}\n`, { mode: 0o600, flag: 'wx' });

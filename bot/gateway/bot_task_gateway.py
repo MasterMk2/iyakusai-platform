@@ -720,9 +720,19 @@ class SqliteGateway:
             buckets[bucket] += 1
             if deadline is not None:
                 dates[task.deadline] = dates.get(task.deadline, 0) + 1
-        return {"today": today.isoformat(), "generatedAt": now.isoformat(), "total": len(rows),
+        body = {"today": today.isoformat(), "generatedAt": now.isoformat(), "total": len(rows),
                 "deadlines": buckets, "departments": departments,
                 "byDate": [{"deadline": d, "remaining": n} for d, n in sorted(dates.items())]}
+        # 2026-11-03 追加: 自分の持ち（主担当か副担当になっている未完了のタスク）。上と同じ 1 回の読み取りから数える。
+        # 名簿や担当者の個別の照会はしない。actor_id が無い呼び出しでは項目ごと出さない。
+        if getattr(context, "actor_id", None) is not None:
+            me = user_id(context.actor_id)
+            held = [t for t in rows if getattr(t, "assignee_id", None) == me or me in getattr(t, "helpers", ())]
+            lead = sum(getattr(t, "assignee_id", None) == me for t in held)
+            body["mine"] = {"remaining": len(held), "lead": lead, "helper": len(held) - lead,
+                            "overdue": sum(t.deadline is not None and t.deadline < today.isoformat() for t in held),
+                            "today": sum(t.deadline == today.isoformat() for t in held)}
+        return body
 
     def dispatch(self, method: str, path: str, payload: dict, context):
         parsed = urllib.parse.urlsplit(path)

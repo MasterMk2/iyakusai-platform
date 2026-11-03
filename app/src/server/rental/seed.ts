@@ -1,4 +1,5 @@
 import type { RentalStore } from './store.js';
+import { seedSupplyDemo } from './supplies/seed.js';
 
 // Synthetic rental sample for the loopback demo and mock compositions only (never a hosted ledger).
 // The items and borrowers are the Python server's demo set; the permissions go to demo personas so
@@ -14,4 +15,5 @@ export function seedRentalDemo(store: RentalStore): void {
     store.setPermissions('u-editor-a', ['rental.loan', 'rental.issue'], by);
     store.setPermissions('u-editor-c', ['rental.loan'], by);
   }
+  seedSupplyDemo(store);
 }

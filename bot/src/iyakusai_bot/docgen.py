@@ -13,6 +13,8 @@ import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from . import write_guard
+
 FORMATS = ("docx", "md", "txt")
 _BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
 _FNAME_BAD = re.compile(r'[\\/:*?"<>|\s]+')
@@ -21,7 +23,8 @@ _FNAME_BAD = re.compile(r'[\\/:*?"<>|\s]+')
 def sanitize_filename(title: str, fmt: str) -> str:
     stem = _FNAME_BAD.sub("_", title).strip("_")[:40] or "document"
     stamp = datetime.now(ZoneInfo("Asia/Tokyo")).strftime("%Y%m%d")
-    return f"{stem}_{stamp}.{fmt}"
+    # AI が起草・回答した文書なので先頭に【AI】を付ける（write_guard。/ask・/doc・/mail の共通の入口）
+    return write_guard.ai_name(f"{stem}_{stamp}.{fmt}")
 
 
 def to_file(fmt: str, title: str, body_md: str) -> tuple[str, bytes]:

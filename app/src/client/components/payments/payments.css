@@ -1,0 +1,113 @@
+/* 会計（入金確認, 2026-11-03), reached from 連絡先 → 団体. The shared classes (status, rows-list, row-open, filter-chip,
+   form-grid, back-link…) come from styles.css and organizations.css; this file adds what the accounting screens need.
+   On a phone the list and the opened invoice are one column (the open one replaces the list), and every control that
+   is tapped is at least 44px high. */
+
+.pay-head { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: flex-end; justify-content: space-between; margin-bottom: 8px; }
+.pay-head .actions { align-items: flex-end; }
+.pay-year { display: grid; gap: 4px; font-size: 14px; font-weight: 700; }
+.pay-year select { font-weight: 400; }
+.pay-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 12px; }
+.pay-tabs .filter-chip { min-height: 44px; padding: 4px 14px; }
+/* The shared rule colours an overdue count red; on the chosen (filled) chip that red cannot be read, so it is light. */
+.pay-tabs .filter-chip.tone-overdue[aria-pressed='true'] .option-count { color: var(--on-fill-muted); }
+
+.pay-body { display: grid; grid-template-columns: minmax(320px, 0.9fr) minmax(0, 1.1fr); min-width: 0; border-top: 1px solid var(--line); }
+.pay-body > * { min-width: 0; }
+.pay-list { padding: 12px 20px 24px 0; }
+.pay-detail { border-left: 1px solid var(--line); padding: 12px 0 40px 24px; }
+.pay-detail .back-link { display: none; }
+
+.pay-rows .row-open { min-height: 56px; }
+.pay-row-top { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; justify-content: space-between; min-width: 0; }
+.pay-amount { font-variant-numeric: tabular-nums; white-space: nowrap; font-weight: 700; }
+.pay-badge { display: inline-block; padding: 0 8px; border-radius: 999px; border: 1px solid var(--field); background: var(--neutral-bg); color: var(--ink); font-size: 13px; font-weight: 700; white-space: nowrap; }
+.pay-badge.overdue, .pay-badge.short { background: var(--red-bg); color: var(--red); border-color: var(--red-line); }
+.pay-badge.partial, .pay-badge.over { background: var(--amber-bg); color: var(--amber); border-color: var(--amber-line); }
+.pay-badge.paid { background: var(--green-bg); color: var(--green); border-color: var(--green-line); }
+.pay-desc { overflow-wrap: anywhere; }
+
+.pay-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; margin: 8px 0 16px; font-size: 15px; }
+.pay-facts dt { color: var(--muted); }
+.pay-facts dd { margin: 0; overflow-wrap: anywhere; }
+.pay-facts .pay-amount { font-weight: 400; }
+
+.pay-section { margin: 20px 0 0; display: grid; gap: 8px; min-width: 0; }
+.pay-section h3 { margin: 0; font-size: 16px; }
+.pay-picks { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+.pay-pick { border-bottom: 1px solid var(--line-soft); }
+/* The whole row is the label of its box, so a tap anywhere on it (at least 44px high) chooses the deposit. */
+.pay-pick > label { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 4px 12px; align-items: start; min-height: 44px; padding: 10px 4px; cursor: pointer; }
+.pay-pick > label:hover { background: var(--hover); }
+.pay-pick input[type='checkbox'] { margin: 2px 0 0; width: 22px; height: 22px; }
+.pay-pick-main { display: grid; gap: 2px; min-width: 0; }
+.pay-reasons { display: flex; flex-wrap: wrap; gap: 4px; font-size: 13px; color: var(--muted); }
+.pay-reasons span { border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; }
+.pay-pick-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; align-items: center; padding: 10px 4px; border-bottom: 1px solid var(--line-soft); }
+/* A link that opens another invoice or deposit is a whole 44px target, not only its text. */
+.link-button.pay-link { display: inline-flex; align-items: center; min-height: 44px; padding: 0; }
+.pay-row-actions { display: grid; gap: 6px; justify-items: end; }
+.pay-row-actions button { min-height: 44px; }
+/* Under a row: the reason for accepting a shortfall, and the answer of the 確定 pressed on that row. */
+.pay-row-extra, .status.pay-row-extra { grid-column: 1 / -1; display: grid; gap: 8px; margin: 0; }
+.pay-row-extra label { display: grid; gap: 4px; font-size: 14px; font-weight: 700; width: 100%; }
+.pay-row-extra input[type='text'] { width: 100%; }
+.pay-row-extra .actions button { min-height: 44px; }
+.pay-sum { position: sticky; bottom: 0; z-index: 2; display: grid; gap: 8px; padding: 12px; background: var(--surface); border-top: 1px solid var(--line); box-shadow: 0 -2px 8px var(--shadow); }
+.pay-sum p { margin: 0; }
+.pay-sum label { display: grid; gap: 4px; font-size: 14px; font-weight: 700; }
+.pay-sum .checkbox { display: flex; gap: 10px; align-items: center; min-height: 44px; font-weight: 700; }
+.pay-sum input[type='text'] { width: 100%; }
+.pay-sum .actions button { min-height: 44px; }
+.pay-danger-zone { margin-top: 28px; padding-top: 16px; border-top: 1px solid var(--line); display: grid; gap: 8px; }
+.pay-danger-zone input { width: 100%; }
+
+.pay-form { display: grid; gap: 12px; max-width: 640px; }
+.pay-form label { display: grid; gap: 4px; font-size: 14px; font-weight: 700; min-width: 0; }
+.pay-form input, .pay-form select, .pay-form textarea { width: 100%; min-width: 0; font-weight: 400; }
+.pay-form .field-error { margin: 0; color: var(--red); font-size: 14px; font-weight: 700; }
+.pay-form .checkbox { display: flex; gap: 10px; align-items: center; min-height: 44px; }
+.pay-hints { display: flex; flex-wrap: wrap; gap: 6px; }
+.pay-hints button { min-height: 44px; font-weight: 400; text-align: left; max-width: 100%; overflow-wrap: anywhere; }
+
+.pay-plan { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+.pay-plan li { display: grid; gap: 2px; padding: 8px 4px; border-bottom: 1px solid var(--line-soft); font-size: 14px; overflow-wrap: anywhere; }
+.pay-plan .pay-plan-head { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
+
+.pay-more { margin-top: 24px; display: grid; gap: 8px; }
+.pay-more details { border-top: 1px solid var(--line); padding-top: 8px; }
+.pay-more summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; font-weight: 700; }
+.pay-imports { list-style: none; margin: 0; padding: 0; }
+.pay-imports li { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--line-soft); font-size: 14px; }
+
+/* The organization's payment (団体の詳細). */
+.pay-org { margin: 0 0 16px; display: grid; gap: 6px; }
+.pay-org h3 { margin: 0; font-size: 16px; }
+.pay-org ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.pay-org li { display: grid; gap: 2px; font-size: 14px; }
+
+/* 設定 → 会計の権限. */
+.pay-access-grid { list-style: none; margin: 0; padding: 0; }
+.pay-access-grid > li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 16px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line-soft); }
+.pay-access-name { display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.pay-access-boxes { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.pay-access-boxes label { display: inline-flex; gap: 8px; align-items: center; min-height: 44px; font-size: 14px; }
+.pay-access-search { display: grid; gap: 4px; max-width: 340px; margin: 12px 0; }
+.pay-access-failed { grid-column: 1 / -1; margin: 0; color: var(--red); font-size: 14px; font-weight: 700; }
+
+@media (max-width: 900px) {
+  .pay-body { display: block; }
+  .pay-body.has-detail .pay-list { display: none; }
+  .pay-body:not(.has-detail) .pay-detail { display: none; }
+  .pay-list { padding: 8px 0 24px; }
+  .pay-detail { border-left: 0; padding: 4px 0 32px; }
+  .pay-detail .back-link { display: inline-flex; }
+}
+@media (max-width: 680px) {
+  .pay-facts { gap: 4px 10px; font-size: 14px; }
+  .pay-access-grid > li { grid-template-columns: minmax(0, 1fr); }
+  .pay-head .actions { width: 100%; }
+  /* The deposit's invoices: the buttons go under the row, so the organization's name keeps the width. */
+  .pay-deposit .pay-pick-row { grid-template-columns: minmax(0, 1fr); }
+  .pay-deposit .pay-row-actions { display: flex; flex-wrap: wrap; justify-content: flex-start; }
+}

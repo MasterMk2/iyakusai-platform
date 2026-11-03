@@ -65,6 +65,15 @@ const STAFF_GET = new Set([
   '/api/rental/issuance/:code',
   '/api/rental/items/:code/metadata',
   '/api/rental/items/:code/corrections',
+  // Counted supplies, attachments and the 団体 collection board (rental/supplies/): reading is rental.loan work.
+  '/api/rental/supplies',
+  '/api/rental/supplies/movements',
+  '/api/rental/supplies/board',
+  '/api/rental/supplies/collection',
+  '/api/rental/supplies/shortages',
+  '/api/rental/supplies/attachments',
+  // The festival-day notices marked for temporary staff (dayof/routes.ts answers only those, without names).
+  '/api/dayof/notices',
 ]);
 
 const STAFF_POST = new Set([
@@ -75,6 +84,14 @@ const STAFF_POST = new Set([
   '/api/rental/borrowers',
   '/api/rental/operations',
   '/api/rental/items/:code/corrections',
+  // Supplies: lend, take back, use up and check attachments (rental.loan); the definitions (items, stock,
+  // attachments) stay closed. A reversal is open like the corrections above; the store still refuses to
+  // reverse a stock correction without rental.issue, which temporary staff never hold.
+  '/api/rental/supplies/lend',
+  '/api/rental/supplies/return',
+  '/api/rental/supplies/consume',
+  '/api/rental/supplies/attachment-checks',
+  '/api/rental/supplies/movements/:id/reverse',
 ]);
 
 /** API routes a temporary staff account may call; everything else answers 403 (http.ts). */

@@ -23,10 +23,12 @@ import { LoadStatus } from '../LoadStatus';
 import { AssigneeSelect, assigneeText, deadlineInfo, DepartmentPicker, departmentsOf, failureText, HelperPicker, newOperationId, sinceText, StatusChip, tasksToday, useMembers, without } from './common';
 import { coveredKeys, coversTask, DepartmentFilter, parseSelection, selectionLabel, selectionParam, storedSelection, storeSelection, topLevelKeys } from './DepartmentFilter';
 import { TaskBowtie } from './TaskBowtie';
+import { PeopleView } from './PeopleView';
 import { TaskDetailPanel } from './TaskDetailPanel';
 import { childrenByParent, groupRows, openCount, parentChoices, type RowGroup } from './nesting';
 import { openChildrenText, TaskStatusButtons } from './TaskStatusButtons';
-import { departmentTree, storedFolded, storedView, storeFolded, storeView, treeKeys, type ListView, type TreeNode } from './tree';
+import { CalendarView } from '../calendar/CalendarView';
+import { departmentTree, openingView, storedFolded, storedView, storeFolded, storeView, treeKeys, type ListView, type TreeNode } from './tree';
 
 /** Shortcut a link may open the list with (home counts): the matching filter is set. */
 export type TaskFocus = 'overdue' | 'today' | 'mine';
@@ -37,6 +39,8 @@ export interface TaskRoute {
   creating: boolean;
   remaining?: boolean;
   focus?: TaskFocus | null;
+  /** The calendar opened on this day (`cal=`, from a deadline on the home screen). */
+  calendarDate?: string | null;
 }
 
 const EMPTY_REQS: Requirements = { purpose: '', deliverable: '', completionCriteria: '', openQuestions: '' };
@@ -107,9 +111,11 @@ export function TasksView({ route, onNavigate, refresh }: { route: TaskRoute; on
   const multi = departments.length > 0 && departments.every((d) => d.parent !== undefined);
   const firstWorkspace = memberships[0]?.workspace.id ?? null;
   // The chosen departments: from the link (ws=dept-a,dept-b), else the last choice in this browser, else all.
+  // A link that sets a filter without naming departments (the home's "自分の担当") counts every department, as the
+  // home count does; otherwise the last choice in this browser.
   const selection = useMemo(
-    () => (multi ? (parseSelection(route.workspaceId, departments) ?? storedSelection(departments) ?? topLevelKeys(departments)) : []),
-    [multi, route.workspaceId, departments],
+    () => (multi ? (parseSelection(route.workspaceId, departments) ?? (route.focus ? topLevelKeys(departments) : (storedSelection(departments) ?? topLevelKeys(departments)))) : []),
+    [multi, route.workspaceId, route.focus, departments],
   );
   const workspaceId = multi ? null : (route.workspaceId?.split(',')[0] ?? firstWorkspace);
   // What a link to a task or the create form keeps, so that going back shows the same departments.
@@ -166,7 +172,11 @@ export function TasksView({ route, onNavigate, refresh }: { route: TaskRoute; on
   const [createParent, setCreateParent] = useState<string | null>(null);
   // The list by department (2026-10-28), offered with several departments at once. The view and the
   // folded departments are kept in this browser.
-  const [view, setView] = useState<ListView>(storedView);
+  // A link to a day on the calendar (from the home screen) opens the calendar; a link that sets a filter (the home
+  // counts) opens the list, since the people view does not show the filters.
+  const [view, setView] = useState<ListView>(() =>
+    route.calendarDate ? 'calendar' : openingView(storedView(), !!(route.focus || route.remaining)),
+  );
   const [foldedDepartments, setFoldedDepartments] = useState<ReadonlySet<string>>(storedFolded);
   // The role is committee-wide (the same for every department). Anyone who can edit may also reopen a done task
   // (chair's decision 2026-11-03; it was officers only before).
@@ -254,6 +264,27 @@ export function TasksView({ route, onNavigate, refresh }: { route: TaskRoute; on
       }
     });
 
+  // Giving an unassigned task its main assignee (担当を付ける, 2026-11-03): the existing update, with the task's
+  // version. The Task service checks the editor's role and that the person is an active member. A saved task
+  // replaces its row at once; a conflict fetches the list again. A failure is thrown to the row that asked.
+  async function assign(task: TaskView, assigneeId: string): Promise<void> {
+    const key = JSON.stringify({ id: task.id, v: task.version, assignee: assigneeId });
+    const previous = pendingOps.current[task.id];
+    const operationId = previous?.key === key ? previous.id : newOperationId();
+    pendingOps.current[task.id] = { key, id: operationId };
+    try {
+      const res = await api<TaskMutationResponse>('PATCH', `/api/tasks/${encodeURIComponent(task.id)}`, { expectedVersion: task.version, operationId, changes: { assigneeId } });
+      delete pendingOps.current[task.id];
+      setSaved((prev) => ({ ...prev, [res.task.id]: res.task }));
+      if (route.taskId === res.task.id) setDetailRefresh((n) => n + 1);
+      const who = (members.data ?? []).find((m) => m.userId === assigneeId)?.displayName ?? '選んだ人';
+      setNotice({ kind: 'ok', text: `「${task.title}」の担当を${who}にしました。` });
+    } catch (err) {
+      if (err instanceof ApiFailure && err.status === 409) setLocalRefresh((n) => n + 1);
+      throw err;
+    }
+  }
+
   if (!context.data) {
     return (
       <main className="main tasks-main">
@@ -261,12 +292,15 @@ export function TasksView({ route, onNavigate, refresh }: { route: TaskRoute; on
       </main>
     );
   }
+  // Without the Task service, or without a task identity, the calendar still shows the committee's events (the deadlines
+  // are then left out, and the note says so).
   if (!context.data.enabled) {
     return (
       <main className="main tasks-main">
         <p className="status info" data-testid="tasks-disabled">
           このサーバーではタスク機能（委員会タスク管理）が設定されていません。受信箱は通常どおり使えます。
         </p>
+        <CalendarView tasks={[]} tasksLoading={false} taskNote="タスクは連携されていません。予定だけを表示しています。" userId={null} onOpenTask={() => undefined} initialDate={route.calendarDate ?? null} />
       </main>
     );
   }
@@ -276,6 +310,7 @@ export function TasksView({ route, onNavigate, refresh }: { route: TaskRoute; on
         <p className="status info" data-testid="tasks-unbound">
           このアカウントにはタスク機能の権限がありません（委員会タスクの利用者として登録されていません）。
         </p>
+        <CalendarView tasks={[]} tasksLoading={false} taskNote="このアカウントはタスクと結び付いていないため、タスクの期限は出ていません。" userId={null} onOpenTask={() => undefined} initialDate={route.calendarDate ?? null} />
       </main>
     );
   }
@@ -322,6 +357,19 @@ export function TasksView({ route, onNavigate, refresh }: { route: TaskRoute; on
   // The connections view draws the same rows between their departments and projects.
   const treeMode = multi && view === 'tree';
   const bowtieMode = multi && view === 'bowtie';
+  // The people view (人ごと, 2026-11-03) counts the chosen departments' tasks, whatever the status, search or filter.
+  const peopleMode = view === 'people';
+  const scoped = current.filter(inSelection);
+  // The calendar (2026-11-03): a view of this tab; its events come from the calendar API, the deadlines from this list.
+  // The calendar takes the departments chosen above and not the list's own filters (search, status, assignee, deadline),
+  // which are hidden in this view; its department choice narrows further.
+  const calendarMode = view === 'calendar';
+  const calendarTasks = current.filter(inSelection);
+  const calendarTaskNote = tasks.error
+    ? 'タスクの期限を取得できませんでした。予定だけを表示しています。'
+    : multi && !everything
+      ? `タスクの期限は、上で選んだ部局（${selectionLabel(selection, departments)}）のものだけを出しています。`
+      : null;
   const tree = treeMode ? departmentTree(list, byId, departments, covered) : [];
   const allFolded = tree.filter((n) => n.tasks.length > 0).every((n) => foldedDepartments.has(n.key));
   const filtered = searchText !== '' || statuses.length !== TASK_STATUSES.length || assignee !== '' || deadline !== '';
@@ -559,6 +607,32 @@ export function TasksView({ route, onNavigate, refresh }: { route: TaskRoute; on
             </button>
           )}
         </header>
+        {/* The view switch keeps one place in every view: above the search and filters, which some views leave out.
+            人ごと is offered in every committee; the department views need several departments (tags). */}
+        <div className="view-switch-row">
+          <div className="view-switch" role="group" aria-label="表示の形">
+            <button type="button" aria-pressed={!treeMode && !bowtieMode && !peopleMode && !calendarMode} onClick={() => chooseView('list')}>
+              一覧
+            </button>
+            <button type="button" aria-pressed={peopleMode} onClick={() => chooseView('people')}>
+              人ごと
+            </button>
+            {multi && (
+              <>
+                <button type="button" aria-pressed={treeMode} onClick={() => chooseView('tree')}>
+                  部局ごと
+                </button>
+                <button type="button" aria-pressed={bowtieMode} onClick={() => chooseView('bowtie')}>
+                  関係図
+                </button>
+              </>
+            )}
+            <button type="button" aria-pressed={calendarMode} onClick={() => chooseView('calendar')}>
+              カレンダー
+            </button>
+          </div>
+        </div>
+        {!peopleMode && !calendarMode && (
         <div className="list-tools">
           <input
             type="search"
@@ -610,25 +684,14 @@ export function TasksView({ route, onNavigate, refresh }: { route: TaskRoute; on
           </div>
           </div>
         </div>
+        )}
+        {!calendarMode && (
         <div className="list-bar task-list-summary">
-          <p className="count">{loaded ? `${list.length} 件${filtered ? 'を表示' : ''}` : 'タスク一覧'}</p>
-          {filtered && (
+          <p className="count">{loaded ? (peopleMode ? '人ごとに表示' : `${list.length} 件${filtered ? 'を表示' : ''}`) : 'タスク一覧'}</p>
+          {!peopleMode && !calendarMode && filtered && (
             <button type="button" className="quiet" onClick={clearAll}>
               絞り込みを解除
             </button>
-          )}
-          {multi && (
-            <div className="view-switch" role="group" aria-label="表示の形">
-              <button type="button" aria-pressed={!treeMode && !bowtieMode} onClick={() => chooseView('list')}>
-                一覧
-              </button>
-              <button type="button" aria-pressed={treeMode} onClick={() => chooseView('tree')}>
-                部局ごと
-              </button>
-              <button type="button" aria-pressed={bowtieMode} onClick={() => chooseView('bowtie')}>
-                関係図
-              </button>
-            </div>
           )}
           {treeMode && list.length > 0 && (
             <button
@@ -639,17 +702,20 @@ export function TasksView({ route, onNavigate, refresh }: { route: TaskRoute; on
               {allFolded ? 'すべて開く' : 'すべてたたむ'}
             </button>
           )}
-          <label className="sort-field">
-            並べ順
-            <select value={sort} onChange={(e) => setSort(e.target.value as SortKey)}>
-              {(Object.keys(SORT_LABELS) as SortKey[]).map((k) => (
-                <option key={k} value={k}>
-                  {SORT_LABELS[k]}
-                </option>
-              ))}
-            </select>
-          </label>
+          {!peopleMode && !calendarMode && (
+            <label className="sort-field">
+              並べ順
+              <select value={sort} onChange={(e) => setSort(e.target.value as SortKey)}>
+                {(Object.keys(SORT_LABELS) as SortKey[]).map((k) => (
+                  <option key={k} value={k}>
+                    {SORT_LABELS[k]}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
         </div>
+        )}
         {notice && (
           <div className={`status ${notice.kind} task-list-notice`} role={notice.kind === 'ok' ? 'status' : 'alert'}>
             <span>{notice.text}</span>
@@ -661,7 +727,7 @@ export function TasksView({ route, onNavigate, refresh }: { route: TaskRoute; on
           </div>
         )}
         <LoadStatus loader={{ ...tasks, data: loaded }} what="タスク一覧" />
-        {loaded && list.length === 0 && (
+        {!calendarMode && loaded && (peopleMode ? noneChosen : list.length === 0) && (
           <div className="empty list-empty">
             {noneChosen ? (
               <>
@@ -686,7 +752,30 @@ export function TasksView({ route, onNavigate, refresh }: { route: TaskRoute; on
             )}
           </div>
         )}
-        {treeMode ? (
+        {calendarMode ? (
+          <CalendarView
+            tasks={calendarTasks}
+            tasksLoading={loaded === null}
+            taskNote={calendarTaskNote}
+            userId={userId}
+            onOpenTask={(id) => onNavigate({ workspaceId: wsParam, taskId: id, creating: false })}
+            initialDate={route.calendarDate ?? null}
+          />
+        ) : peopleMode ? (
+          loaded && !noneChosen && (
+            <PeopleView
+              scoped={scoped}
+              whole={current}
+              multi={multi}
+              members={members}
+              today={today}
+              userId={userId}
+              editable={editable}
+              onOpen={(id) => onNavigate({ workspaceId: wsParam, taskId: id, creating: false })}
+              onAssign={assign}
+            />
+          )
+        ) : treeMode ? (
           list.length > 0 && (
             <ul className="task-tree" data-testid="task-tree">
               {tree.map((n) => departmentNode(n, 0))}

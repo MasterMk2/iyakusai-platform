@@ -3,6 +3,7 @@ import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, re
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { Address, HandlingStatus } from '../../shared/api.js';
+import { DUE_SCHEMA, dueFilterSql, nearestDueSql } from './due.js';
 import type { ParsedMail } from './parse.js';
 import { isSignInMail } from './restricted.js';
 
@@ -59,7 +60,7 @@ export interface HistoryRow {
   message_id: string;
   at: string;
   actor_id: string;
-  action: 'assignee' | 'status' | 'labels' | 'note_added';
+  action: 'assignee' | 'status' | 'labels' | 'note_added' | 'due' | 'reply_wait';
   from_value: string | null;
   to_value: string | null;
 }
@@ -96,6 +97,10 @@ export interface ListFilter {
   assignee?: string;
   /** Search terms do not look into sign-in mail (for readers who are not access administrators). */
   termsSkipSignIn?: boolean;
+  /** Threads that await a reply, or have a deadline passed; `today` is the Japan calendar day (due.ts). */
+  due?: { kind: 'awaiting' | 'overdue'; today: string };
+  /** Thread order: newest activity first (default), or the nearest deadline first. */
+  sort?: 'latest' | 'due';
 }
 
 export interface StoreInput {
@@ -176,6 +181,7 @@ CREATE INDEX IF NOT EXISTS outgoing_user ON outgoing(user_id, created_at);
 CREATE TABLE IF NOT EXISTS department_grants(department TEXT NOT NULL, mailbox_id TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('edit','send')), granted_by TEXT NOT NULL, granted_at TEXT NOT NULL, PRIMARY KEY(department, mailbox_id, kind));
 `;
 // Sending and department grants (2026-10-26) only added tables: an older version of the app still opens the file (schema 1).
+// Deadlines (2026-11-03, DUE_SCHEMA in due.ts) add one more table the same way; no column of an existing table changes.
 
 const SCHEMA_VERSION = '1';
 
@@ -209,7 +215,7 @@ export class MailboxStore {
     this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;');
     // Decided when read, not stored: a changed rule or sender list applies to the mail already kept.
     this.db.function('sign_in_mail', { deterministic: true }, (subject, from, text) => (isSignInMail(String(subject), String(from), String(text), this.signInSenders) ? 1 : 0));
-    this.db.exec(SCHEMA);
+    this.db.exec(SCHEMA + DUE_SCHEMA);
     const version = this.db.prepare("SELECT value FROM meta WHERE key='schema'").get() as { value: string } | undefined;
     if (!version) this.db.prepare("INSERT INTO meta(key,value) VALUES('schema',?)").run(SCHEMA_VERSION);
     else if (version.value !== SCHEMA_VERSION) {
@@ -375,6 +381,11 @@ export class MailboxStore {
         parts.push(`${alias}.assignee_id = ?`);
         params.push(f.assignee);
       }
+      if (f.due) {
+        const due = dueFilterSql(alias, f.due.kind, f.due.today);
+        parts.push(due.sql);
+        params.push(...due.params);
+      }
       for (const t of f.terms) {
         parts.push(`instr(${alias}.search_text, ?) > 0`);
         params.push(t);
@@ -385,17 +396,18 @@ export class MailboxStore {
     return { sql: parts.join(' AND '), params };
   }
 
-  /** Threads with a matching message, newest activity first. */
+  /** Threads with a matching message, newest activity first (or the nearest deadline first, with sort 'due'). */
   threadPage(f: ListFilter, limit: number, offset: number): { total: number; threads: { thread_id: string; latest: string }[] } {
     const all = this.scope('m', f, false);
     const match = this.scope('m2', f, true);
     const counted = this.scope('m', f, true);
     const total = Number((this.db.prepare(`SELECT count(DISTINCT m.thread_id) AS n FROM messages m WHERE ${counted.sql}`).get(...counted.params) as { n: number }).n);
+    const byDue = f.sort === 'due';
     const threads = this.db
       .prepare(
-        `SELECT m.thread_id AS thread_id, max(m.received_at) AS latest FROM messages m
+        `SELECT m.thread_id AS thread_id, max(m.received_at) AS latest${byDue ? `, ${nearestDueSql('m')} AS due` : ''} FROM messages m
          WHERE ${all.sql} AND m.thread_id IN (SELECT m2.thread_id FROM messages m2 WHERE ${match.sql})
-         GROUP BY m.thread_id ORDER BY latest DESC, m.thread_id LIMIT ? OFFSET ?`,
+         GROUP BY m.thread_id ORDER BY ${byDue ? 'due IS NULL, due, latest DESC, m.thread_id' : 'latest DESC, m.thread_id'} LIMIT ? OFFSET ?`,
       )
       .all(...all.params, ...match.params, limit, offset) as { thread_id: string; latest: string }[];
     return { total, threads };

@@ -5,6 +5,7 @@ import { Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
+import { DECISION_DEPARTMENT_KEY, DECISION_LIMITS, isDecisionDate, type MinutesRegisterResponse } from '../../shared/decisions.js';
 import { departmentsOfLabel, TEMPORARY_STAFF_DEPARTMENT } from '../../shared/mailbox.js';
 import {
   draftToMarkdown,
@@ -22,6 +23,8 @@ import {
 import { SESSION_COOKIE } from '../discord-auth/http.js';
 import { isTemporaryStaffLoginId } from '../discord-auth/temporary-staff.js';
 import { DomainError, notFound, type User } from '../domain/types.js';
+import { decisionInputOfMinutesItem, minutesItemToken } from '../decisions/from-minutes.js';
+import type { DecisionsStore } from '../decisions/store.js';
 import { attachmentDisposition } from '../http/content-disposition.js';
 import { HttpError } from '../http/http-error.js';
 import type { MailSession } from '../mailbox/routes.js';
@@ -66,10 +69,18 @@ export interface MinutesRouteDeps {
   clock: () => string;
   now?: () => number;
   parse: <T>(schema: z.ZodType<T>, value: unknown) => T;
+  /** The decision register (decisions.sqlite3), or null when it is off. */
+  decisions?: DecisionsStore | null;
 }
 
 const meetingParams = z.strictObject({ meetingId: z.string().regex(/^mt_[0-9a-f]{16}$/) });
 const bodyUpdate = z.strictObject({ expectedVersion: z.number().int().min(1), body: z.string().max(MINUTES_LIMITS.body) });
+/** The decision items chosen to register: their numbers in the draft, and the department(s) and place they get. */
+const decisionsRegisterBody = z.strictObject({
+  items: z.array(z.number().int().min(0).max(999)).min(1).max(50),
+  departments: z.array(z.string().regex(DECISION_DEPARTMENT_KEY)).min(1).max(DECISION_LIMITS.departments),
+  venue: z.enum(['board', 'regular', 'subcommittee', 'mail']),
+});
 const confirmBody = z.strictObject({ expectedVersion: z.number().int().min(1) });
 const deleteQuery = z.strictObject({ expectedVersion: z.coerce.number().int().min(1) });
 /** One line of plain text: control characters and runs of spaces become one space. */
@@ -331,6 +342,32 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
   app.get('/api/minutes/:meetingId', async (request): Promise<MinutesDetail> => {
     const { user, row } = visible(request);
     return detail(row, user);
+  });
+
+  // Registers chosen decision items of a confirmed meeting into the decision register (2026-11-03). The server reads
+  // the items and builds the text, so the screen only names them. Only a meeting that every committee member may read
+  // (visibility "members") and that is confirmed can be registered: the register and the Bot's answer show the text to
+  // all members, so a meeting limited to chosen people never reaches them. A registered item is one decision: its
+  // token names the meeting and the item, so a second registration answers the decision already made.
+  app.post('/api/minutes/:meetingId/decisions', async (request): Promise<MinutesRegisterResponse> => {
+    const { user, row } = visible(request);
+    const decisions = deps.decisions ?? null;
+    if (!decisions) throw notFound();
+    const body = deps.parse(decisionsRegisterBody, request.body);
+    if (row.visibility !== 'members') throw new DomainError('forbidden', 'この議事録は一部の人にだけ見せているため、決定事項の台帳には登録できません。');
+    if (row.stage !== 'confirmed') throw new DomainError('conflict', '議事録を確定してから、決定事項を登録してください。');
+    if (!isDecisionDate(row.heldOn)) throw new DomainError('validation', '会議の日が実在する日付ではないため、決定事項に登録できません。');
+    const items = row.draft?.decisions ?? [];
+    const picked = [...new Set(body.items)].sort((a, b) => a - b);
+    if (picked.some((i) => i >= items.length)) throw new DomainError('validation', '選んだ項目が議事録にありません。画面を読み直してください。', { field: 'items' });
+    const departments = [...new Set(body.departments)];
+    const results = picked.map((index) => {
+      const input = decisionInputOfMinutesItem(row, items[index]!.text, departments, body.venue);
+      if (!input.title) throw new DomainError('validation', '空の項目は登録できません。', { field: 'items' });
+      const made = decisions.create(input, user.id, deps.clock(), minutesItemToken(row.id, index), 'first');
+      return { index, decisionId: made.row.id, replayed: made.replayed };
+    });
+    return { results };
   });
 
   // The recording, with byte ranges so the player can jump to a time.

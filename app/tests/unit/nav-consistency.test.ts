@@ -45,6 +45,7 @@ describe('module tabs on every screen', () => {
       'iyakusai-rental-shell-20261018-info-select-v2',
       'iyakusai-rental-shell-20261025-v19-mailbox-tab',
       'iyakusai-rental-shell-20261026-v20-mail-tab',
+      'iyakusai-rental-shell-20261026-v21-contacts-tab',
     ]).not.toContain(cache);
   });
 });

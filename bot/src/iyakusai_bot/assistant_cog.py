@@ -29,10 +29,14 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
+from . import access as A
+from . import access_check
 from . import assistant_logic as L
 from . import remind_logic as rl
+from . import write_guard
 from .assistant_store import AssistantStore, Job
 from .config import AssistantSettings
+from .notify import routed_channel_id
 from .reminders import _fmt_item
 from .storage import ReminderStore
 from .web_interaction import WebInteraction
@@ -62,6 +66,10 @@ class JobError(Exception):
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+class _JobDenied(JobError):
+    """操作の種類の権限で拒否された依頼。拒否は access_check が denied として残すので、完了の失敗は残さない。"""
 
 
 class _FallbackUser:
@@ -173,18 +181,53 @@ class Assistant(commands.Cog):
             result, url = await self._execute(job)
             await asyncio.to_thread(self.store.finish, job.id, result, url)
             log.info("依頼 %s(%s)が完了", job.id, job.kind)
+            self._job_outcome(job, "ok")
+        except _JobDenied as error:
+            # 拒否は監査に denied として残し済み。ここでは失敗の行を重ねず、依頼の失敗だけを返す
+            log.info("依頼 %s(%s)は権限の表で拒否", job.id, job.kind)
+            await self._fail(job, error.code, error.message)
         except JobError as error:
             log.info("依頼 %s(%s)を失敗で終了: %s", job.id, job.kind, error.code)
+            self._job_outcome(job, "failed", error.code)
             await self._fail(job, error.code, error.message)
         except asyncio.CancelledError:
             raise
         except Exception as error:  # noqa: BLE001  必ず failed にする(running のまま残さない)
             log.error("依頼 %s(%s)が想定外のエラー: %s", job.id, job.kind, type(error).__name__)
             log.debug("依頼 %s の詳細", job.id, exc_info=True)
+            self._job_outcome(job, "failed", "INTERNAL")
             await self._fail(job, "INTERNAL", USER_FAILURE)
         finally:
             if lane:
                 self._lanes[lane] -= 1
+
+    def _job_outcome(self, job: Job, result: str, code: str | None = None) -> None:
+        """統合アプリの依頼の完了・失敗を監査に残す（依頼の中身は書かない）。
+
+        読む系の依頼（ask）は、受付も完了も残さない方針なので書かない（access_check の説明と同じ）。
+        """
+        command = A.WEB_JOB_KEYS.get(job.kind)
+        if command is None or A.kind_of(command) == "read":
+            return
+        access_check.log_outcome(command, actor_id=_actor_int(job), result=result, code=code)
+
+    async def _enforce_job(self, job: Job) -> None:
+        """統合アプリの依頼の操作の種類の権限（access.py）。Discord のコマンドの check を通らないので、ここで確かめる。
+
+        依頼者が委員のサーバーのメンバーでなければ役割が無い扱い（表で絞った種類は拒否・全員の種類は今と同じ）。
+        """
+        command = A.WEB_JOB_KEYS.get(job.kind)
+        if command is None:
+            return   # 未対応の依頼は _execute の UNSUPPORTED で止まる
+        actor = _actor_int(job)
+        roles: list[str] = []
+        if access_check.needs_roles(command):   # 表で絞った命令だけ会員を引く（既定では Discord を呼ばない）
+            member = await self._guild_member(self._guild(), actor)
+            roles = access_check.role_names_of(member) if member is not None else []
+        try:
+            access_check.enforce(command, actor_id=actor, role_names=roles)
+        except access_check.AccessDenied as error:
+            raise _JobDenied("FORBIDDEN", str(error)) from error
 
     async def _fail(self, job: Job, code: str, message: str) -> None:
         try:
@@ -193,6 +236,7 @@ class Assistant(commands.Cog):
             log.error("依頼 %s の失敗を記録できませんでした: %s", job.id, type(error).__name__)
 
     async def _execute(self, job: Job) -> tuple[dict, str | None]:
+        await self._enforce_job(job)
         if job.kind == "ask":
             return await self._do_ask(job)
         if job.kind == "doc":
@@ -208,14 +252,24 @@ class Assistant(commands.Cog):
     # ---- 共通: 共有先・依頼者 ----
 
     def _share_channel(self):
-        channel = self.bot.get_channel(self.settings.share_channel_id)
-        if channel is None or not hasattr(channel, "send"):
+        # 送り先は [notify] の app_share(無ければ従来の assistant.share_channel_id・2026-11-03)
+        share_id = self.settings.share_channel_id
+        routed = routed_channel_id(self.bot, "app_share", share_id)
+        channel = self._channel(routed)
+        if channel is None and routed != share_id:
+            channel = self._channel(share_id)     # 上書き先が見えないときは従来の共有先に戻す
+        if channel is None:
             raise JobError("UNAVAILABLE", "共有先のチャンネル(#bottest)に接続できません。少し待って再実行してください。")
         return channel
 
     def _channel(self, channel_id: int):
         channel = self.bot.get_channel(channel_id)
         return channel if channel is not None and hasattr(channel, "send") else None
+
+    def _reminder_channel(self, channel_id: int):
+        """リマインドの確認の投稿先。[notify] の reminder が設定されていればそこ(無ければ登録のチャンネル)。"""
+        channel = self._channel(routed_channel_id(self.bot, "reminder", channel_id))
+        return channel if channel is not None else self._channel(channel_id)
 
     async def _guild_member(self, guild, user_id: int):
         """サーバーのメンバーを返す(キャッシュ → 取得)。見つからなければ None。"""
@@ -359,7 +413,7 @@ class Assistant(commands.Cog):
         # 保存が済んだ後の失敗で依頼を failed にすると、利用者が再依頼して二重登録になる。
         # だから確認の投稿と写しの更新は失敗しても登録の結果は変えない(ログに残すだけ)。
         confirmed = await self._post_quietly(
-            channel,
+            self._reminder_channel(channel_id),
             f"📱 アプリから {job.actor_name} さんが登録\n"
             f"⏰ 登録しました {_fmt_item(rem)} {rep}\n"
             f"通知: 前日・期限時刻・超過中は24時間ごとに催促(`/remind done id:{rem['id']}` で完了)")
@@ -393,7 +447,8 @@ class Assistant(commands.Cog):
             message = f"🗑️ 削除しました: `#{rem_id}` {rem['text']}"
         if channel is not None:
             verb = "完了" if job.op == "done" else "削除"
-            await self._post_quietly(channel, f"📱 アプリから {job.actor_name} さんが{verb}\n{message}")
+            await self._post_quietly(self._reminder_channel(channel.id),
+                                     f"📱 アプリから {job.actor_name} さんが{verb}\n{message}")
         await self.publish_state()
         return {"text": "", "files": [], "message": message}, None
 
@@ -542,7 +597,9 @@ class Assistant(commands.Cog):
             "maxActivePerUser": self.settings.max_active_per_user,
             "reminderChannels": [{"id": str(cid), "name": getattr(self._channel(cid), "name", "不明")}
                                  for cid in self.settings.reminder_channel_ids],
-            "shareChannel": ({"id": str(self.settings.share_channel_id), "name": getattr(share, "name", "不明")}
+            # 実際に投稿する先の id(上書き時は [notify] の app_share。無ければ従来の共有先と同じ)
+            "shareChannel": ({"id": str(getattr(share, "id", self.settings.share_channel_id)),
+                              "name": getattr(share, "name", "不明")}
                              if share is not None else None),
             "updatedAt": rl.now_jst().isoformat(timespec="seconds"),
         }
@@ -563,13 +620,17 @@ class Assistant(commands.Cog):
             mime = L.mime_for_name(name)
             if not L.is_downloadable(mime):
                 continue
+            # 生成物は Bot が作ったものなので先頭に【AI】を付ける（write_guard）。重複の番号は接頭辞の
+            # 後ろに付け、判定は接頭辞を付けた後の名前で行う（同じパスを 2 回使い、後の内容で上書きしないため）。
+            base = name.removeprefix(write_guard.AI_PREFIX)
             index = 2
-            base = name
+            name = write_guard.ai_name(base)
             while name in used:
-                name = f"{index}-{base}"
+                name = write_guard.ai_name(f"{index}-{base}")
                 index += 1
             used.add(name)
-            (folder / name).write_bytes(data)
+            # 置き先は files_dir の中だけ（contained）
+            write_guard.contained(self.files_dir, folder / name).write_bytes(data)
             self.store.add_file(job_id, name, mime, len(data),
                                 hashlib.sha256(data).hexdigest(), f"{job_id}/{name}")
             saved.append({"name": name, "mime": mime, "size": len(data)})

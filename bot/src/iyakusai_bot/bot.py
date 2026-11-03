@@ -12,7 +12,9 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from . import contact, mail_draft, org
+from . import access, access_check
 from . import __version__
+from .audit import AuditLog
 from .config import Config
 from .lockfile import InstanceLock, LockBusy
 from .reminders import Reminders
@@ -46,6 +48,7 @@ class IyakusaiBot(commands.Bot):
         mail_draft.set_address(self.cfg.mail_address)
         org.configure(self.cfg.org_name, self.cfg.org_campus, self.cfg.org_other_campuses,
                       self.cfg.org_keep_mail_domains)
+        access_check.configure(self.cfg.access, AuditLog(self.cfg.access.audit_dir))
         store = ReminderStore(self.cfg.data_dir)
         await self.add_cog(Reminders(self, store, self.cfg.reminder_check_sec))
         from .ai_provider import make_provider
@@ -117,6 +120,9 @@ class IyakusaiBot(commands.Bot):
                 log.error("タスク保存先を開けないため /todo を停止状態で登録: %s", e)
                 task_store = None
             await self.add_cog(TaskCog(self, task_settings, task_store))
+            # 週1回の一覧の「引き受ける」ボタン。[weekly] を止めた後や DB を開けないときに押されても、停止中と返すため登録しておく(2026-11-03)
+            from .weekly_cog import AssignButton
+            self.add_dynamic_items(AssignButton)
             # 定期タスクスクリーニングの候補を投稿・起票する。
             # 候補台帳を開けなくても /todo 本体は動かし続ける。
             screening = self.cfg.task_screening
@@ -129,6 +135,14 @@ class IyakusaiBot(commands.Bot):
                 else:
                     await self.add_cog(cog)
                     log.info("定期タスクスクリーニングの投稿を有効化")
+            # 週1回のタスク一覧と、担当なしタスクの追い投稿([weekly] が無ければ何もしない・2026-11-03)
+            if self.cfg.weekly.enabled and task_store is not None:
+                from .weekly_cog import WeeklyCog
+                await self.add_cog(WeeklyCog(self, self.cfg.weekly, task_settings, task_store, self.cfg.data_dir))
+            elif self.cfg.weekly.enabled:
+                log.error("タスク DB を開けないため週1回のタスク一覧を停止")
+        if self.cfg.weekly.enabled and not task_settings.enabled:
+            log.error("[weekly] は [tasks] が有効なときだけ動きます(週1回のタスク一覧は停止)")
         await self._setup_kiban(task_settings, task_store)
         # 統合アプリの「Bot」タブ(2026-10-14)。[assistant] enabled のときだけ読み込む。
         # ジョブ表を開けなくても Bot 本体は動かし続ける(/todo と同じ扱い)。
@@ -227,14 +241,14 @@ class IyakusaiBot(commands.Bot):
         ログだけ残す(期限切れ・権限不足など)。
         """
         cmd = getattr(itx.command, "name", "?")
-        # 権限拒否・クールダウンは「想定内の拒否」なので文面を分ける。現状この Bot の
-        # 権限判定はコマンド本体の中で行っており(reminders.py)checks デコレータは
-        # 使っていないため通常ここには来ないが、将来 checks を足したときに**正常な拒否が
-        # 「想定外のエラー」と表示される**のを防ぐ。返さずに return すると今度は無応答に
-        # なる(それがこの関数の防ごうとしている事象)ので、必ず何か返す。
+        # 権限拒否・クールダウンは「想定内の拒否」なので文面を分ける。操作の種類の権限(access_check.require)
+        # は checks で入るので、ここに AccessDenied として来る。返さずに return すると無応答になる
+        # (それがこの関数の防ごうとしている事象)ので、必ず何か返す。
         if isinstance(error, (app_commands.CheckFailure, app_commands.CommandOnCooldown)):
             log.info("/%s は実行条件を満たさず拒否: %s", cmd, error)
-            msg = f"⚠️ このコマンドは実行できませんでした({error})。"
+            # 権限の表による拒否は理由を本人に返す（下の extra で ephemeral）。ほかは従来の文面
+            msg = (f"⚠️ {error}" if isinstance(error, access_check.AccessDenied)
+                   else f"⚠️ このコマンドは実行できませんでした({error})。")
         else:
             log.error("/%s が想定外の例外で失敗(最終防波堤で捕捉)", cmd, exc_info=error)
             msg = ("⚠ コマンドの処理中に想定外のエラーが発生しました。"
@@ -247,7 +261,7 @@ class IyakusaiBot(commands.Bot):
         is_todo = (getattr(root, "name", None) == "todo" if root is not None
                    else data.get("name") == "todo")
         extra = ({"ephemeral": True, "allowed_mentions": discord.AllowedMentions.none()}
-                 if is_todo else {})
+                 if is_todo or isinstance(error, access_check.AccessDenied) else {})
         try:
             if itx.response.is_done():
                 await itx.followup.send(msg, **extra)
@@ -261,6 +275,11 @@ class IyakusaiBot(commands.Bot):
     async def on_ready(self):
         log.info("ログイン: %s (v%s, host=%s, mode=%s)",
                  self.user, __version__, self.cfg.host_name, self.cfg.mode)
+        for g in self.guilds:
+            # 権限の表のロール名の綴りの誤り（サーバーに無い名前）を起動のログで知らせる（一致しないので拒否になる）
+            missing = access.missing_roles(self.cfg.access, [r.name for r in g.roles])
+            if missing:
+                log.warning("権限の表にあるがサーバーに無いロール名: %s", "、".join(missing))
         if not self._synced:
             for g in self.guilds:
                 self.tree.copy_global_to(guild=g)

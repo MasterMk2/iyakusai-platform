@@ -12,6 +12,7 @@ import { RentalAccess } from './access.js';
 import { IrregularCards } from './irregular-cards.js';
 import { ItemEditor } from './item-editor.js';
 import { OperationCorrections } from './corrections.js';
+import { registerSupplyRoutes } from './supplies/routes.js';
 import { isTemporaryStaffLoginId } from '../discord-auth/temporary-staff.js';
 
 // Rental API and phone screen inside the common app. Identity is the common login (requireUser); what a
@@ -337,6 +338,9 @@ export async function registerRentalRoutes(app: FastifyInstance, ctx: RentalRout
     );
   });
 
+  // Counted supplies, attachments and the 団体 collection board (supplies/): their own tables and screen, the same access.
+  if (rental) registerSupplyRoutes(app, { store: rental.store, access, respond, webDir: rental.webDir, csp: RENTAL_CSP, permissionsPolicy: RENTAL_PERMISSIONS_POLICY });
+
   // ---- phone screen
   const webDir = rental?.webDir;
   if (!webDir || !existsSync(path.join(webDir, 'index.html'))) {
@@ -357,7 +361,7 @@ export async function registerRentalRoutes(app: FastifyInstance, ctx: RentalRout
     '.webmanifest': 'application/manifest+json; charset=utf-8',
   };
   const files = new Map<string, { data: Buffer; type: string; etag: string }>();
-  for (const name of ['index.html', 'app.js', 'styles.css', 'icon.svg', 'manifest.webmanifest', 'sw.js', 'vendor/jsQR.js', 'print.html', 'print.js', 'print.css']) {
+  for (const name of ['index.html', 'app.js', 'styles.css', 'icon.svg', 'manifest.webmanifest', 'sw.js', 'vendor/jsQR.js', 'print.html', 'print.js', 'print.css', 'dayof.js', 'dayof.css']) {
     const file = path.join(webDir, name);
     if (!existsSync(file)) continue;
     const data = readFileSync(file);
@@ -383,7 +387,7 @@ export async function registerRentalRoutes(app: FastifyInstance, ctx: RentalRout
   app.get('/rental-sw.js', async (request, reply) => send(request, reply, 'sw.js'));
   // 返却チェックシートの印刷（print.js が /api/rental/overview を読んで票にする）
   app.get('/rental/print', async (request, reply) => send(request, reply, 'print.html'));
-  for (const name of ['app.js', 'styles.css', 'icon.svg', 'manifest.webmanifest', 'vendor/jsQR.js', 'print.js', 'print.css']) {
+  for (const name of ['app.js', 'styles.css', 'icon.svg', 'manifest.webmanifest', 'vendor/jsQR.js', 'print.js', 'print.css', 'dayof.js', 'dayof.css']) {
     app.get(`/rental/${name}`, async (request, reply) => send(request, reply, name));
   }
 }

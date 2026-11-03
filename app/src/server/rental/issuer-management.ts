@@ -120,7 +120,7 @@ export class IssuerManagement {
         loaned: changes.filter(c => c.before?.status === 'loaned' || c.before?.status === 'borrowed' || c.before?.current_loan != null).length,
         review: changes.filter(c => c.before?.status === 'review').length,
       } } : {}),
-      ...(mode==='force_reset_all'?{numbering_reset:{first_code:'IY-100001',reserved_through:snapshot.reserved_through,archived_items:snapshot.archived_count,card_events:numberingState(this.store).card_history_events?.length??0,outstanding_claims:(numberingState(this.store).card_history_claims??[]).filter(r=>['open','writing'].includes(String(r.state))).length}}:{}),
+      ...(mode==='force_reset_all'?{numbering_reset:{first_code:'IY-100001',reserved_through:snapshot.reserved_through,archived_items:snapshot.archived_count,card_events:numberingState(this.store).card_history_events?.length??0,outstanding_claims:(numberingState(this.store).card_history_claims??[]).filter(r=>['open','writing'].includes(String(r.state))).length,card_attachments:(numberingState(this.store).supply_attachments_card??[]).length}}:{}),
       note:mode==='force_reset_all'?'貸出中と保管済みを含む台帳・貸出予定・No.予約・カード重複防止を初期化し、No.100001から再登録します。旧台帳と発行証跡は退避し、貸出記録・写真は保持します。旧カード・QRも再登録先を開くため、ラベルを必ず照合・作り直してください。全PCは新版でログインし直してください。': resetting ? (mode === 'force_reset' ? '貸出中・要確認も含め、' : '') + '現在の台帳と貸出予定を空にします。貸出・返却記録、写真、カード発行履歴とNo.は保管します。旧カードは利用できなくなり、再登録は続きのNo.から行います。実物の返却を登録する操作ではありません。' : '表示されたNo.だけを更新します。一覧にない物品はそのままです。' };
   }
 

@@ -3,6 +3,7 @@ import type { MailboxSummary, SessionResponse } from '../shared/api';
 import type { LineAccountSummary } from '../shared/line';
 import type { MailSendOptions, MailStatusResponse } from '../shared/mailbox';
 import type { TaskContextResponse } from '../shared/tasks';
+import { calendarDateParam } from '../shared/calendar';
 import { api, ApiFailure } from './api';
 import { AccountBar } from './components/AccountBar';
 import { AccountLogin } from './components/AccountLogin';
@@ -15,7 +16,7 @@ import { HomeView } from './components/HomeView';
 import { LoadStatus } from './components/LoadStatus';
 import { LineBroadcast } from './components/LineBroadcast';
 import { LineConversation } from './components/LineConversation';
-import { MailCompose, newDraft } from './components/MailCompose';
+import { MailCompose, newDraft, sentNoteText } from './components/MailCompose';
 import { MailReauth } from './components/MailReauth';
 import { Login } from './components/Login';
 import { ProxyBar } from './components/ProxyBar';
@@ -24,6 +25,8 @@ import { SettingsView } from './components/SettingsView';
 import { TasksView, type TaskFocus } from './components/tasks/TasksView';
 import { BotView, parseBotSection, type BotSection } from './components/bot/BotView';
 import { ContactsView, type ContactPrefill } from './components/contacts/ContactsView';
+import { DecisionsView } from './components/decisions/DecisionsView';
+import { decisionHref, decisionNewHref, parseDecisionPrefill, type DecisionPrefill } from './components/decisions/decisionLinks';
 import { ThreadDetail } from './components/ThreadDetail';
 import { ThreadList, type InboxFilter } from './components/ThreadList';
 import type { BotReplyRequest, DraftToSend } from '../shared/mailHandoff';
@@ -33,7 +36,7 @@ const PROXY_ERRORS = new Set(['untrusted_proxy', 'unauthenticated', 'invalid_ide
 
 export interface Route {
   /** `line` is the official LINE tab (2026-11-03), apart from the mail tab. */
-  view: 'home' | 'mail' | 'line' | 'admin' | 'tasks' | 'bot' | 'settings' | 'contacts';
+  view: 'home' | 'mail' | 'line' | 'admin' | 'tasks' | 'bot' | 'settings' | 'contacts' | 'decisions';
   mailboxId: string | null;
   lineAccountId: string | null;
   /** Selected email thread (`thread=`) or LINE conversation (`conv=`); at most one is set. */
@@ -46,6 +49,8 @@ export interface Route {
   taskRemaining: boolean;
   /** Tasks view opened from a home count (`focus=`): that filter is set when the list opens. */
   taskFocus: TaskFocus | null;
+  /** Tasks view opened on the calendar's day (`cal=YYYY-MM-DD`), from a deadline on the home screen. */
+  taskCalendarDate: string | null;
   /** Inbox opened from a home count (`filter=`): unhandled items or the viewer's own. */
   inboxFilter: InboxFilter | null;
   /** Committee mailbox: writing new mail (`compose=1`) instead of a thread. */
@@ -59,6 +64,10 @@ export interface Route {
   contactId: string | null;
   contactNew: boolean;
   contactImport: boolean;
+  /** Decision register (2026-11-03): an opened decision (`d=`) or the form (`new=1`), with a prefill from mail, LINE or minutes. */
+  decisionId: string | null;
+  decisionNew: boolean;
+  decisionPrefill: DecisionPrefill | null;
 }
 
 const EMPTY_ROUTE: Route = {
@@ -72,6 +81,7 @@ const EMPTY_ROUTE: Route = {
   taskNew: false,
   taskRemaining: false,
   taskFocus: null,
+  taskCalendarDate: null,
   inboxFilter: null,
   mailCompose: false,
   lineBroadcast: false,
@@ -80,6 +90,9 @@ const EMPTY_ROUTE: Route = {
   contactId: null,
   contactNew: false,
   contactImport: false,
+  decisionId: null,
+  decisionNew: false,
+  decisionPrefill: null,
 };
 
 function parseFocus(value: string | null): TaskFocus | null {
@@ -101,9 +114,13 @@ export function parseHash(hash: string): Route {
     const contactId = params.get('c');
     return { ...EMPTY_ROUTE, view: 'contacts', contactId: contactId && /^ct_[0-9a-f]{16}$/.test(contactId) ? contactId : null, contactNew: params.get('new') === '1', contactImport: params.get('import') === '1' };
   }
+  if (parts[0] === 'decisions') {
+    const decisionId = params.get('d');
+    return { ...EMPTY_ROUTE, view: 'decisions', decisionId: decisionId && /^dc_[0-9a-f]{16}$/.test(decisionId) ? decisionId : null, decisionNew: params.get('new') === '1', decisionPrefill: parseDecisionPrefill(params) };
+  }
   if (parts[0] === 'bot') return { ...EMPTY_ROUTE, view: 'bot', botSection: parseBotSection(parts[1]), botJobId: params.get('job') };
   if (parts[0] === 'tasks') {
-    return { ...EMPTY_ROUTE, view: 'tasks', taskWorkspaceId: params.get('ws'), taskId: params.get('task'), taskNew: params.get('new') === '1', taskRemaining: params.get('remaining') === '1', taskFocus: parseFocus(params.get('focus')) };
+    return { ...EMPTY_ROUTE, view: 'tasks', taskWorkspaceId: params.get('ws'), taskId: params.get('task'), taskNew: params.get('new') === '1', taskRemaining: params.get('remaining') === '1', taskFocus: parseFocus(params.get('focus')), taskCalendarDate: calendarDateParam(params.get('cal')) };
   }
   const mailCompose = !threadId && !conversationId && params.get('compose') === '1';
   if (parts[0] === 'mailbox' && parts[1]) return { ...EMPTY_ROUTE, mailboxId: decodeURIComponent(parts[1]), threadId, inboxFilter, mailCompose };
@@ -131,6 +148,10 @@ export function toHash(route: Route): string {
     else if (route.contactNew) q.set('new', '1');
     else if (route.contactImport) q.set('import', '1');
     return q.size > 0 ? `#/contacts?${q.toString()}` : '#/contacts';
+  }
+  if (route.view === 'decisions') {
+    if (route.decisionNew) return decisionNewHref(route.decisionPrefill);
+    return route.decisionId ? decisionHref(route.decisionId) : '#/decisions';
   }
   if (route.view === 'bot') {
     const base = `#/bot/${route.botSection ?? 'ask'}`;
@@ -337,6 +358,9 @@ export function App() {
   const [composeTo, setComposeTo] = useState<string | null>(null);
   const [contactQuery, setContactQuery] = useState('');
   const clearContactPrefill = useCallback(() => setContactPrefill(null), []);
+  // The line after a new mail was sent (2026-11-03): shown once on its thread, and forgotten when another thread opens.
+  const [newMailNote, setNewMailNote] = useState<{ threadId: string; text: string } | null>(null);
+  if (newMailNote && route.threadId !== newMailNote.threadId) setNewMailNote(null);
   const [handoffScreen, setHandoffScreen] = useState({ compose: route.mailCompose, contactNew: route.contactNew, contacts: route.view === 'contacts' });
   if (handoffScreen.compose !== route.mailCompose || handoffScreen.contactNew !== route.contactNew || handoffScreen.contacts !== (route.view === 'contacts')) {
     setHandoffScreen({ compose: route.mailCompose, contactNew: route.contactNew, contacts: route.view === 'contacts' });
@@ -383,7 +407,7 @@ export function App() {
           : null;
 
   useEffect(() => {
-    const names: Record<Route['view'], string> = { home: 'ホーム', tasks: 'タスク', bot: 'Bot', mail: 'メール', line: '公式LINE', admin: '設定', settings: '設定', contacts: '連絡先' };
+    const names: Record<Route['view'], string> = { home: 'ホーム', tasks: 'タスク', bot: 'Bot', mail: 'メール', line: '公式LINE', admin: '設定', settings: '設定', contacts: '連絡先', decisions: '決定事項' };
     document.title = user ? `${names[route.view]}｜医薬祭 委員会アプリ` : '医薬祭 委員会アプリ';
   }, [route.view, user]);
 
@@ -427,7 +451,8 @@ export function App() {
     { key: 'bot', label: 'Bot', href: '#/bot', onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'bot', botSection: 'ask' }) },
     { key: 'settings', label: '設定', href: '#/settings', onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'settings' }) },
   ];
-  const currentNav: NavKey = route.view === 'home' ? 'home' : route.view === 'tasks' ? 'tasks' : route.view === 'bot' ? 'bot' : route.view === 'contacts' ? 'contacts' : route.view === 'line' ? 'line' : route.view === 'mail' ? 'inbox' : 'settings';
+  // The decision register has no tab of its own (the tabs stay as they are): it is reached from home, so home stays marked.
+  const currentNav: NavKey = route.view === 'home' || route.view === 'decisions' ? 'home' : route.view === 'tasks' ? 'tasks' : route.view === 'bot' ? 'bot' : route.view === 'contacts' ? 'contacts' : route.view === 'line' ? 'line' : route.view === 'mail' ? 'inbox' : 'settings';
   // Contacts exist with the committee mailbox (Discord login), for every committee member.
   const contactsEnabled = !!committeeMail;
   const topNav = <GlobalNav items={navItems} current={currentNav} />;
@@ -476,7 +501,7 @@ export function App() {
         {topNav}
         <div className={`layout tasks-layout ${route.taskId || route.taskNew ? 'has-detail' : ''}`}>
           <TasksView
-            route={{ workspaceId: route.taskWorkspaceId, taskId: route.taskId, creating: route.taskNew, remaining: route.taskRemaining, focus: route.taskFocus }}
+            route={{ workspaceId: route.taskWorkspaceId, taskId: route.taskId, creating: route.taskNew, remaining: route.taskRemaining, focus: route.taskFocus, calendarDate: route.taskCalendarDate }}
             refresh={refresh}
             onNavigate={(r) => navigate({ ...EMPTY_ROUTE, view: 'tasks', taskWorkspaceId: r.workspaceId, taskId: r.taskId, taskNew: r.creating, taskRemaining: route.taskRemaining, taskFocus: route.taskFocus })}
           />
@@ -511,7 +536,18 @@ export function App() {
     );
   }
 
-  if (route.view === 'contacts' && contactsEnabled) {
+  if (route.view === 'decisions') {
+    return (
+      <div className="app">
+        {bar}
+        {topNav}
+        <DecisionsView decisionId={route.decisionId} creating={route.decisionNew} prefill={route.decisionPrefill} />
+      </div>
+    );
+  }
+
+  // The demo has synthetic contacts, organizations and accounting of its own (no committee mailbox).
+  if (route.view === 'contacts' && (contactsEnabled || demoMode)) {
     return (
       <div className="app">
         {bar}
@@ -935,6 +971,7 @@ export function App() {
                     clearDraftToSend();
                     setComposeTo(null);
                     navigate({ ...route, mailCompose: false, threadId: result.threadId });
+                    if (result.threadId) setNewMailNote({ threadId: result.threadId, text: sentNoteText(result) });
                     bump();
                   }}
                 />
@@ -943,6 +980,7 @@ export function App() {
                   key={route.threadId}
                   threadId={route.threadId}
                   refresh={refresh}
+                  notice={newMailNote?.threadId === route.threadId ? newMailNote.text : null}
                   onChanged={bump}
                   caseTasks={caseTasks}
                   onReauthRequired={bump}

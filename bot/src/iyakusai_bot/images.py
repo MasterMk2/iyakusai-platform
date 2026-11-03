@@ -30,7 +30,9 @@ from discord import app_commands
 from discord.ext import commands
 
 from . import image_logic as IL
+from . import access_check
 from . import remind_logic as rl
+from . import write_guard
 from .ai_provider import AIError, AIResult, child_env, elapsed_note
 from .config import ImageSettings
 from .knowledge import safe_send
@@ -235,6 +237,7 @@ class Images(commands.Cog):
                 log.warning("使用量の記帳に失敗(送信を優先・記帳のみ欠落): %s", type(error).__name__)
 
     @app_commands.command(name="image", description="Claude が図・ポスター風の画像を描く(写真風・写実的な絵は不可)")
+    @access_check.require("image")
     @app_commands.describe(
         説明="どんな画像か(例: 模擬店の値段表。焼きそば300円・フランク200円。赤と黄色で元気に)",
         縦横比="画像の形(既定: 正方形)",
@@ -246,17 +249,25 @@ class Images(commands.Cog):
         説明: str,
         縦横比: app_commands.Choice[str] | None = None,
     ):
+        # 完了・失敗を監査に残す（失敗の分岐は _image の中で rec.fail() を呼ぶ）
+        with access_check.audited("image", itx) as rec:
+            await self._image(itx, 説明, 縦横比, rec)
+
+    async def _image(self, itx: discord.Interaction, 説明: str, 縦横比, rec: access_check.Outcome):
         # モデル・考える深さは選ばせない([image] の設定どおり)。アプリと同じ動きにし、Pi での実測
         # (2026-10-14: opus・low 27〜31 秒、opus・既定 111 秒、sonnet・既定 140〜180 秒超)で
         # 時間切れになりにくい組み合わせに固定するため。
         if not self.available():
+            rec.fail("UNAVAILABLE")
             await itx.response.send_message(UNAVAILABLE, ephemeral=True)
             return
         request = IL.clean_request(説明)
         if not request:
+            rec.fail("VALIDATION")
             await itx.response.send_message("⚠️ どんな画像か、説明を入力してください。", ephemeral=True)
             return
         if len(request) > IL.PROMPT_MAX:
+            rec.fail("VALIDATION")
             await itx.response.send_message(f"⚠️ 説明は {IL.PROMPT_MAX} 字までです。短くしてから送ってください。",
                                             ephemeral=True)
             return
@@ -264,6 +275,7 @@ class Images(commands.Cog):
         model = self.settings.model
         user_id = itx.user.id
         if not self._reserve(user_id):
+            rec.fail("LIMIT")
             await itx.response.send_message(
                 f"⚠️ 画像は 1 人 1 日 {self.settings.daily_limit_per_user} 枚までです。明日また使ってください。",
                 ephemeral=True)
@@ -275,6 +287,7 @@ class Images(commands.Cog):
             try:
                 await asyncio.wait_for(self._sem.acquire(), timeout=QUEUE_WAIT_SEC)
             except asyncio.TimeoutError:
+                rec.fail("QUEUE_TIMEOUT")
                 await safe_send(itx, "⚠️ 画像の作成が混み合っています。少し待ってから、もう一度依頼してください。")
                 return
             try:
@@ -284,11 +297,13 @@ class Images(commands.Cog):
         except AIError as error:
             self._record(itx.user, getattr(error, "results", None))
             log.warning("/image AI失敗: kind=%s", getattr(error, "kind", "?"))
+            rec.fail("AI_ERROR")
             await safe_send(itx, f"⚠️ 画像の作成に失敗しました({error})。時間をおいて再試行してください。")
             return
         except ImageFailure as error:
             self._record(itx.user, getattr(error, "results", None))
             log.info("/image 失敗: %s", error.code)
+            rec.fail(error.code)
             await safe_send(itx, f"⚠️ {error.message}")
             return
         finally:
@@ -305,6 +320,6 @@ class Images(commands.Cog):
               "編集用の SVG も付けています。\n"
             f"-# model: {out.model} / {last.tokens_note()} / {last.cost_note(self.usd_jpy)} / {elapsed_note(t0)}"
         )
-        files = [discord.File(io.BytesIO(out.png), filename="image.png"),
-                 discord.File(io.BytesIO(out.svg.encode("utf-8")), filename="image.svg")]
+        files = [discord.File(io.BytesIO(out.png), filename=write_guard.ai_name("image.png")),
+                 discord.File(io.BytesIO(out.svg.encode("utf-8")), filename=write_guard.ai_name("image.svg"))]
         await safe_send(itx, note, files=files)
