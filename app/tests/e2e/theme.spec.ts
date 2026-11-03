@@ -96,7 +96,7 @@ for (const theme of ['wakaba', 'dark'] as const) {
     await expect(pane.locator('[data-task-id]').first()).toBeVisible();
     await shot('tasks');
     await pane.getByRole('button', { name: '関係図', exact: true }).click();
-    await pane.locator('.bowtie-department button').first().click();
+    await pane.locator('.bowtie-node button').first().click();
     await shot('tasks-bowtie');
 
     await page.goto(`/#/all?thread=${world.threads[0]!.id}`);

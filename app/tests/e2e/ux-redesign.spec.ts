@@ -826,7 +826,8 @@ test('by department on a phone: the switch fits, sections are indented, and noth
   await shot(page, 'tasks-tree-375');
 });
 
-// The connections view (2026-10-28): departments, tasks and projects in three columns with lines between.
+// The connections view (2026-10-28; nested 2026-11-03): parts, sections, assignees, tasks and projects in
+// five columns with lines between.
 const bowtie = (page: Page) => taskList(page).getByTestId('task-bowtie');
 const column = (page: Page, name: string) => bowtie(page).getByRole('list', { name, exact: true });
 const link = (page: Page, key: string) => bowtie(page).locator(`path[data-link="${key}"]`);
@@ -837,7 +838,7 @@ async function apart(l: ReturnType<Page['locator']>) {
   for (let i = 1; i < boxes.length; i++) expect(boxes[i]!.top).toBeGreaterThanOrEqual(boxes[i - 1]!.bottom - 0.5);
 }
 
-test('connections: departments on the left, tasks in the middle, projects on the right, and a department brings its lines forward', async ({ page }) => {
+test('connections: parts, sections and assignees on the left, tasks in the middle, projects on the right, and a node brings its lines forward', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const world = await installWorld(page, { persona: 'officer', nested: true });
   const lists = requests(page, TASK_LISTS);
@@ -856,32 +857,39 @@ test('connections: departments on the left, tasks in the middle, projects on the
   await expect(column(page, '親タスク').locator('[data-task-id]')).toHaveCount(projects.length);
   await expect(column(page, 'タスク').locator('[data-task-id]')).toHaveCount(world.tasks.length - projects.length);
   await expect(column(page, '親タスク').locator('[data-task-id="T-101"]')).toContainText('子 1/3 完了');
-  // Three columns side by side, each top to bottom without overlaps.
-  const [d, t, p] = [await box(column(page, '部局')), await box(column(page, 'タスク')), await box(column(page, '親タスク'))];
-  expect(d.x + d.width).toBeLessThan(t.x);
-  expect(t.x + t.width).toBeLessThan(p.x);
-  for (const name of ['部局', 'タスク', '親タスク']) await apart(column(page, name).locator(':scope > li'));
-  // A task with two departments has a line from each; a child a line to its project, which sits level with its children.
-  await expect(link(page, 'kaikei>T-102')).toHaveCount(1);
-  await expect(link(page, 'shogai>T-102')).toHaveCount(1);
+  // Five columns side by side (部 → 課 → 担当者 → タスク → 親タスク), each top to bottom without overlaps.
+  const names = ['部', '課', '担当者', 'タスク', '親タスク'];
+  const boxes = await Promise.all(names.map((name) => box(column(page, name))));
+  for (let i = 1; i < boxes.length; i++) expect(boxes[i - 1]!.x + boxes[i - 1]!.width).toBeLessThan(boxes[i]!.x);
+  for (const name of names) await apart(column(page, name).locator(':scope > li'));
+  // A task with two sections has a line from its assignee under each, and each assignee one from the
+  // section, each section one from its part; a child a line to its project, which sits level with its children.
+  const who = world.tasks.find((x) => x.id === 'T-102')!.assigneeId ?? '';
+  for (const [part, section] of [['somu', 'kaikei'], ['gaimu', 'shogai']] as const) {
+    await expect(link(page, `${section}|${who}>T-102`)).toHaveCount(1);
+    await expect(link(page, `${section}>${section}|${who}`)).toHaveCount(1);
+    await expect(link(page, `${part}>${section}`)).toHaveCount(1);
+  }
+  await expect(column(page, '担当者').locator(`[data-node="kaikei|${who}"] button`)).toContainText(world.tasks.find((x) => x.id === 'T-102')!.assignee?.displayName ?? '未割当');
   for (const id of ['T-108', 'T-110', 'T-130']) await expect(link(page, `${id}>T-101`)).toHaveCount(1);
   const children = await Promise.all(['T-108', 'T-110', 'T-130'].map(async (id) => box(column(page, 'タスク').locator(`[data-task-id="${id}"]`))));
   const project = await box(column(page, '親タスク').locator('[data-task-id="T-101"]'));
   const middle = children.reduce((sum, b) => sum + b.y + b.height / 2, 0) / children.length;
   expect(Math.abs(project.y + project.height / 2 - middle)).toBeLessThan(2);
   // A part counts its sections' tasks too, each once, as in the tree.
-  await expect(column(page, '部局').getByRole('button', { name: /^外務部 / })).toHaveText(`外務部 ${world.tasks.filter((x) => tagged(GAIMU)(x) && !projects.includes(x)).length} 件`);
+  await expect(column(page, '部').getByRole('button', { name: /^外務部 / })).toHaveText(`外務部 ${world.tasks.filter((x) => tagged(GAIMU)(x) && !projects.includes(x)).length} 件`);
   await pane.evaluate((e) => e.scrollTo(0, 0));
   await page.evaluate(() => window.scrollTo(0, 0));
   await shot(page, 'tasks-bowtie-1440');
-  // A department pressed brings forward its lines and their tasks and projects; pressed again, all are even.
-  const shogai = column(page, '部局').getByRole('button', { name: /^渉外課 / });
+  // A section pressed brings forward its lines and their tasks and projects; pressed again, all are even.
+  const shogai = column(page, '課').getByRole('button', { name: /^渉外課 / });
   await shogai.click();
   await expect(shogai).toHaveAttribute('aria-pressed', 'true');
   await page.mouse.move(0, 0);
   await expect(bowtie(page)).toHaveClass(/has-focus/);
-  await expect(link(page, 'shogai>T-102')).toHaveClass(/is-related/);
-  await expect(link(page, 'kaikei>T-102')).not.toHaveClass(/is-related/);
+  await expect(link(page, `shogai|${who}>T-102`)).toHaveClass(/is-related/);
+  await expect(link(page, `kaikei|${who}>T-102`)).not.toHaveClass(/is-related/);
+  await expect(link(page, 'gaimu>shogai')).toHaveClass(/is-related/);
   await expect(link(page, 'T-130>T-101')).toHaveClass(/is-related/);
   await expect(column(page, '親タスク').locator('li', { has: page.locator('[data-task-id="T-101"]') })).toHaveClass(/is-related/);
   await expect(column(page, 'タスク').locator('li', { has: page.locator('[data-task-id="T-102"]') })).toHaveClass(/is-related/);
@@ -889,11 +897,11 @@ test('connections: departments on the left, tasks in the middle, projects on the
   await shogai.click();
   await expect(shogai).toHaveAttribute('aria-pressed', 'false');
   await expect(bowtie(page)).not.toHaveClass(/has-focus/);
-  // With the keyboard: Enter presses a department, Space lets it go.
+  // With the keyboard: Enter presses a node, Space lets it go.
   await shogai.focus();
   await page.keyboard.press('Enter');
   await expect(shogai).toHaveAttribute('aria-pressed', 'true');
-  await expect(link(page, 'shogai>T-102')).toHaveClass(/is-related/);
+  await expect(link(page, `shogai|${who}>T-102`)).toHaveClass(/is-related/);
   await page.keyboard.press('Space');
   await expect(shogai).toHaveAttribute('aria-pressed', 'false');
   await shogai.blur();
@@ -902,7 +910,8 @@ test('connections: departments on the left, tasks in the middle, projects on the
   await column(page, 'タスク').locator('[data-task-id="T-102"]').click();
   await expect(page).toHaveURL(/task=T-102/);
   await expect(column(page, 'タスク').locator('[data-task-id="T-102"]')).toHaveAttribute('aria-current', 'true');
-  await expect(link(page, 'kaikei>T-102')).toHaveClass(/is-related/);
+  await expect(link(page, `kaikei|${who}>T-102`)).toHaveClass(/is-related/);
+  await expect(link(page, 'somu>kaikei')).toHaveClass(/is-related/);
   await expect(link(page, 'T-130>T-101')).not.toHaveClass(/is-related/);
   expect(lists).toHaveLength(fetched);
   expect(world.calls.filter((c) => c.startsWith('UNHANDLED'))).toEqual([]);
@@ -918,19 +927,19 @@ test('connections: departments on the left, tasks in the middle, projects on the
   await expect(pane.getByTestId('task-list').locator(`[data-task-id="${matching[0]!.id}"]`)).toHaveCount(1);
 });
 
-test('connections on a phone: the three columns fit, nothing scrolls sideways, and a task opens', async ({ page }) => {
+test('connections on a phone: the five columns scroll sideways inside the picture, the page does not, and a task opens', async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await installWorld(page, { nested: true });
   await page.goto('/#/tasks');
   const pane = taskList(page);
   await pane.getByRole('button', { name: '関係図', exact: true }).click();
   await expect(column(page, '親タスク').locator('[data-task-id="T-101"]')).toBeVisible();
-  const [d, t, p] = [await box(column(page, '部局')), await box(column(page, 'タスク')), await box(column(page, '親タスク'))];
+  const [d, t] = [await box(column(page, '部')), await box(column(page, 'タスク'))];
   expect(d.x).toBeGreaterThanOrEqual(0);
   expect(d.x + d.width).toBeLessThan(t.x);
-  expect(t.x + t.width).toBeLessThan(p.x);
-  expect(p.x + p.width).toBeLessThanOrEqual(375);
   expect(t.width).toBeGreaterThanOrEqual(120);
+  // The picture scrolls sideways in its own box; the page does not.
+  expect(await bowtie(page).locator('.bowtie-scroll').evaluate((e) => e.scrollWidth > e.clientWidth)).toBe(true);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
   const bar = (await pane.locator('.task-list-summary').boundingBox())!;
   expect(bar.x + bar.width).toBeLessThanOrEqual(375);
