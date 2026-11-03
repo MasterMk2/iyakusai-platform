@@ -1,4 +1,5 @@
 import { DecisionsHomeCard } from './decisions/DecisionsHomeCard';
+import { DayOfPanel } from './dayof/DayOfPanel';
 import { useCallback, useState, type FormEvent, type ReactNode } from 'react';
 import type { MailboxSummary } from '../../shared/api';
 import type { UpcomingItem } from '../../shared/calendar';
@@ -168,6 +169,7 @@ export function HomeView({
           最新の状態にする
         </button>
       </div>
+      <DayOfPanel refresh={refresh} tasks={tasks} />
       <section className="attention" aria-label="対応が必要な件数" data-testid="home-attention">
         {items.length > 0 ? (
           <ul>

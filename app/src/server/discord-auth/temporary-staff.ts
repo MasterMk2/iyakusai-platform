@@ -72,6 +72,8 @@ const STAFF_GET = new Set([
   '/api/rental/supplies/collection',
   '/api/rental/supplies/shortages',
   '/api/rental/supplies/attachments',
+  // The festival-day notices marked for temporary staff (dayof/routes.ts answers only those, without names).
+  '/api/dayof/notices',
 ]);
 
 const STAFF_POST = new Set([

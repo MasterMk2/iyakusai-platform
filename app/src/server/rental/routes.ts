@@ -361,7 +361,7 @@ export async function registerRentalRoutes(app: FastifyInstance, ctx: RentalRout
     '.webmanifest': 'application/manifest+json; charset=utf-8',
   };
   const files = new Map<string, { data: Buffer; type: string; etag: string }>();
-  for (const name of ['index.html', 'app.js', 'styles.css', 'icon.svg', 'manifest.webmanifest', 'sw.js', 'vendor/jsQR.js', 'print.html', 'print.js', 'print.css']) {
+  for (const name of ['index.html', 'app.js', 'styles.css', 'icon.svg', 'manifest.webmanifest', 'sw.js', 'vendor/jsQR.js', 'print.html', 'print.js', 'print.css', 'dayof.js', 'dayof.css']) {
     const file = path.join(webDir, name);
     if (!existsSync(file)) continue;
     const data = readFileSync(file);
@@ -387,7 +387,7 @@ export async function registerRentalRoutes(app: FastifyInstance, ctx: RentalRout
   app.get('/rental-sw.js', async (request, reply) => send(request, reply, 'sw.js'));
   // 返却チェックシートの印刷（print.js が /api/rental/overview を読んで票にする）
   app.get('/rental/print', async (request, reply) => send(request, reply, 'print.html'));
-  for (const name of ['app.js', 'styles.css', 'icon.svg', 'manifest.webmanifest', 'vendor/jsQR.js', 'print.js', 'print.css']) {
+  for (const name of ['app.js', 'styles.css', 'icon.svg', 'manifest.webmanifest', 'vendor/jsQR.js', 'print.js', 'print.css', 'dayof.js', 'dayof.css']) {
     app.get(`/rental/${name}`, async (request, reply) => send(request, reply, name));
   }
 }

@@ -49,6 +49,8 @@ import { openDemoBooks } from './payments/demo.js';
 import { CalendarStore } from './calendar/store.js';
 import { seedCalendarDemo } from './calendar/seed.js';
 import type { CalendarRuntime } from './calendar/routes.js';
+import { DayOfStore } from './dayof/store.js';
+import { seedDayOfDemo } from './dayof/seed.js';
 
 // Server composition from a validated configuration (used by main.ts and by tests that exercise
 // the real production composition). Nothing here listens or installs signal handlers.
@@ -351,6 +353,18 @@ export async function composeServer(config: ServerConfig, overrides: ComposeOver
     }
   }
 
+  // Festival-day board (2026-11-03): dayof.sqlite3 beside the decision register (the mail folder in production, so its
+  // backup carries it; the demo's data folder, with a synthetic board whose period includes today). Off in other modes.
+  let dayof: DayOfStore | null = null;
+  if (decisionsDir) {
+    try {
+      dayof = new DayOfStore(decisionsDir);
+    } catch {
+      if (config.mailbox) refuse('当日の連絡板の保存先（受信箱の保存先）を開けないか、保存ファイルの形式が正しくありません。ファイルは変更していません。');
+    }
+    if (dayof && config.auth.mode === 'demo') seedDayOfDemo(dayof, decisions, initial.users.find((u) => u.canManageAccess)?.id ?? initial.users[0]?.id ?? 'system', now);
+  }
+
   // Bot tab: the Bot host's signed assistant API, on the task API's host and key, with the same identity bridge.
   const assistant: AssistantRuntime | null =
     config.assistant.mode === 'on' && tasks
@@ -371,6 +385,7 @@ export async function composeServer(config: ServerConfig, overrides: ComposeOver
     decisions,
     // Contacts, organizations and payments on synthetic data next to the demo data file (2026-11-03); null if they cannot be opened.
     demoBooks: config.auth.mode === 'demo' ? openDemoBooks(path.dirname(config.dataFile), initial.users, now) : null,
+    dayof,
     ...(discord ? { discord } : {}),
     ...(account ? { account } : {}),
     ...(line ? { line } : {}),
@@ -378,6 +393,10 @@ export async function composeServer(config: ServerConfig, overrides: ComposeOver
   if (decisions) {
     const opened = decisions;
     app.addHook('onClose', async () => opened.close());
+  }
+  if (dayof) {
+    const board = dayof;
+    app.addHook('onClose', async () => board.close());
   }
   return { app, account, hosted };
 }

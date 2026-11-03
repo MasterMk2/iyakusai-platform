@@ -93,3 +93,4 @@ npm run test:e2e    # ブラウザの試験（Playwright の Chromium。ビル�
 - [タスクサービスの API](docs/task-service/integration-api.md) とその設計（`docs/task-service/`）
 - 物品貸出：`docs/unified/rental-workflow.md` など
 - 決定事項の台帳：[docs/decisions.md](docs/decisions.md)（決めたことの登録・変更・取り消し、Bot の読み取り）
+- 当日の画面：[docs/dayof.md](docs/dayof.md)（当日の欄の期間・本部からの連絡・その場で決めたこと・臨時スタッフに見せる範囲）

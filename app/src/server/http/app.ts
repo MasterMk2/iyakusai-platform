@@ -11,6 +11,8 @@ import { isTemporaryStaffLoginId } from '../discord-auth/temporary-staff.js';
 import { registerDecisionRoutes } from '../decisions/routes.js';
 import type { DecisionsStore } from '../decisions/store.js';
 import { registerDemoBooks, type DemoBooks } from '../payments/demo.js';
+import { registerDayOfRoutes } from '../dayof/routes.js';
+import type { DayOfStore } from '../dayof/store.js';
 import { assertMappedUsers, ConfigError, IDENTITY_HEADER, isValidIdentity, normalizeAddress, type AuthConfig, type TrustedProxyAuth } from '../auth.js';
 import { MockInboundConnector, type MockConnectorOptions } from '../connector/mock.js';
 import type { InboundConnector } from '../connector/types.js';
@@ -72,6 +74,8 @@ export interface AppOptions {
   decisions?: DecisionsStore | null;
   /** Demo only: contacts, organizations and payments on synthetic data (2026-11-03). Absent: those routes do not exist. */
   demoBooks?: DemoBooks | null;
+  /** The festival-day board (dayof.sqlite3). Absent: its routes do not exist (404). */
+  dayof?: DayOfStore | null;
 }
 
 const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '[::1]']);
@@ -466,6 +470,23 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     parse,
   });
   if (demo && options.demoBooks) registerDemoBooks(app, options.demoBooks, { requireUser, lookupUser: (userId) => findUser(store.current, userId), listUsers: () => store.current.users.filter((u) => !u.disabled), clock, parse });
+  // Festival-day board (2026-11-03, dayof/routes.ts). Members as for the decision register above; temporary staff read the notices marked for them.
+  registerDayOfRoutes(app, options.dayof ?? null, {
+    viewer: (request) => {
+      const user = requireUser(request);
+      if (user.disabled) return null;
+      const session = discordApi?.currentSession(request) ?? null;
+      if (isTemporaryStaffLoginId(user.id) || departmentsOfLabel(user.roleLabel).includes(TEMPORARY_STAFF_DEPARTMENT) || session?.temporaryStaff === true || session?.discordUserId.startsWith('staff:')) return { user, staff: true };
+      return discordApi && discordApi.discordUserIdOf(user.id) === null ? null : { user, staff: false };
+    },
+    listUsers: () => (discordApi ? discordApi.listUsers() : store.current.users.filter((u) => !u.disabled)),
+    nameOf: (userId) => (discordApi ? discordApi.lookupUser(userId)?.displayName : findUser(store.current, userId)?.displayName) ?? '（不明な利用者）',
+    decisions: options.decisions ?? null,
+    calendar: options.calendar?.store ?? null,
+    rental: options.rental ?? null,
+    clock,
+    parse,
+  });
   // Copy to Google Drive: signed requests of the committee's Apps Script, Discord login only (the gate lets its report through).
   if (options.rental?.driveSyncKey) {
     if (auth.mode !== 'discord') throw new ConfigError('物品の Drive 同期は discord モードでだけ使えます。');

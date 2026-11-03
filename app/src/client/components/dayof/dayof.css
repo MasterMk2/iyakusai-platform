@@ -1,0 +1,88 @@
+/* 当日 (festival-day board) on the home screen and its settings. Colours are the shared tokens (styles.css :root and
+   the 若葉・ダーク themes): 至急 = すぐ対応 (red), 重要 = 注意 (amber), 済 = neutral (a finished notice is not
+   highlighted). Every level also carries its word (ui-guidelines §4). */
+
+.dayof { margin-bottom: 16px; border-color: var(--navy); border-width: 2px; }
+.dayof-head h2 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.dayof-date { font-size: 1rem; }
+.dayof-day { font-size: 14px; font-weight: 600; color: var(--navy); background: var(--info-bg); border-radius: 999px; padding: 1px 10px; }
+.dayof-updated { margin: 0; }
+
+.dayof-alert { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin: 8px 0 12px; padding: 10px 12px; border: 2px solid var(--red); border-radius: 6px; background: var(--red-bg); color: var(--red); }
+.dayof-alert-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.dayof-rules { margin: 4px 0 12px; border-left: 4px solid var(--navy); background: var(--neutral-bg); border-radius: 0 6px 6px 0; padding: 8px 12px; }
+.dayof-rules summary { cursor: pointer; font-weight: 700; color: var(--navy); min-height: 28px; }
+.dayof-rules p { margin: 6px 0 2px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
+
+.dayof-section { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 8px; min-width: 0; }
+.dayof-section:focus { outline: none; }
+.dayof-section:focus-visible { outline: 3px solid var(--focus-ring); box-shadow: 0 0 0 5px var(--focus); }
+.dayof-section-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.dayof-section-head h3 { margin: 4px 0; }
+
+.dayof-posts { list-style: none; margin: 0; padding: 0; }
+.dayof-post { border-top: 1px solid var(--line-soft); padding: 10px 0 10px 12px; border-left: 4px solid transparent; min-width: 0; }
+.dayof-post-urgent.dayof-post-open { border-left-color: var(--red); background: var(--red-bg); border-radius: 0 6px 6px 0; margin: 6px 0; border-top-color: transparent; }
+.dayof-post-important.dayof-post-open { border-left-color: var(--amber-line); }
+.dayof-post.dayof-fresh { box-shadow: inset 0 0 0 2px var(--blue); border-radius: 0 6px 6px 0; }
+.dayof-post-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.dayof-body { margin: 4px 0; white-space: pre-wrap; overflow-wrap: anywhere; font-weight: 600; line-height: 1.6; }
+.dayof-post-resolved .dayof-body, .dayof-post-withdrawn .dayof-body { font-weight: 400; color: var(--muted); }
+.dayof-post-actions { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; margin-top: 4px; }
+
+.dayof-tag { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 14px; font-weight: 700; white-space: nowrap; border: 1px solid transparent; }
+.dayof-tag-urgent { color: #fff; background: var(--red-fill); }
+.dayof-tag-important { color: var(--amber); background: var(--amber-bg); border-color: var(--amber-line); }
+.dayof-tag-resolved { color: var(--ink); background: var(--neutral-bg); border-color: var(--field); }
+.dayof-tag-new { color: var(--navy); background: var(--info-bg); border-color: var(--info-line); }
+
+.dayof-closed { margin-top: 8px; }
+.dayof-closed summary { cursor: pointer; color: var(--navy); font-weight: 600; min-height: 32px; padding: 4px 0; }
+
+.dayof-decisions .row-line, .dayof-events .row-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.dayof-change { font-size: 14px; color: var(--amber); }
+.dayof-time { font-variant-numeric: tabular-nums; font-weight: 700; color: var(--navy); min-width: 3.2em; }
+
+.dayof-supplies { margin: 4px 0; overflow-wrap: anywhere; }
+.dayof-supplies strong { font-size: 1.1rem; font-variant-numeric: tabular-nums; }
+.dayof-count-info { color: var(--navy); }
+.dayof-links { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 4px 0; }
+
+.dayof-form { display: grid; gap: 6px; margin: 8px 0 12px; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-sunken); min-width: 0; }
+.dayof-form > label { font-weight: 700; font-size: 14px; }
+.dayof-form textarea, .dayof-form input[type='text'] { width: 100%; box-sizing: border-box; }
+.dayof-form fieldset { border: 0; margin: 4px 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.dayof-form legend { font-weight: 700; font-size: 14px; padding: 0; margin-bottom: 4px; width: 100%; }
+.dayof-form .status-option { max-width: 100%; overflow-wrap: anywhere; }
+.dayof-priority-urgent:has(input:checked) { border-color: var(--red); background: var(--red-bg); color: var(--red); font-weight: 700; }
+.dayof-priority-important:has(input:checked) { border-color: var(--amber-line); background: var(--amber-bg); color: var(--amber); font-weight: 700; }
+.dayof-staff { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; }
+.dayof-form-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.dayof-over { color: var(--red); font-weight: 700; }
+
+/* A notice that moved on while it was being corrected: what it says now, next to what the person typed. */
+.dayof-drift { border: 2px solid var(--amber-line); background: var(--amber-bg); border-radius: 6px; padding: 8px 12px; min-width: 0; }
+.dayof-drift p { margin: 0 0 6px; overflow-wrap: anywhere; }
+.dayof-drift .dayof-drift-body { white-space: pre-wrap; font-weight: 600; background: var(--surface); border-radius: 4px; padding: 6px 8px; }
+.dayof-decision-body { font-size: 14px; overflow-wrap: anywhere; }
+.dayof-pending { display: flex; align-items: flex-start; }
+
+.dayof-settings .field-row input[type='date'] { min-width: 10em; }
+.dayof-settings textarea { width: 100%; box-sizing: border-box; }
+.dayof-filter { display: grid; gap: 4px; max-width: 340px; margin: 8px 0; font-size: 14px; }
+.dayof-history { margin-top: 12px; }
+.dayof-history summary { cursor: pointer; }
+
+@media (pointer: coarse) {
+  .dayof-rules summary, .dayof-closed summary, .dayof-history summary { min-height: 44px; display: flex; align-items: center; }
+  /* Touch: every control of the panel at least 44 px (済にする and its neighbours are pressed in a hurry). */
+  .dayof .dayof-post-actions button, .dayof button.small, .dayof .button.small, .dayof .dayof-section-head button, .dayof .dayof-alert-actions button, .dayof .status button, .dayof-drift button { min-height: 44px; min-width: 44px; }
+  .dayof-links a, .dayof-decisions a.row-main, .dayof .status a { display: inline-flex; align-items: center; min-height: 44px; }
+}
+
+@media (max-width: 680px) {
+  .dayof { padding: 12px; }
+  .dayof-post { padding-left: 8px; }
+  .dayof-form { padding: 10px; }
+}

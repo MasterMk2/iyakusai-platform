@@ -12,6 +12,7 @@ import { MailAccessPanel } from './MailAccessPanel';
 import { RentalAccessPanel } from './RentalAccessPanel';
 import { CardSettingsPanel } from './CardSettingsPanel';
 import { AccountingAccessPanel } from './payments/AccountingAccessPanel';
+import { DayOfSettingsPanel } from './dayof/DayOfSettingsPanel';
 import { storeTheme, THEME_LABELS, useTheme, type ThemeChoice } from '../theme';
 
 interface MockPerson {
@@ -87,6 +88,7 @@ export function SettingsView({
         )}
         <p className="hint">タスクの保存先は委員会タスク管理サービスだけです。Web と Discord の操作は同じタスク・版・履歴を使います。</p>
       </section>
+      {user.canManageAccess && <DayOfSettingsPanel />}
       {user.canManageAccess && <RentalAccessPanel onChanged={onChanged} />}
       {user.canManageAccess && <AccountingAccessPanel />}
       {user.canManageAccess && (committeeMail ? <MailAccessPanel /> : <AdminPanel user={user} onChanged={onChanged} demoControls={session.demoAuthentication === true} />)}
