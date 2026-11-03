@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect } from 'react';
 import { japaneseDay, type MailDueEntry, type MailDueResponse } from '../../shared/mailDue';
 import { api } from '../api';
 import { useLoader } from '../useLoader';
@@ -31,11 +31,22 @@ function EntryLine({ entry, today, onOpenThread }: { entry: MailDueEntry; today:
   );
 }
 
-export function MailDueCard({ onOpenThread }: { onOpenThread?: (threadId: string) => void }) {
+/**
+ * `onCounts` hands the counts to the home screen's attention line once they are known (null: none to show, after a
+ * failure or where the server has no mail deadlines). Only the committee mailbox has /api/mail/due: elsewhere the
+ * route is missing (404) and the card is left out, like the calendar's card.
+ */
+export function MailDueCard({ onOpenThread, onCounts }: { onOpenThread?: (threadId: string) => void; onCounts?: (counts: MailDueResponse['counts'] | null) => void }) {
   const load = useCallback((signal: AbortSignal) => api<MailDueResponse>('GET', '/api/mail/due', undefined, signal), []);
   const due = useLoader(load);
   const data = due.data;
+  const missing = due.error?.status === 404;
+  useEffect(() => {
+    if (data) onCounts?.(data.counts);
+    else if (due.error) onCounts?.(null);
+  }, [data, due.error, onCounts]);
   const empty = data !== null && data.counts.replyOverdue === 0 && data.counts.responseDue === 0;
+  if (missing) return null;
   return (
     <section className="panel home-mail-due" aria-labelledby="home-mail-due-title" id="home-mail-due" tabIndex={-1} data-testid="home-mail-due">
       <div className="panel-head">
@@ -67,7 +78,7 @@ export function MailDueCard({ onOpenThread }: { onOpenThread?: (threadId: string
                   <EntryLine key={`s-${e.threadId}`} entry={e} today={data.today} {...(onOpenThread ? { onOpenThread } : {})} />
                 ))}
               </ul>
-              {data.counts.responseDue > data.responseDue.length && <p className="hint">ほか {data.counts.responseDue - data.responseDue.length} 件は受信箱の「並び：期限の近い順」で見られます。</p>}
+              {data.counts.responseDue > data.responseDue.length && <p className="hint">ほか {data.counts.responseDue - data.responseDue.length} 件は受信箱の「並べ順：期限の近い順」で見られます。</p>}
             </>
           )}
         </>

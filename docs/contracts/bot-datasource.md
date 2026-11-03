@@ -97,6 +97,7 @@ Bot はそれを Markdown に整え、資料の写し（ミラー）の kiban/ �
 
 1. 鍵を作る（例：`openssl rand -hex 32` を所有者だけが読めるファイルへ。中身を表示・転記しない）。Bot ホストへは安全な経路で 1 回だけ写す。
 2. 統合アプリ：`SMM_BOT_DATASOURCE_KEY_FILE` を設定して入れ替える（[deployment.md](../deployment.md)）。決定事項の台帳は、受信箱（`SMM_MAIL_DIR`）と同じ場所の `decisions.sqlite3` に置かれる（追加の設定は要らない）。
-3. Bot：`config.toml` の `[kiban]` に `app_url`・`key_file` を書いて `enabled = true` にし、`sources` に `"decisions"` を足して再起動する。Bot 側の読み取りは別の変更で作る。統合アプリ側だけを先に出しても、Bot の動きは変わらない。
+3. Bot：`config.toml` の `[kiban]` に `app_url`・`key_file` を書いて `enabled = true` にし、`sources` に `"decisions"` を足して再起動する。Bot は `kiban/decisions.md` を作る（`kiban.py` の `render_decisions`）。週1回のタスク一覧は、`sources` に関係なく `decisions` だけを別の要求で取る（`weekly_cog.py`）。統合アプリ側だけを先に出しても、Bot の動きは変わらない。この節の形は、統合アプリ（`app/src/server/decisions/bot.ts`）と Bot（`bot/src/iyakusai_bot/decisions_logic.py`）で 2026-11-04 に照合した。
+4. 切り戻し：統合アプリを decisions に対応する前の版へ戻すときは、先に Bot の `sources` から `"decisions"` を外す。旧版は知らない `sources` を 401 で断るので、外さないと物品・受信箱の写しも止まる。
 
 実装：`app/src/server/datasource/bot-datasource.ts`（統合アプリ）、`app/src/server/decisions/bot.ts`（決定事項の応答）、`bot/src/iyakusai_bot/kiban.py`（Bot）。

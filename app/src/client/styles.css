@@ -1357,6 +1357,7 @@ button.task-tree-toggle:focus-visible { outline-offset: -3px; }
   .decisions-list .field-row,
   .minutes-decisions .field-row,
   .decision-sources .source-row { grid-template-columns: minmax(0, 1fr); }
+}
 /* Mail deadlines (2026-11-03): chips in the list and on the thread, the deadline panel, the compose field and the
    home card. The words say the state; the colour only repeats it. Inputs keep 16px (no zoom on iPhone) and a
    44px touch height on a coarse pointer. */
@@ -1376,3 +1377,19 @@ button.task-tree-toggle:focus-visible { outline-offset: -3px; }
 @media (pointer: coarse) {
   .due-panel input[type='date'], .compose-due input[type='date'] { min-height: 44px; }
 }
+/* Review fixes (2026-11-04). The task view switch keeps each label on one line; on the narrowest phones the
+   buttons wrap as separate pills instead of breaking a word in two. The rows of the recent decisions on the home
+   screen keep the title, the state and the date on one line (.rows li stacks them, as for .grant-row). */
+.view-switch { flex-wrap: wrap; max-width: 100%; }
+.view-switch button { white-space: nowrap; }
+@media (max-width: 360px) {
+  .view-switch { gap: 4px; }
+  .view-switch button,
+  .view-switch button + button,
+  .view-switch button:first-child,
+  .view-switch button:last-child { padding: 2px 8px; border-left: 1px solid var(--field); border-radius: 5px; }
+  .view-switch button[aria-pressed='true'] { border-color: var(--navy-fill); }
+}
+.home-decisions .rows li { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.home-decisions .rows li > a { min-width: 0; }
+.view-switch-row { margin: 8px 0 4px; }

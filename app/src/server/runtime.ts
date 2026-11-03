@@ -321,28 +321,33 @@ export async function composeServer(config: ServerConfig, overrides: ComposeOver
 
   // Decision register (2026-11-03): decisions.sqlite3 next to mail.sqlite3 in production (so the mail folder's backup
   // carries it); in the demo, next to the demo data file, starting with synthetic decisions. Off in other modes.
+  // A file that cannot be opened turns the register off only (meta enabled: false), like the calendar below.
   let decisions: DecisionsStore | null = null;
   const decisionsDir = config.mailbox ? config.mailbox.dataDir : config.auth.mode === 'demo' ? path.dirname(config.dataFile) : null;
   if (decisionsDir) {
     try {
       decisions = new DecisionsStore(decisionsDir);
     } catch {
-      if (config.mailbox) refuse('決定事項の保存先（受信箱の保存先）を開けないか、保存ファイルの形式が正しくありません。ファイルは変更していません。');
+      console.error('決定事項の保存ファイル（decisions.sqlite3）を開けないか、形式が正しくないため、決定事項だけを止めました。ファイルは変更していません。ほかの機能は動きます。');
     }
     if (decisions && config.auth.mode === 'demo') seedDecisionsDemo(decisions, initial.users.find((u) => u.canManageAccess)?.id ?? initial.users[0]?.id ?? 'system', now);
   }
 
   // Committee calendar (2026-11-03): its own SQLite file in the mail folder (Discord login, the production backup covers it),
   // or beside the state file in the other modes (the demos and the integrated demo, with synthetic data). A file that cannot
-  // be opened turns the calendar off only (503), never the rest of the app.
-  let calendar: CalendarRuntime | null;
-  const calendarDir = config.mailbox ? config.mailbox.dataDir : path.dirname(config.dataFile);
-  try {
-    const store = new CalendarStore(calendarDir);
-    if (config.auth.mode === 'demo') seedCalendarDemo(store, now);
-    calendar = { store, icalEnabled: config.calendar.ical };
-  } catch {
-    calendar = null;
+  // be opened turns the calendar off only (503), never the rest of the app. The Discord login without the mail folder has
+  // no calendar either (like the decisions): a file beside the state file would not be backed up, and would hide the
+  // events once the mail folder is back.
+  let calendar: CalendarRuntime | null = null;
+  const calendarDir = config.mailbox ? config.mailbox.dataDir : config.auth.mode === 'discord' ? null : path.dirname(config.dataFile);
+  if (calendarDir) {
+    try {
+      const store = new CalendarStore(calendarDir);
+      if (config.auth.mode === 'demo') seedCalendarDemo(store, now);
+      calendar = { store, icalEnabled: config.calendar.ical };
+    } catch {
+      calendar = null;
+    }
   }
 
   // Bot tab: the Bot host's signed assistant API, on the task API's host and key, with the same identity bridge.

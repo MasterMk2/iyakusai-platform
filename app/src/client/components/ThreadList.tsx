@@ -335,8 +335,8 @@ export function ThreadList(props: {
                 </select>
               </label>
               <label>
-                並び
-                <select aria-label="並び" value={draft.sort} onChange={(e) => choose('sort', e.target.value)}>
+                並べ順
+                <select aria-label="並べ順" value={draft.sort} onChange={(e) => choose('sort', e.target.value)}>
                   <option value="">新しい順</option>
                   <option value="due">期限の近い順</option>
                 </select>

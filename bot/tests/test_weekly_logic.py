@@ -104,8 +104,8 @@ class BuildWeeklyTests(unittest.TestCase):
         text = "\n".join(m.text for m in plan.messages)
         self.assertIn("未完了 6 件", text)                # 完了の 1 件は数えない
         self.assertIn("未割当 3 件", text)               # 担当なしは「未割当」と書く(/todo と同じ言い方)
-        self.assertIn("期限切れ 1", text)
-        self.assertIn("■ **内務部**　進行中 1・期限切れ 1・今週が期限 1", text)
+        self.assertIn("期限超過 1", text)               # /todo の「期限超過」と同じ言い方
+        self.assertIn("■ **内務部**　進行中 1・期限超過 1・今週が期限 1", text)
         self.assertIn("<@10>", text)                     # 担当は名指しの形(通知は鳴らさない)
         self.assertNotIn("完了した件", text)
         # 担当なしは期限の近い順に上位 2 件だけ。ボタンはその 2 件

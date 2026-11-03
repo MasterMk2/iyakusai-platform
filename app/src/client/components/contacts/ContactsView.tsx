@@ -102,6 +102,12 @@ function keepSectionInHash(section: 'people' | 'organizations'): void {
 
 export function ContactsView(props: ContactsPeopleProps) {
   const [section, setSectionState] = useState<'people' | 'organizations'>(sectionFromHash);
+  // A contact opened by address (an organization's 相手の担当者 links to #/contacts?c=…) is shown in the people's section.
+  const [shownContact, setShownContact] = useState(props.route.contactId);
+  if (props.route.contactId !== shownContact) {
+    setShownContact(props.route.contactId);
+    if (props.route.contactId && section === 'organizations') setSectionState('people');
+  }
   const setSection = (next: 'people' | 'organizations') => {
     setSectionState(next);
     keepSectionInHash(next);

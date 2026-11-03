@@ -72,12 +72,12 @@ export function PeopleView({ scoped, whole, multi, members, today, userId, edita
           ← 人の一覧に戻る
         </button>
         <h2 className="people-heading" ref={headingRef} tabIndex={-1}>
-          担当なしの未完了タスク
+          未割当の未完了タスク
         </h2>
         <LoadStatus loader={members} what="委員の名簿" />
         <p className="people-note">期限が近い順です。{editable ? '担当者を選び、「担当を付ける」を押すと主担当になります。' : '担当を付けられるのは編集者と管理者です。'}</p>
         {unassigned.length === 0 ? (
-          <p className="empty">担当なしの未完了のタスクはありません。</p>
+          <p className="empty">未割当の未完了タスクはありません。</p>
         ) : (
           <ul className="people-task-list" ref={listRef}>
             {unassigned.map((task, index) => (
@@ -100,7 +100,7 @@ export function PeopleView({ scoped, whole, multi, members, today, userId, edita
     <div className="people-view" data-testid="people-view">
       <div className="people-tools">
         <button type="button" className="secondary" onClick={() => setFocus({ kind: 'unassigned' })}>
-          担当なし {unassigned.length} 件
+          未割当 {unassigned.length} 件
         </button>
         <label className="sort-field">
           並べ順

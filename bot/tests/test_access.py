@@ -339,5 +339,47 @@ class SourceNameTests(unittest.TestCase):
         self.assertEqual(sorted(set(A.COMMAND_KINDS) - self.referenced_names()), [])
 
 
+class EveryCommandIsCheckedTests(unittest.TestCase):
+    """登録するスラッシュコマンドすべてに、権限の判定が付いていること（付け忘れは表でも監査でも見えないため）。
+
+    判定の付き方は 2 通り: デコレーターの access_check.require(...)、または /todo の _run(...)（中で enforce_for）。
+    使い方を出すだけの /help と /todo help は対象外（何も読まず、何も書かない）。
+    """
+
+    PKG = SRC / "iyakusai_bot"
+    EXEMPT = {("help.py", "help"), ("task_cog.py", "help")}
+    COMMAND = re.compile(r'^(\s*)@(?:app_commands|\w+)\.command\(name="([^"]+)"')
+
+    def commands(self) -> list[tuple[str, str, str, str]]:
+        """(ファイル名, コマンド名, デコレーターの並び, 関数の本体) の一覧。"""
+        found = []
+        for path in sorted(self.PKG.glob("*.py")):
+            lines = path.read_text(encoding="utf-8").splitlines()
+            for i, line in enumerate(lines):
+                m = self.COMMAND.match(line)
+                if not m:
+                    continue
+                depth = len(m.group(1))
+                j = i + 1
+                while j < len(lines) and not lines[j].lstrip().startswith(("async def ", "def ")):
+                    j += 1
+                k = j + 1
+                while k < len(lines) and (not lines[k].strip() or len(lines[k]) - len(lines[k].lstrip()) > depth):
+                    k += 1
+                found.append((path.name, m.group(2), "\n".join(lines[i:j]), "\n".join(lines[j:k])))
+        return found
+
+    def test_every_registered_command_carries_a_check(self):
+        missing = [f"{f}: {name}" for f, name, decorators, body in self.commands()
+                   if "access_check.require(" not in decorators and "self._run(itx" not in body
+                   and (f, name) not in self.EXEMPT]
+        self.assertEqual(missing, [])
+
+    def test_the_scan_sees_the_commands(self):
+        # 走査が空振りして通るのを防ぐ: 既知のコマンドが数に入っていること
+        names = {name for _, name, _, _ in self.commands()}
+        self.assertTrue({"ask", "roles", "usage", "create", "doc", "help"} <= names)
+
+
 if __name__ == "__main__":
     unittest.main()

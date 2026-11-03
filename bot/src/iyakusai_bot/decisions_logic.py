@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """統合アプリの「決定・変更」(sources: decisions)の読み方。Discord・ネットワークに依存しない。
 
-取り決めは統合アプリ側の契約（sources: decisions）。このリポジトリの docs/contracts/bot-datasource.md には
-まだ decisions の節が無い（統合後に照合する）。応答の形は {"decisions": {"items": [...]}}。本文(body)・人の名前・
-ID は Bot に渡さない前提で、ここでも読まない。知らない値(状態・部局のキー)は、読める形のまま表示する。
+取り決めは docs/contracts/bot-datasource.md の §3（decisions）。応答の形は {"decisions": {"items": [...]}}。
+本文(body)と決定の ID(id)は届くが、body は読まず、id は表示しない（変更先 supersededBy を件名に引き直すためだけに使う）。
+人の名前・人の ID・出典・履歴・取り消しの理由は、統合アプリが渡さない。知らない値(状態・部局のキー)は、
+読める形のまま表示する。
 """
 
 from __future__ import annotations

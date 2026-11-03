@@ -289,6 +289,7 @@ class RequireWiringTests(unittest.TestCase):
         ("persona_cmd", "Persona", "off"),
         ("haiku", "Haiku", "optout"),
         ("haiku", "Haiku", "optin"),
+        ("roles", "RoleStatus", "roles"),
     )
 
     def test_each_restricted_write_or_send_command_carries_its_check(self):

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""週1回のタスク一覧・担当なしタスクの追い投稿・「引き受ける」ボタン(Discord の口)。
+"""週1回のタスク一覧・未割当タスクの追い投稿・「引き受ける」ボタン(Discord の口)。
 
 中身の組み立てと順序は weekly_logic・weekly_service にある。ここは次の 4 つだけ:
 - 送り先と投稿の許可(タスク機能の guild_ids・channel_ids に入っているかと、@everyone から見えない

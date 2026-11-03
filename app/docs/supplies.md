@@ -40,7 +40,7 @@
 | 物品の追加・名前・しきい値・アーカイブ、在庫の補正、付属品の定義・しまう・戻す | `rental.issue` |
 | 在庫の補正の取り消し | `rental.issue` |
 
-権限はサーバーで確かめる（画面で隠すだけにしない）。権限のない人の入口は画面に出さない。臨時スタッフ（`rental.loan` のみ）は、貸す・返す・使う・点検まで。
+権限はサーバーで確かめる（画面で隠すだけにしない）。権限のない人の入口は画面に出さない。臨時スタッフ（`rental.loan` のみ）は、見る・貸す・返す・使う・点検と、貸出・返却・使ったの取り消しまで（表のとおり）。品目・在庫・付属品の定義はできない。Discord ログインでは、臨時スタッフが呼べる API を許可の一覧（`src/server/discord-auth/temporary-staff.ts`）で絞っている。この画面の経路のうち `rental.loan` で足りるもの（`GET /`・`/movements`・`/board`・`/collection`・`/shortages`・`/attachments`、`POST /lend`・`/return`・`/consume`・`/attachment-checks`・`/movements/:id/reverse`）だけを入れている（2026-11-04。それまでは一つも入っておらず、臨時スタッフはこの画面を使えなかった）。在庫の補正の取り消しは、経路を通っても `rental.issue` が無いので 403 になる。
 
 ## 有効にする方法
 

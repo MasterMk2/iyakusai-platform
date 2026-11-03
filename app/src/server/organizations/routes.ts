@@ -614,9 +614,35 @@ export function registerOrganizationRoutes(app: FastifyInstance, opened: Organiz
     return { org_id: org.id, org_name: org.data.name, to_address: toAddress, to_name: toName, subject: s.text, body: b.text, skip_reason: reasons.length > 0 ? reasons.join('。') : null };
   };
 
-  /** A note for a message not sent yet: the organization was sent a different subject before (not by this batch). */
+  /**
+   * Why a message is held back at the moment it would go out: another batch sent the same subject to the organization,
+   * is sending it, or may have sent it (two previews of one subject made before either was sent). Checked right before
+   * each message, with no await in between, so two batches sending at once cannot both send it.
+   */
+  const sentElsewhere = (orgId: string, subject: string, batchId: string): string | null => {
+    const sent = store.mailSentTo(orgId).find((m) => m.batchId !== batchId && m.subject === subject);
+    const other = store.sameSubjectInOtherBatches(orgId, subject, batchId).find((m) => m.status === 'sent' || m.status === 'sending' || m.status === 'unknown');
+    if (sent || other?.status === 'sent') {
+      return `同じ件名「${subject}」を ${(sent?.at ?? other!.at).slice(0, 10)} にこの団体へ送っています（別の一斉送信）。二重に送らないよう、送りませんでした。件名を変えると送れます`;
+    }
+    if (other) return `別の一斉送信が同じ件名「${subject}」をこの団体へ送っているところか、届いたか確認できていません。二重に送らないよう、送りませんでした`;
+    return null;
+  };
+
+  /**
+   * A note for a message not sent yet (not about this batch): the same subject went out, is going out or waits in
+   * another batch (only the first one sent arrives; the later one is held back when it is sent), or a different
+   * subject was sent before.
+   */
   const priorWarning = (orgId: string, subject: string, batchId: string): string | null => {
-    const other = store.mailSentTo(orgId).find((m) => m.batchId !== batchId && m.subject !== subject);
+    const sent = store.mailSentTo(orgId).filter((m) => m.batchId !== batchId);
+    const others = store.sameSubjectInOtherBatches(orgId, subject, batchId);
+    const same = sent.find((m) => m.subject === subject) ?? others.find((m) => m.status === 'sent');
+    if (same) return `この団体には ${same.at.slice(0, 10)} に同じ件名を別の一斉送信で送っています。送る時点で止めます（二重には送りません）`;
+    if (others.some((m) => m.status === 'sending' || m.status === 'unknown')) return '別の一斉送信が同じ件名をこの団体へ送っているところか、届いたか確認できていません。送る時点で止めます（二重には送りません）';
+    const waiting = others.find((m) => m.status === 'pending' || m.status === 'failed');
+    if (waiting) return `同じ件名でこの団体あての送信待ちが、別の一斉送信（${waiting.at.slice(0, 10)} に作成）にもあります。先に送ったほうだけが届き、あとから送るほうは止めます`;
+    const other = sent.find((m) => m.subject !== subject);
     return other ? `この団体には ${other.at.slice(0, 10)} に別の件名「${other.subject}」を送っています` : null;
   };
 
@@ -748,6 +774,11 @@ export function registerOrganizationRoutes(app: FastifyInstance, opened: Organiz
       const items = store.nextItems(batchId, ORG_LIMITS.sendChunk, body.includeFailed, body.afterIndex ?? -1);
       for (const item of items) {
         lastIndex = item.idx;
+        const held = sentElsewhere(item.org_id, item.subject, batchId);
+        if (held) {
+          store.skipItem(batchId, item.idx, held);
+          continue;
+        }
         store.setItem(batchId, item.idx, { status: 'sending' });
         const to = item.to_name ? recipientText(item.to_name, item.to_address) : item.to_address;
         try {

@@ -46,6 +46,7 @@ COMMAND_KINDS: dict[str, str] = {
     "todo.show": "read",
     "todo.history": "read",
     "assistant.ask": "read",
+    "roles": "read",                 # ロールが誰に付いているか（roles.py）
     # 書く
     "remind.add": "write",
     "remind.done": "write",

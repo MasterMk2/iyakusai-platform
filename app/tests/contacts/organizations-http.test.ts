@@ -650,4 +650,51 @@ describe('organizations: the fixes of the review (2026-11-03)', () => {
     expect(res.status).toBe(403);
     expect(sent).toHaveLength(0);
   });
+
+  it('sends one subject to an organization once when two drafts of it were made before either was sent', async () => {
+    const { chair, member, ids } = await linkedOrgs(1);
+    await grantSend(chair.cookie, chair.id);
+    const first = await call('POST', '/api/organizations/mail/batches', { cookie: member.cookie, body: draftBody(ids) });
+    const second = await call('POST', '/api/organizations/mail/batches', { cookie: chair.cookie, body: draftBody(ids) });
+    expect(second.json.counts).toMatchObject({ pending: 1, skipped: 0 });
+    // Both drafts are waiting: each one says the other exists.
+    expect(second.json.items[0].warning).toContain('送信待ち');
+
+    await sendAllOf(member.cookie, first.json.id);
+    expect(sent).toHaveLength(1);
+    const later = await call('GET', `/api/organizations/mail/batches/${second.json.id}`, { cookie: chair.cookie });
+    expect(later.json.items[0].warning).toContain('同じ件名');
+
+    const result = await sendAllOf(chair.cookie, second.json.id);
+    expect(result.json.batch).toMatchObject({ status: 'done', counts: { sent: 0, skipped: 1, pending: 0 } });
+    expect(result.json.batch.items[0].skipReason).toContain('二重に送らないよう');
+    expect(sent).toHaveLength(1);
+  });
+
+  it('holds the later draft back even when the first message is missing from the history', async () => {
+    const { member, ids } = await linkedOrgs(1);
+    const first = await call('POST', '/api/organizations/mail/batches', { cookie: member.cookie, body: draftBody(ids) });
+    const second = await call('POST', '/api/organizations/mail/batches', { cookie: member.cookie, body: draftBody(ids) });
+    const spy = vi.spyOn(OrganizationsStore.prototype, 'recordMail').mockImplementation(() => {
+      throw new Error('history unavailable');
+    });
+    try {
+      await sendAllOf(member.cookie, first.json.id);
+    } finally {
+      spy.mockRestore();
+    }
+    const result = await sendAllOf(member.cookie, second.json.id);
+    expect(result.json.batch.counts).toMatchObject({ sent: 0, skipped: 1 });
+    expect(sent).toHaveLength(1);
+  });
+
+  it('still sends a different subject to the same organization', async () => {
+    const { member, ids } = await linkedOrgs(1);
+    const first = await call('POST', '/api/organizations/mail/batches', { cookie: member.cookie, body: draftBody(ids) });
+    const other = await call('POST', '/api/organizations/mail/batches', { cookie: member.cookie, body: draftBody(ids, { subject: '別件 {団体名}' }) });
+    await sendAllOf(member.cookie, first.json.id);
+    const result = await sendAllOf(member.cookie, other.json.id);
+    expect(result.json.batch.counts).toMatchObject({ sent: 1, skipped: 0 });
+    expect(sent).toHaveLength(2);
+  });
 });

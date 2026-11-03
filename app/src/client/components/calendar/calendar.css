@@ -41,10 +41,27 @@
   gap: 6px;
 }
 
-.cal-modes button[aria-pressed='true'] {
+/* A switch like the task views' (.view-switch): the chosen one filled, the other plain, so only 予定を追加 reads as
+   the main button. */
+.cal-modes button {
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--field);
+  font-weight: 400;
+}
+
+.cal-modes button:hover:not(:disabled) {
+  background: var(--hover-strong);
+  color: var(--ink);
+  border-color: var(--field);
+}
+
+.cal-modes button[aria-pressed='true'],
+.cal-modes button[aria-pressed='true']:hover:not(:disabled) {
   background: var(--navy-fill);
   color: #fff;
   border-color: var(--navy-fill);
+  font-weight: 700;
 }
 
 .cal-filters {
@@ -204,6 +221,10 @@
 
 .cal-item {
   display: grid;
+  /* The button rule centres its content; one full-width column keeps every line starting at the left. */
+  grid-template-columns: minmax(0, 1fr);
+  justify-content: stretch;
+  justify-items: start;
   gap: 2px;
   width: 100%;
   min-height: 44px;

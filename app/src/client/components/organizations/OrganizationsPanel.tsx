@@ -17,6 +17,33 @@ const PAGE_SIZE = 50;
 
 type View = { kind: 'browse' } | { kind: 'new' } | { kind: 'import' } | { kind: 'mail'; resumeId?: string };
 
+/**
+ * The organization open on the screen is kept in the address (#/contacts?section=organizations&org=og_…), so coming
+ * back with the browser's Back (from a related mail, or from the contact) opens it again. The filters are not kept.
+ */
+function orgFromHash(): string | null {
+  try {
+    const value = new URLSearchParams(window.location.hash.split('?')[1] ?? '').get('org');
+    return value && /^og_[0-9a-f]{16}$/.test(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function keepOrgInHash(id: string | null): void {
+  try {
+    const [path = '', query = ''] = window.location.hash.split('?');
+    if (!path.startsWith('#/contacts')) return;
+    const params = new URLSearchParams(query);
+    if (id) params.set('org', id);
+    else params.delete('org');
+    const text = params.toString();
+    window.history.replaceState(null, '', `${path}${text ? `?${text}` : ''}`);
+  } catch {
+    // The address only helps coming back; without it the list opens with nothing chosen.
+  }
+}
+
 /** The year shown by default: the festival's year (the list's year can be changed). */
 const THIS_YEAR = new Date().getFullYear();
 
@@ -47,11 +74,13 @@ export function OrganizationsPanel() {
   const [list, setList] = useState<OrgListResponse | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(orgFromHash);
   const [checked, setChecked] = useState<Map<string, string>>(new Map());
   const [selectNotice, setSelectNotice] = useState<string | null>(null);
   const [openBatches, setOpenBatches] = useState<OrgMailBatchSummary[]>([]);
   const [view, setView] = useState<View>({ kind: 'browse' });
+
+  useEffect(() => keepOrgInHash(selectedId), [selectedId]);
 
   useEffect(() => {
     const controller = new AbortController();

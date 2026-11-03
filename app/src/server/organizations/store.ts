@@ -502,6 +502,24 @@ export class OrganizationsStore {
     });
   }
 
+  /**
+   * Messages of other batches to one organization with one subject, newest batch first: waiting (pending, failed),
+   * going out (sending), gone out (sent) or perhaps gone out (unknown). Skipped ones are left out.
+   */
+  sameSubjectInOtherBatches(orgId: string, subject: string, batchId: string): { batchId: string; status: ItemStatus; at: string }[] {
+    const rows = this.db
+      .prepare(
+        "SELECT i.batch_id AS batch_id, i.status AS status, COALESCE(i.sent_at, b.created_at) AS at FROM mail_batch_items i JOIN mail_batches b ON b.id=i.batch_id WHERE i.org_id=? AND i.subject=? AND i.batch_id<>? AND i.status<>'skipped' ORDER BY b.created_at DESC LIMIT 20",
+      )
+      .all(orgId, subject, batchId) as { batch_id: string; status: ItemStatus; at: string }[];
+    return rows.map((r) => ({ batchId: r.batch_id, status: r.status, at: r.at }));
+  }
+
+  /** Holds one message back when it is about to be sent (another batch sent the same subject): kept with the reason. */
+  skipItem(batchId: string, idx: number, reason: string): void {
+    this.db.prepare("UPDATE mail_batch_items SET status='skipped', skip_reason=?, error=NULL WHERE batch_id=? AND idx=? AND status IN ('pending','failed')").run(reason, batchId, idx);
+  }
+
   /** The departments (委員会側の部局) used in one year, or in all years, for the filter. */
   departments(fiscalYear?: number): string[] {
     const rows =

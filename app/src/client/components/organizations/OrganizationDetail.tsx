@@ -235,7 +235,8 @@ export function OrganizationDetail({
         <dd>
           {org.contactId ? (
             <>
-              {org.contactName ?? '（名前なし）'}
+              {/* Opens the contact in the people's section of the same tab (the browser's Back returns here). */}
+              <a href={`#/contacts?c=${encodeURIComponent(org.contactId)}`}>{org.contactName ?? '（名前なし）'}</a>
               {org.contactEmail && <> · {org.contactEmail}</>}
             </>
           ) : (

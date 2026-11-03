@@ -310,7 +310,7 @@ export function TasksView({ route, onNavigate, refresh }: { route: TaskRoute; on
         <p className="status info" data-testid="tasks-unbound">
           このアカウントにはタスク機能の権限がありません（委員会タスクの利用者として登録されていません）。
         </p>
-        <CalendarView tasks={[]} tasksLoading={false} taskNote="このアカウントはタスクと結び付いていないため、タスクの締切は出ていません。" userId={null} onOpenTask={() => undefined} initialDate={route.calendarDate ?? null} />
+        <CalendarView tasks={[]} tasksLoading={false} taskNote="このアカウントはタスクと結び付いていないため、タスクの期限は出ていません。" userId={null} onOpenTask={() => undefined} initialDate={route.calendarDate ?? null} />
       </main>
     );
   }
@@ -366,9 +366,9 @@ export function TasksView({ route, onNavigate, refresh }: { route: TaskRoute; on
   const calendarMode = view === 'calendar';
   const calendarTasks = current.filter(inSelection);
   const calendarTaskNote = tasks.error
-    ? 'タスクの締切を取得できませんでした。予定だけを表示しています。'
+    ? 'タスクの期限を取得できませんでした。予定だけを表示しています。'
     : multi && !everything
-      ? `タスクの締切は、上で選んだ部局（${selectionLabel(selection, departments)}）のものだけを出しています。`
+      ? `タスクの期限は、上で選んだ部局（${selectionLabel(selection, departments)}）のものだけを出しています。`
       : null;
   const tree = treeMode ? departmentTree(list, byId, departments, covered) : [];
   const allFolded = tree.filter((n) => n.tasks.length > 0).every((n) => foldedDepartments.has(n.key));
@@ -607,6 +607,31 @@ export function TasksView({ route, onNavigate, refresh }: { route: TaskRoute; on
             </button>
           )}
         </header>
+        {/* The view switch keeps one place in every view: above the search and filters, which some views leave out.
+            人ごと is offered in every committee; the department views need several departments (tags). */}
+        <div className="view-switch-row">
+          <div className="view-switch" role="group" aria-label="表示の形">
+            <button type="button" aria-pressed={!treeMode && !bowtieMode && !peopleMode && !calendarMode} onClick={() => chooseView('list')}>
+              一覧
+            </button>
+            <button type="button" aria-pressed={peopleMode} onClick={() => chooseView('people')}>
+              人ごと
+            </button>
+            {multi && (
+              <>
+                <button type="button" aria-pressed={treeMode} onClick={() => chooseView('tree')}>
+                  部局ごと
+                </button>
+                <button type="button" aria-pressed={bowtieMode} onClick={() => chooseView('bowtie')}>
+                  関係図
+                </button>
+              </>
+            )}
+            <button type="button" aria-pressed={calendarMode} onClick={() => chooseView('calendar')}>
+              カレンダー
+            </button>
+          </div>
+        </div>
         {!peopleMode && !calendarMode && (
         <div className="list-tools">
           <input
@@ -660,35 +685,14 @@ export function TasksView({ route, onNavigate, refresh }: { route: TaskRoute; on
           </div>
         </div>
         )}
+        {!calendarMode && (
         <div className="list-bar task-list-summary">
-          {!calendarMode && <p className="count">{loaded ? (peopleMode ? '人ごとに表示' : `${list.length} 件${filtered ? 'を表示' : ''}`) : 'タスク一覧'}</p>}
+          <p className="count">{loaded ? (peopleMode ? '人ごとに表示' : `${list.length} 件${filtered ? 'を表示' : ''}`) : 'タスク一覧'}</p>
           {!peopleMode && !calendarMode && filtered && (
             <button type="button" className="quiet" onClick={clearAll}>
               絞り込みを解除
             </button>
           )}
-          {/* 人ごと is offered in every committee; the department views need several departments (tags). */}
-          <div className="view-switch" role="group" aria-label="表示の形">
-            <button type="button" aria-pressed={!treeMode && !bowtieMode && !peopleMode && !calendarMode} onClick={() => chooseView('list')}>
-              一覧
-            </button>
-            <button type="button" aria-pressed={peopleMode} onClick={() => chooseView('people')}>
-              人ごと
-            </button>
-            {multi && (
-              <>
-                <button type="button" aria-pressed={treeMode} onClick={() => chooseView('tree')}>
-                  部局ごと
-                </button>
-                <button type="button" aria-pressed={bowtieMode} onClick={() => chooseView('bowtie')}>
-                  関係図
-                </button>
-              </>
-            )}
-            <button type="button" aria-pressed={calendarMode} onClick={() => chooseView('calendar')}>
-              カレンダー
-            </button>
-          </div>
           {treeMode && list.length > 0 && (
             <button
               type="button"
@@ -711,6 +715,7 @@ export function TasksView({ route, onNavigate, refresh }: { route: TaskRoute; on
             </label>
           )}
         </div>
+        )}
         {notice && (
           <div className={`status ${notice.kind} task-list-notice`} role={notice.kind === 'ok' ? 'status' : 'alert'}>
             <span>{notice.text}</span>

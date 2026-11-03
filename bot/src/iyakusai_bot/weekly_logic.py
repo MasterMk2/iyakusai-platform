@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""週1回のタスク一覧と、担当なしタスクの追い投稿の中身(純ロジック・Discord に依存しない)。
+"""週1回のタスク一覧と、未割当タスクの追い投稿の中身(純ロジック・Discord に依存しない)。
 
 - 設定は [weekly]。無ければ何もしない(WeeklySettings.enabled=False)。
-- 一覧: 部局ごとの進行中・期限切れ・今週が期限、担当なしの上位(引き受けボタン付き)、
+- 一覧: 部局ごとの進行中・期限超過・今週が期限、未割当の上位(引き受けボタン付き)、
   統合アプリの「今週の決定・変更」(その口が使えないときは節ごと出さない)。
-- 追い投稿: 一覧に載せた担当なしのタスクが follow_up_days 過ぎても担当なしなら、同じ部局で
+- 追い投稿: 一覧に載せた未割当のタスクが follow_up_days 過ぎても未割当なら、同じ部局で
   担当の実績がある人を持ちの少ない順に名前で添えて 1 回だけ。
   候補はタスク DB の主担当・副担当から選ぶ(Bot はサーバーのメンバー一覧を読めないため)。
 - 時刻は日本時間。週は ISO 週(月曜始まり)。投稿の既定は月曜 8:40。
@@ -142,7 +142,7 @@ class Outgoing:
 class WeeklyPlan:
     week: str
     messages: tuple[Outgoing, ...]
-    listed_numbers: tuple[int, ...]        # 担当なし一覧に載せた番号(追い投稿の対象)
+    listed_numbers: tuple[int, ...]        # 未割当の一覧に載せた番号(追い投稿の対象)
 
 
 def _person(user_id: int | None) -> str:
@@ -164,7 +164,7 @@ def _order(view: TaskView) -> tuple[str, int]:
 
 def _task_line(view: TaskView, *, with_person: bool) -> str:
     t = view.task
-    overdue = "・期限切れ" if view.overdue else ""
+    overdue = "・期限超過" if view.overdue else ""
     if with_person:
         where = f"担当: {_person(t.assignee_id)}・期限: {_due(view)}{overdue}"
     else:
@@ -242,7 +242,7 @@ def build_weekly(views: Sequence[TaskView], now: datetime, *, candidate_limit: i
 
     blocks = [Outgoing(
         f"📋 **今週のタスク一覧**（{today:%Y/%m/%d} 時点）\n"
-        f"未完了 {len(open_views)} 件・未割当 {len(unassigned)} 件・期限切れ {overdue_total} 件。"
+        f"未完了 {len(open_views)} 件・未割当 {len(unassigned)} 件・期限超過 {overdue_total} 件。"
         "見た人は、担当の人に進み具合を催促してください。")]
 
     for key, (label, _parent) in DEPARTMENTS.items():
@@ -256,7 +256,7 @@ def build_weekly(views: Sequence[TaskView], now: datetime, *, candidate_limit: i
                 picked.append(v)
         if not picked:
             continue
-        lines = [f"■ **{label}**　進行中 {len(in_progress)}・期限切れ {len(overdue)}・今週が期限 {len(soon)}"]
+        lines = [f"■ **{label}**　進行中 {len(in_progress)}・期限超過 {len(overdue)}・今週が期限 {len(soon)}"]
         lines += [_task_line(v, with_person=True) for v in picked]
         blocks.append(Outgoing("\n".join(lines)))
 

@@ -19,6 +19,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
+from . import access_check
 from .mirror import _scrub_plain
 from .role_logic import Roster, build_roster, person_text, render_markdown, role_text, summary_text
 
@@ -84,6 +85,7 @@ class RoleStatus(commands.Cog):
         await self.bot.wait_until_ready()
 
     @app_commands.command(name="roles", description="Discord のロールが誰に付いているかを表示する")
+    @access_check.require("roles")
     @app_commands.describe(ロール="このロールが付いている人を出す", 人="この人に付いているロールを出す")
     @app_commands.guild_only()
     async def roles(self, itx: discord.Interaction, ロール: discord.Role | None = None,
