@@ -8,6 +8,11 @@
   "engines": {
     "node": ">=22.12.0"
   },
+  "overrides": {
+    "@fastify/static": {
+      "glob": "^14.0.3"
+    }
+  },
   "scripts": {
     "build": "vite build && tsc -p tsconfig.server.json && node scripts/copy-rental-web.mjs",
     "start": "node dist/server/main.js",
