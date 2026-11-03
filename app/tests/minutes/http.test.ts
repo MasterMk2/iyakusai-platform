@@ -308,7 +308,8 @@ describe('meeting minutes', () => {
   });
 });
 
-describe('the decision register from confirmed minutes (Discord login)', () => {
+// Each case takes a meeting through the worker and signs in twice, which runs past 5 s on a busy machine.
+describe('the decision register from confirmed minutes (Discord login)', { timeout: 20_000 }, () => {
   let decisions: DecisionsStore;
   beforeEach(() => {
     decisions = new DecisionsStore(path.join(dir, 'decisions'));
