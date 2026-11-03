@@ -753,13 +753,14 @@ button.task-tree-toggle:focus-visible { outline-offset: -3px; }
 .task-tree-name { min-width: 0; overflow-wrap: anywhere; }
 .task-tree-count { flex: 0 0 auto; color: var(--muted); font-size: 14px; font-weight: 400; font-variant-numeric: tabular-nums; }
 .task-tree-overdue { flex: 0 0 auto; color: var(--red); font-size: 14px; font-variant-numeric: tabular-nums; }
-/* The connections view (2026-10-28): departments, tasks and projects in three columns, each node placed
-   at its row's height (TaskBowtie) and the lines drawn in the two gutters between. The list pane takes
-   more of the width while it is shown. */
+/* The connections view (2026-10-28; nested 2026-11-03): parts, sections, assignees, tasks and projects
+   in five columns, each node placed at its row's height (TaskBowtie) and the lines drawn in the four
+   gutters between. The list pane takes more of the width while it is shown; a pane too narrow for the
+   five columns scrolls the picture sideways. */
 .tasks-layout:has(.task-bowtie) { grid-template-columns: minmax(0, 1.55fr) minmax(380px, 1fr); }
-.task-bowtie { --bt-department: 144px; --bt-gutter: 56px; --bt-parent: 188px; border-top: 1px solid var(--line); padding-top: 8px; }
+.task-bowtie { --bt-part: 112px; --bt-section: 108px; --bt-person: 116px; --bt-gutter: 24px; --bt-parent: 160px; border-top: 1px solid var(--line); padding-top: 8px; }
 .bowtie-hint { margin: 0 0 6px; font-size: 14px; color: var(--muted); }
-.bowtie-heads, .bowtie-body { display: grid; grid-template-columns: var(--bt-department) var(--bt-gutter) minmax(0, 1fr) var(--bt-gutter) var(--bt-parent); }
+.bowtie-heads, .bowtie-body { display: grid; grid-template-columns: var(--bt-part) var(--bt-gutter) var(--bt-section) var(--bt-gutter) var(--bt-person) var(--bt-gutter) minmax(180px, 1fr) var(--bt-gutter) var(--bt-parent); }
 /* Stuck to the top of the scrolling list pane (over its 16px padding). */
 .bowtie-heads { position: sticky; top: -16px; z-index: 2; margin-bottom: 8px; padding: 6px 0; background: var(--surface); border-bottom: 1px solid var(--line); font-size: 14px; font-weight: 700; color: var(--muted); }
 .bowtie-col { position: relative; height: 100%; margin: 0; padding: 0; list-style: none; }
@@ -767,13 +768,13 @@ button.task-tree-toggle:focus-visible { outline-offset: -3px; }
 .bowtie-col button { flex: 1 1 auto; min-width: 0; height: 100%; min-height: 0; justify-content: flex-start; gap: 6px; padding: 0 8px; background: var(--surface); color: var(--ink); border: 1px solid var(--line); font-weight: 400; text-align: left; }
 .bowtie-col button:hover:not(:disabled) { background: var(--hover); color: var(--ink); border-color: var(--field); }
 .bowtie-col button:focus-visible { outline-offset: 1px; }
-.bowtie-department button { background: var(--neutral-bg); font-weight: 700; }
-.bowtie-department.is-section { padding-left: 12px; }
-.bowtie-department.is-section button { font-weight: 400; }
-.bowtie-department button[aria-pressed='true'], .bowtie-department button[aria-pressed='true']:hover:not(:disabled) { background: var(--navy-fill); border-color: var(--navy-fill); color: #fff; }
+.bowtie-parts button { background: var(--neutral-bg); font-weight: 700; }
+.bowtie-node.is-placeholder button { color: var(--muted); border-style: dashed; }
+.bowtie-node.is-context button { border-style: dashed; background: var(--surface-sunken); }
+.bowtie-node button[aria-pressed='true'], .bowtie-node button[aria-pressed='true']:hover:not(:disabled) { background: var(--navy-fill); border-color: var(--navy-fill); color: #fff; }
 .bowtie-name, .bowtie-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bowtie-count { flex: 0 0 auto; margin-left: auto; color: var(--muted); font-size: 13px; font-weight: 400; font-variant-numeric: tabular-nums; }
-.bowtie-department button[aria-pressed='true'] .bowtie-count { color: #fff; }
+.bowtie-node button[aria-pressed='true'] .bowtie-count { color: #fff; }
 .bowtie-col .chip { flex: 0 0 auto; font-size: 13px; }
 .bowtie-task .bowtie-title { flex: 1 1 auto; }
 .bowtie-task .due { font-size: 13px; }
@@ -787,19 +788,16 @@ button.task-tree-toggle:focus-visible { outline-offset: -3px; }
 .bowtie-links path { fill: none; stroke: var(--link-stroke); stroke-width: 1.25; }
 .task-bowtie.has-focus .bowtie-links path { stroke: var(--link-faded); }
 .task-bowtie.has-focus .bowtie-links path.is-related { stroke: var(--blue); stroke-width: 2; }
-/* Narrower panes: smaller sides with the count under the department's name, then the deadline and the
-   status left to the name (they are still read with it, and the detail has them). */
-@container (max-width: 640px) {
-  .task-bowtie { --bt-department: 100px; --bt-gutter: 32px; --bt-parent: 140px; }
-  .bowtie-department button { flex-direction: column; align-items: flex-start; justify-content: center; gap: 0; line-height: 1.2; }
-  .bowtie-count { margin-left: 0; }
-  .bowtie-task .due { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
-}
-@container (max-width: 460px) {
-  .task-bowtie { --bt-department: 84px; --bt-gutter: 16px; --bt-parent: 100px; }
+/* Narrower panes: the counts go into the nodes' titles, the deadline is left to the detail, and below
+   that the picture keeps its least width and scrolls sideways (the sticky heads stay static then). */
+@container (max-width: 760px) {
+  .task-bowtie { --bt-part: 76px; --bt-section: 84px; --bt-person: 92px; --bt-gutter: 18px; --bt-parent: 128px; }
+  .bowtie-node .bowtie-count { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
   .bowtie-col button { padding: 0 6px; font-size: 13px; }
-  .bowtie-department.is-section { padding-left: 6px; }
-  .bowtie-task .chip, .bowtie-parent-meta .chip { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+  .bowtie-task .due { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+  .bowtie-scroll { overflow-x: auto; }
+  .bowtie-scroll > .bowtie-heads, .bowtie-scroll > .bowtie-body { min-width: 640px; }
+  .bowtie-heads { position: static; }
 }
 @container (min-width: 600px) {
   .task-row.has-buttons > .row-open > :not(.row-line) { padding-right: 262px; }

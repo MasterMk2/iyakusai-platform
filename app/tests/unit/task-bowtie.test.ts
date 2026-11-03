@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { bowtieLayout, relatedTo, type BowtieLayout } from '../../src/client/components/tasks/bowtie.js';
+import { bowtieLayout, relatedTo, type BowtieLayout, type BowtieNode } from '../../src/client/components/tasks/bowtie.js';
 import type { Department, TaskView } from '../../src/shared/tasks.js';
 
-// The connections view (2026-10-28): which side each task is on, where the nodes go, and what a
-// department or a task brings forward.
+// The connections view (2026-10-28; nested 2026-11-03): parts → sections → assignees → tasks → projects,
+// where each node goes, and what a node or a task brings forward.
 
 const DEPARTMENTS: Department[] = [
   { key: 'yakuin', label: '役員会', parent: null },
@@ -15,69 +15,88 @@ const DEPARTMENTS: Department[] = [
   { key: 'shogai', label: '渉外課', parent: 'gaimu' },
 ];
 const ALL = new Set(DEPARTMENTS.map((d) => d.key));
-// A row is 8 high (10 apart), a department 6 and a project 10, 2 kept between nodes, 4 between blocks.
+// A row is 8 high (10 apart), a node 6 and a project 10, 2 kept between nodes, 4 between blocks.
 const SIZES = { row: 10, department: 6, parent: 10, gap: 2, block: 4 };
 
-const task = (id: string, tags: string[], parentId: string | null = null) => ({ id, tags, parentId }) as TaskView;
+const task = (id: string, tags: string[], who: string | null, parentId: string | null = null) =>
+  ({ id, tags, parentId, assigneeId: who, assignee: who ? { id: who, displayName: who.toUpperCase(), active: true } : null }) as TaskView;
 const byId = (tasks: TaskView[]) => new Map(tasks.map((t) => [t.id, t]));
-const left = (l: BowtieLayout) => l.departments.map((d) => `${d.key || '(none)'} ${d.top} ${d.count}${d.part ? ` in ${d.part}` : ''}`);
-const middle = (l: BowtieLayout) => l.tasks.map((t) => `${t.task.id} ${t.top} ${t.departments.join(',')}${t.parentId ? ` >${t.parentId}` : ''}`);
+const nodes = (list: BowtieNode[]) =>
+  list.map((n) => `${n.label} ${n.top} ${n.count}${n.up !== null ? ` <${n.up || '(none)'}` : ''}${n.placeholder ? ' *' : ''}${n.context ? ' ~' : ''}`);
+const middle = (l: BowtieLayout) => l.tasks.map((t) => `${t.task.id} ${t.top} ${t.people.join(',')}${t.parentId ? ` >${t.parentId}` : ''}`);
 const right = (l: BowtieLayout) => l.parents.map((p) => `${p.matches ? '' : '~'}${p.task.id} ${p.top}`);
 
 // Rows in the list's order; q is a project left out by the filters (loaded, not a row).
-const q = task('q', ['koho']);
-const rows = [task('t1', ['kaikei', 'shogai']), task('t2', ['soumu']), task('p', ['shogai']), task('c1', ['shogai'], 'p'), task('t3', ['kaikei']), task('c2', ['koho'], 'q'), task('t4', [])];
+const q = task('q', ['koho'], 'b');
+const rows = [
+  task('t1', ['kaikei', 'shogai'], 'a'),
+  task('t2', ['soumu'], 'b'),
+  task('p', ['shogai'], 'a'),
+  task('c1', ['shogai'], 'b', 'p'),
+  task('t3', ['kaikei'], 'b'),
+  task('t5', ['kaikei'], 'a'),
+  task('c2', ['koho'], null, 'q'),
+  task('t4', [], null),
+];
 const layout = bowtieLayout(rows, byId([...rows, q]), DEPARTMENTS, ALL, SIZES);
 
 describe('the connections view', () => {
-  it('puts projects with children on the right and groups the rest by their first department', () => {
-    // 総務部, then 会計課 (t1 first in the list), 広報課, 渉外課, none; a block is 4 below the one before.
-    expect(middle(layout)).toEqual(['t2 0 soumu', 't1 14 kaikei,shogai', 't3 24 kaikei', 'c2 38 koho >q', 'c1 52 shogai >p', 't4 66 ']);
-    expect(right(layout)).toEqual(['~q 37', 'p 51']);
-    expect(layout.height).toBe(74);
+  it('puts projects with children on the right and groups the rest by section, then by assignee', () => {
+    // 総務部's own (部全体), 会計課 (A's two together, then B), 広報課, 渉外課, none; a block is 4 below the one before.
+    expect(middle(layout)).toEqual(['t2 0 soumu#all|b', 't1 14 kaikei|a,shogai|a', 't5 24 kaikei|a', 't3 34 kaikei|b', 'c2 48 koho| >q', 'c1 62 shogai|b >p', 't4 76 #all|']);
+    expect(right(layout)).toEqual(['~q 47', 'p 61']);
+    expect(layout.height).toBe(84);
   });
 
-  it('sets each department level with its block, a part without rows above its first section', () => {
-    // Centres: t2 4 | t1 18, t3 28 | c2 42 | c1 56 | t4 70. A part counts its sections' tasks, each once;
-    // 役員会 and システム課 have nothing and are left out.
-    expect(left(layout)).toEqual(['soumu 1 3', 'kaikei 20 2 in soumu', 'gaimu 31 3', 'koho 39 1 in gaimu', 'shogai 53 2 in gaimu', '(none) 67 1']);
+  it('sets each assignee level with their rows, under each section they have rows in', () => {
+    // A under 渉外課 has only t1, which is in 会計課's block: level with it would overlap, so it is pushed down.
+    expect(nodes(layout.people)).toEqual(['B 1 1 <soumu#all', 'A 20 2 <kaikei', 'B 35 1 <kaikei', '未割当 49 1 <koho *', 'A 57 1 <shogai', 'B 65 1 <shogai', '未割当 77 1 <#all *']);
   });
 
-  it('keeps a project’s children together and pushes a project down only as far as needed', () => {
-    const together = [task('a', ['kaikei'], 'p'), task('b', ['kaikei']), task('c', ['kaikei'], 'p')];
-    expect(middle(bowtieLayout(together, byId([...together, task('p', ['kaikei'])]), DEPARTMENTS, ALL, SIZES))).toEqual(['a 0 kaikei >p', 'c 10 kaikei >p', 'b 20 kaikei']);
+  it('sets each section level with its assignees and each part with its sections, a part’s own tasks under 部全体', () => {
+    // 役員会 and システム課 have nothing and are left out; a part counts its sections' tasks, each once.
+    expect(nodes(layout.sections)).toEqual(['部全体 1 1 <soumu *', '会計課 27.5 3 <soumu', '広報課 49 1 <gaimu', '渉外課 61 2 <gaimu', 'なし 77 1 <(none) *']);
+    expect(nodes(layout.parts)).toEqual(['総務部 14.25 4', '外務部 55 3', '部局なし 77 1 *']);
+  });
+
+  it('shows a section’s part dimmed when only the section is shown', () => {
+    const l = bowtieLayout(rows, byId([...rows, q]), DEPARTMENTS, new Set(['koho']), SIZES);
+    expect(l.parts.map((n) => `${n.label}${n.context ? ' ~' : ''}`)).toEqual(['外務部 ~', '部局なし']);
+  });
+
+  it('keeps a project’s children under one assignee together and pushes a project down only as far as needed', () => {
+    const together = [task('a', ['kaikei'], 'x', 'p'), task('b', ['kaikei'], 'x'), task('c', ['kaikei'], 'x', 'p')];
+    expect(middle(bowtieLayout(together, byId([...together, task('p', ['kaikei'], 'x')]), DEPARTMENTS, ALL, SIZES))).toEqual(['a 0 kaikei|x >p', 'c 10 kaikei|x >p', 'b 20 kaikei|x']);
     // Two projects one row apart: the first cannot go above the top, the second clears it.
-    const close = [task('a', ['kaikei'], 'p'), task('b', ['kaikei'], 'r')];
-    expect(right(bowtieLayout(close, byId([...close, task('p', ['kaikei']), task('r', ['kaikei'])]), DEPARTMENTS, ALL, SIZES))).toEqual(['~p 0', '~r 12']);
+    const close = [task('a', ['kaikei'], 'x', 'p'), task('b', ['kaikei'], 'x', 'r')];
+    expect(right(bowtieLayout(close, byId([...close, task('p', ['kaikei'], 'x'), task('r', ['kaikei'], 'x')]), DEPARTMENTS, ALL, SIZES))).toEqual(['~p 0', '~r 12']);
   });
 
-  it('places a child where its project is when only the project’s department is shown, and keeps a project without shown children in the middle', () => {
-    const some = [task('p', ['shogai']), task('c', ['kaikei'], 'p'), task('p2', ['koho'])];
-    const l = bowtieLayout(some, byId([...some, task('c2', ['koho'], 'p2')]), DEPARTMENTS, new Set(['gaimu', 'koho', 'shogai']), SIZES);
-    expect(middle(l)).toEqual(['p2 0 koho', 'c 14 shogai >p']);
-    expect(right(l)).toEqual(['p 13']);
-    expect(left(l).map((d) => d.split(' ')[0])).toEqual(['gaimu', 'koho', 'shogai']);
-  });
-
-  it('brings forward a part with its sections’ tasks and their projects, or a task with its departments and project', () => {
+  it('brings forward everything under a node with the path up to it, or a task with its assignees, sections, parts and project', () => {
     const forward = (f: Parameters<typeof relatedTo>[1]) => {
       const r = relatedTo(layout, f);
       return r && { nodes: [...r.nodes].sort(), links: [...r.links].sort() };
     };
-    expect(forward({ department: 'gaimu' })).toEqual({
-      nodes: ['d:gaimu', 'd:koho', 'd:shogai', 'p:p', 'p:q', 't:c1', 't:c2', 't:t1'],
-      links: ['c1>p', 'c2>q', 'koho>c2', 'shogai>c1', 'shogai>t1'],
+    expect(forward({ node: 'gaimu' })).toEqual({
+      nodes: ['n:gaimu', 'n:koho', 'n:koho|', 'n:shogai', 'n:shogai|a', 'n:shogai|b', 'p:p', 'p:q', 't:c1', 't:c2', 't:t1'],
+      links: ['c1>p', 'c2>q', 'gaimu>koho', 'gaimu>shogai', 'koho>koho|', 'koho|>c2', 'shogai>shogai|a', 'shogai>shogai|b', 'shogai|a>t1', 'shogai|b>c1'],
     });
-    // A section brings forward only its own lines (t1's line from 渉外課 stays back).
-    expect(forward({ department: 'kaikei' })).toEqual({ nodes: ['d:kaikei', 't:t1', 't:t3'], links: ['kaikei>t1', 'kaikei>t3'] });
-    expect(forward({ task: 't1' })).toEqual({ nodes: ['d:kaikei', 'd:shogai', 't:t1'], links: ['kaikei>t1', 'shogai>t1'] });
-    expect(forward({ task: 'p' })).toEqual({ nodes: ['d:shogai', 'p:p', 't:c1'], links: ['c1>p', 'shogai>c1'] });
+    // An assignee brings forward only their own lines (t1's line from 渉外課's A stays back).
+    expect(forward({ node: 'kaikei|a' })).toEqual({
+      nodes: ['n:kaikei', 'n:kaikei|a', 'n:soumu', 't:t1', 't:t5'],
+      links: ['kaikei>kaikei|a', 'kaikei|a>t1', 'kaikei|a>t5', 'soumu>kaikei'],
+    });
+    expect(forward({ task: 't1' })).toEqual({
+      nodes: ['n:gaimu', 'n:kaikei', 'n:kaikei|a', 'n:shogai', 'n:shogai|a', 'n:soumu', 't:t1'],
+      links: ['gaimu>shogai', 'kaikei>kaikei|a', 'kaikei|a>t1', 'shogai>shogai|a', 'shogai|a>t1', 'soumu>kaikei'],
+    });
+    expect(forward({ task: 'p' })).toEqual({ nodes: ['n:gaimu', 'n:shogai', 'n:shogai|b', 'p:p', 't:c1'], links: ['c1>p', 'gaimu>shogai', 'shogai>shogai|b', 'shogai|b>c1'] });
     // Not drawn: nothing to bring forward.
-    expect(forward({ department: 'system' })).toBeNull();
+    expect(forward({ node: 'system' })).toBeNull();
     expect(forward({ task: 'gone' })).toBeNull();
   });
 
   it('draws nothing for no rows', () => {
-    expect(bowtieLayout([], new Map(), DEPARTMENTS, ALL, SIZES)).toEqual({ departments: [], tasks: [], parents: [], height: 0 });
+    expect(bowtieLayout([], new Map(), DEPARTMENTS, ALL, SIZES)).toEqual({ parts: [], sections: [], people: [], tasks: [], parents: [], height: 0 });
   });
 });
