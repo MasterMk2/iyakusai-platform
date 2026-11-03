@@ -145,7 +145,7 @@ class ButtonTests(unittest.TestCase):
         args, kwargs = fake._run.await_args
         self.assertIs(args[0], itx)
         self.assertTrue(kwargs["edit"])
-        self.assertEqual(kwargs["name"], "weekly-assign")
+        self.assertEqual(kwargs["name"], "weekly_assign")
 
     def test_button_reports_when_the_task_feature_is_stopped(self):
         cogs = {"WeeklyCog": object()}                     # 一覧は動いているが、タスク DB が無い
@@ -185,6 +185,7 @@ def _member(uid, guild_id=GUILD):
     member.id = uid
     member.bot = False
     member.guild = SimpleNamespace(id=guild_id)
+    member.roles = []    # 本物の Member と同じく一覧を持つ（操作の種類の権限は役割の名前を読む）
     return member
 
 

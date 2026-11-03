@@ -43,6 +43,7 @@ from discord.ext import commands
 
 from . import haiku_logic as hl
 from .notify import routed_channel_id
+from . import access_check
 from .remind_logic import now_jst
 from .storage import read_json, write_json
 
@@ -348,6 +349,7 @@ class Haiku(commands.Cog):
     # ---------- スラッシュコマンド ----------
 
     @haiku.command(name="check", description="この文が5-7-5になっているか判定する(自分にだけ見える)")
+    @access_check.require("haiku.check")
     @app_commands.describe(文="判定したい文")
     async def check(self, itx: discord.Interaction, 文: str):
         if not self.analyzer.available:
@@ -374,6 +376,7 @@ class Haiku(commands.Cog):
         return visible_items(items, itx.guild, itx.user)
 
     @haiku.command(name="list", description="最近検出された句を表示する")
+    @access_check.require("haiku.list")
     @app_commands.describe(件数="表示する件数(既定10)")
     async def list_(self, itx: discord.Interaction, 件数: int = 10):
         await itx.response.defer(ephemeral=True)
@@ -387,6 +390,7 @@ class Haiku(commands.Cog):
         await itx.followup.send("\n".join(lines), ephemeral=True, allowed_mentions=NO_MENTIONS)
 
     @haiku.command(name="ranking", description="詠み人ランキング(検出数)")
+    @access_check.require("haiku.ranking")
     async def ranking(self, itx: discord.Interaction):
         await itx.response.defer(ephemeral=True)
         items = await self._visible(itx)
@@ -403,6 +407,7 @@ class Haiku(commands.Cog):
             ephemeral=True, allowed_mentions=NO_MENTIONS)
 
     @haiku.command(name="scan", description="過去ログから俳句を発掘する(役員・システム課)")
+    @access_check.require("haiku.scan")
     @app_commands.describe(件数="表示する件数(既定10)", 点数="この点以上のみ(既定は転記と同じ)")
     async def scan(self, itx: discord.Interaction, 件数: int = 10, 点数: int | None = None):
         if not (isinstance(itx.user, discord.Member) and itx.user.guild_permissions.manage_guild):
@@ -431,16 +436,20 @@ class Haiku(commands.Cog):
                                 ephemeral=True, allowed_mentions=NO_MENTIONS)
 
     @haiku.command(name="optout", description="自分の発言を俳句検出の対象外にする")
+    @access_check.require("haiku.optout")
     async def optout(self, itx: discord.Interaction):
-        await itx.response.defer(ephemeral=True)
-        removed = await asyncio.to_thread(self.store.set_optout, itx.user.id, True)
-        await itx.followup.send(
-            f"🚫 今後あなたの発言は検出しません(既存の {removed} 句も削除しました)。\n"
-            "-# 戻すときは `/haiku optin`", ephemeral=True, allowed_mentions=NO_MENTIONS)
+        with access_check.audited("haiku.optout", itx):
+            await itx.response.defer(ephemeral=True)
+            removed = await asyncio.to_thread(self.store.set_optout, itx.user.id, True)
+            await itx.followup.send(
+                f"🚫 今後あなたの発言は検出しません(既存の {removed} 句も削除しました)。\n"
+                "-# 戻すときは `/haiku optin`", ephemeral=True, allowed_mentions=NO_MENTIONS)
 
     @haiku.command(name="optin", description="俳句検出の対象に戻す")
+    @access_check.require("haiku.optin")
     async def optin(self, itx: discord.Interaction):
-        await itx.response.defer(ephemeral=True)
-        await asyncio.to_thread(self.store.set_optout, itx.user.id, False)
-        await itx.followup.send("✅ 検出の対象に戻しました。", ephemeral=True,
-                                allowed_mentions=NO_MENTIONS)
+        with access_check.audited("haiku.optin", itx):
+            await itx.response.defer(ephemeral=True)
+            await asyncio.to_thread(self.store.set_optout, itx.user.id, False)
+            await itx.followup.send("✅ 検出の対象に戻しました。", ephemeral=True,
+                                    allowed_mentions=NO_MENTIONS)

@@ -20,6 +20,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from . import access_check
 from .task_domain import (
     DEPARTMENTS, FIELD_LABELS, REQUIREMENT_FIELDS, REQUIREMENT_LABELS, STATUS_LABELS, Actor, HistoryEntry,
     Scope, TaskError, TaskView, department_from_name, format_date_only, format_tags, format_timestamp,
@@ -278,13 +279,18 @@ class TaskCog(commands.Cog):
             raise
 
     async def _run(self, itx: discord.Interaction, *, edit: bool, work, name: str):
-        """権限確認 → ephemeral defer → 処理 → ephemeral 返信。例外は外に出さない。"""
+        """権限確認 → 操作の種類の権限 → ephemeral defer → 処理 → ephemeral 返信。例外は外に出さない。"""
         try:
             access = self.authorize(itx, edit=edit)
             if self.store is None:
                 raise TaskError("UNAVAILABLE", "タスク機能は現在停止中です（保存先を開けません）。管理者に連絡してください。")
+            # 操作の種類の権限（access.py）。表で絞っていなければ今と同じ。拒否は本人にだけ返す。
+            access_check.enforce_for(f"todo.{name}", itx)
         except TaskError as error:
             await self._send(itx, error_text(error))
+            return
+        except access_check.AccessDenied as error:
+            await self._send(itx, f"⚠ {error}")
             return
         except Exception as error:  # noqa: BLE001
             log.warning("/todo %s の権限確認に失敗: %s", name, type(error).__name__)
@@ -296,13 +302,18 @@ class TaskCog(commands.Cog):
             log.warning("/todo %s の defer に失敗: %s", name, type(error).__name__)
             return
         file = None
+        result, code = "ok", None
         try:
             content, file = await work(access)
         except TaskError as error:
-            content = error_text(error)
+            content, result, code = error_text(error), "failed", error.code
         except Exception as error:  # noqa: BLE001
             log.warning("/todo %s の処理に失敗: %s", name, type(error).__name__)
             content = "⚠ タスクの処理中に想定外のエラーが発生しました。変更は反映されていない可能性があります。"
+            result, code = "failed", "INTERNAL"
+        if edit:
+            # 変更の完了・失敗を監査に残す（code は大文字の記号だけ。本文やタスクの文面は書かない）
+            access_check.outcome_for(f"todo.{name}", itx, result=result, code=code)
         await self._send(itx, content, file)
 
     # ---- コマンド ----

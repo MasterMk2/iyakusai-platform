@@ -30,6 +30,7 @@ import discord
 from discord.ext import commands, tasks
 
 from .notify import routed_channel_id
+from . import access_check
 from .screening_store import CandidateRow, ScreeningStore
 from .task_domain import JST, REQUIREMENT_LABELS, Actor, Scope, TaskError, format_date_only, format_tags
 from .task_store import Budget, TaskSettings, TaskStore
@@ -166,6 +167,26 @@ def auto_view(cid: int) -> discord.ui.View:
 def _can_return(c: CandidateRow) -> bool:
     """差し戻せるのは承認待ちと、自動起票したもの(人が承認して起票したものは /todo で直す)。"""
     return c.state == "posted" or (c.state == "created" and c.decision == "auto")
+
+
+# 候補のボタン → 操作の種類の名前（access.COMMAND_KINDS）
+_SCREENING_KEYS = {"ok": "screening.ok", "ng": "screening.ng", "rt": "screening.return", "undo": "screening.undo"}
+
+
+def _enforce(itx: discord.Interaction, command: str, *, record_accepted: bool = True) -> None:
+    """候補の操作の種類の権限（access_check）。拒否は本人にだけ返す TaskError にする。
+
+    差し戻しは入力の画面を開く押下（handle）と、送信（submit_return）の 2 回通るので、
+    受付の行は送信のほうだけに残す（押下だけで終わった分を受付として数えないため）。
+    """
+    try:
+        access_check.enforce_for(command, itx, record_accepted=record_accepted)
+    except access_check.AccessDenied as error:
+        raise TaskError("FORBIDDEN", str(error)) from error
+
+
+def _outcome(itx: discord.Interaction, command: str, result: str, code: str | None = None) -> None:
+    access_check.outcome_for(command, itx, result=result, code=code)
 
 
 def _view(*actions_cid: tuple[str, int]) -> discord.ui.View:
@@ -361,8 +382,11 @@ class TaskScreening(commands.Cog):
         return access, c
 
     async def handle(self, itx: discord.Interaction, action: str, cid: int):
+        command = _SCREENING_KEYS.get(action, _SCREENING_KEYS["undo"])
         try:
             access, c = await self._authorize(itx, cid)
+            # 差し戻しは押下では受付を残さない（送信の submit_return で残す）
+            _enforce(itx, command, record_accepted=action != "rt")
         except TaskError as error:
             await self._reply(itx, f"⚠ {error.message}")
             return
@@ -380,6 +404,7 @@ class TaskScreening(commands.Cog):
             await itx.response.defer(ephemeral=True, thinking=True)
         except discord.HTTPException:
             return
+        result, code = "ok", None
         try:
             if action == "ok":
                 text = await self._approve(itx, access, c)
@@ -388,10 +413,12 @@ class TaskScreening(commands.Cog):
             else:
                 text = await self._undo(itx, access, c)
         except TaskError as error:
-            text = f"⚠ {error.message}"
+            text, result, code = f"⚠ {error.message}", "failed", error.code
         except Exception as error:  # noqa: BLE001
             log.warning("候補 %d の操作(%s)に失敗: %s", cid, action, type(error).__name__)
             text = "⚠ 処理中に想定外のエラーが発生しました。変更は反映されていない可能性があります。"
+            result, code = "failed", "INTERNAL"
+        _outcome(itx, command, result, code)
         await self._reply(itx, text)
 
     async def submit_return(self, itx: discord.Interaction, cid: int, comment: str,
@@ -399,10 +426,14 @@ class TaskScreening(commands.Cog):
         comment = _clip(comment.replace("\r", ""), COMMENT_MAX)
         try:
             access, c = await self._authorize(itx, cid)
-            if not comment:
-                raise TaskError("VALIDATION", "コメントを入力してください。")
+            _enforce(itx, _SCREENING_KEYS["rt"])
         except TaskError as error:
             await self._reply(itx, f"⚠ {error.message}")
+            return
+        if not comment:
+            # 受付は残っているので、入力が空だった分は失敗として残す
+            _outcome(itx, _SCREENING_KEYS["rt"], "failed", "VALIDATION")
+            await self._reply(itx, "⚠ コメントを入力してください。")
             return
         user = access.actor.user_id
         auto = c.state == "created" and c.decision == "auto"
@@ -418,15 +449,18 @@ class TaskScreening(commands.Cog):
                 ok = await self._store(self.store.transition, cid, "posted", "returned", decided_by=user,
                                        comment=comment, log=("return", user, comment, None, ""))
         except TaskError as error:
+            _outcome(itx, _SCREENING_KEYS["rt"], "failed", error.code)
             await self._reply(itx, f"⚠ {error.message}")
             return
         except Exception as error:  # noqa: BLE001
             log.warning("候補 %d の差し戻しに失敗: %s", cid, type(error).__name__)
+            _outcome(itx, _SCREENING_KEYS["rt"], "failed", "INTERNAL")
             await self._reply(itx, "⚠ 差し戻しを記録できませんでした。少し待ってからもう一度押してください。")
             return
         if not ok:
             await self._reply(itx, self._already(await self._store(self.store.get, cid)))
             return
+        _outcome(itx, _SCREENING_KEYS["rt"], "ok")
         closed = f"#{c.task_number} は閉じ（完了扱い）、" if auto else ""
         await self._edit(message or itx.message,
                          f"↩ <@{user}> が差し戻し: {_esc(_clip(comment, 600))}\n"

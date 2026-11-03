@@ -250,10 +250,11 @@ class CogTests(Case):
         aspect = discord.app_commands.Choice(name="縦長", value="9:16")
         asyncio.run(cog.image.callback(cog, itx, "模擬店の値段表", aspect))
         self.assertEqual(len(channel.sent), 1)
-        self.assertEqual([f.filename for f in channel.sent[0].attachments], ["image.png", "image.svg"])
+        # Bot が作る画像は先頭に【AI】を付ける（write_guard。2026-11-03）
+        self.assertEqual([f.filename for f in channel.sent[0].attachments], ["【AI】image.png", "【AI】image.svg"])
         self.assertIn("🎨 **模擬店の値段表**(縦長(9:16)・Claude が描いた図)", channel.sent[0].content)
         self.assertIn("写真風・写実的な絵は作れません", channel.sent[0].content)
-        self.assertEqual([f.name for f in itx.files], ["image.png", "image.svg"])
+        self.assertEqual([f.name for f in itx.files], ["【AI】image.png", "【AI】image.svg"])
         self.assertEqual(cog.usage_log.records, [("/image", "テスト委員", "opus")])
         self.assertEqual(maker.rendered[0][1:], (900, 1600))
 

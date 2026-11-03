@@ -119,7 +119,7 @@ async def assign_from_button(itx: discord.Interaction, number: int) -> None:
         assigned.append(True)          # ここまで返れば、今回の引き受けか、押した人がすでに主担当
         return result
 
-    await task_cog._run(itx, edit=True, work=work, name="weekly-assign")
+    await task_cog._run(itx, edit=True, work=work, name="weekly_assign")
     if assigned:
         await _retire_button(itx, number, itx.user.id)
 

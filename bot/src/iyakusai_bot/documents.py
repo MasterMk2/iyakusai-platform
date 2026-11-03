@@ -18,6 +18,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from . import docgen, mail_draft
+from . import access_check
 from .ai_provider import AIError, elapsed_note
 from .knowledge import _chunks, safe_send
 from .knowledge_search import KnowledgeBase, render_context
@@ -83,6 +84,7 @@ class Documents(commands.Cog):
         self.usd_jpy = usd_jpy
 
     @app_commands.command(name="doc", description="文書のたたき台をAIが起草してファイルで返す")
+    @access_check.require("doc")
     @app_commands.describe(
         種類="文書の種類",
         内容="何の文書か・盛り込む内容(例: サンプルレンタル宛に発電機3台の見積依頼)",
@@ -100,10 +102,15 @@ class Documents(commands.Cog):
         資料参照: bool = True,
         モデル: app_commands.Choice[str] | None = None,
     ):
-        await self._draft_and_send(itx, "/doc", 種類.name, 種類.value, 内容, 形式.value if 形式 else "docx",
-                                   資料参照, モデル.value if モデル else None)
+        with access_check.audited("doc", itx) as out:
+            failure = await self._draft_and_send(itx, "/doc", 種類.name, 種類.value, 内容,
+                                                 形式.value if 形式 else "docx", 資料参照,
+                                                 モデル.value if モデル else None)
+            if failure:
+                out.fail(failure)
 
     @app_commands.command(name="mail", description="相手と要件から、メールの草案(件名+本文)をAIが作る")
+    @access_check.require("mail")
     @app_commands.describe(
         相手="宛先(例: サンプルレンタル ご担当者様、学務課 ご担当者様)",
         要件="伝えたいこと・お願いしたいこと(例: 会計書類を11/6までに提出する旨と、提出先の確認)",
@@ -127,20 +134,23 @@ class Documents(commands.Cog):
     ):
         request = mail_draft.compose_request(相手, 要件, sender=差出人,
                                              relation=やりとり.value if やりとり else None, received=届いたメール)
-        await self._draft_and_send(itx, "/mail", "メール", mail_draft.MAIL_KIND_VALUE, request, "txt",
-                                   資料参照, モデル.value if モデル else None, inline=True)
+        with access_check.audited("mail", itx) as out:
+            failure = await self._draft_and_send(itx, "/mail", "メール", mail_draft.MAIL_KIND_VALUE, request, "txt",
+                                                 資料参照, モデル.value if モデル else None, inline=True)
+            if failure:
+                out.fail(failure)
 
     async def _draft_and_send(self, itx: discord.Interaction, command: str, kind_name: str, kind_value: str,
                               内容: str, fmt: str, 資料参照: bool, model_override: str | None,
-                              *, inline: bool = False):
+                              *, inline: bool = False) -> str | None:
         """/doc と /mail の本体。種類がメール文面なら mail_draft の指示で起草し、件名の行をそろえる。
-        inline=True(/mail)は草案を本文としても投稿する。"""
+        inline=True(/mail)は草案を本文としても投稿する。失敗のときは監査用の code を返す（成功は None）。"""
         if self.provider is None:
             await itx.response.send_message(
                 f"⚠️ AIプロバイダが無効のため {command} は使えません(config の [ai] を確認)。",
                 ephemeral=True,
             )
-            return
+            return "UNAVAILABLE"
         await itx.response.defer(thinking=True)
         t0 = time.time()   # 経過表示は「受付→応答」の体感時間(検索・変換込み)
         is_mail = mail_draft.is_mail_kind(kind_value)
@@ -183,7 +193,7 @@ class Documents(commands.Cog):
         except AIError as e:
             log.warning("%s AI失敗: %s", command, e)
             await safe_send(itx, f"⚠️ 起草に失敗しました({e})。時間をおいて再試行してください。")
-            return
+            return "AI_ERROR"
         body_md = mail_draft.normalize(res.text) if is_mail else res.text
         # 記帳は共有ドライブへの同期書き込み。ここで OSError が出ると、起草に成功した
         # 文書が丸ごと捨てられて完全沈黙になる(/ask で実証された同型の穴)。

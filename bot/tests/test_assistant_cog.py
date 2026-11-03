@@ -25,6 +25,8 @@ sys.path.insert(0, str(SRC))
 
 import discord  # noqa: E402
 
+from iyakusai_bot import access as ACCESS  # noqa: E402
+from iyakusai_bot import access_check as ACHK  # noqa: E402
 from iyakusai_bot import assistant_cog as AC  # noqa: E402
 from iyakusai_bot import assistant_logic as L  # noqa: E402
 from iyakusai_bot import images as IM  # noqa: E402
@@ -32,6 +34,7 @@ from iyakusai_bot import mail_draft  # noqa: E402
 from iyakusai_bot import screening_cog as SC  # noqa: E402
 from iyakusai_bot.ai_provider import AIError, AIResult  # noqa: E402
 from iyakusai_bot.assistant_store import AssistantStore  # noqa: E402
+from iyakusai_bot.audit import AuditLog  # noqa: E402
 from iyakusai_bot.config import AssistantSettings, ImageSettings  # noqa: E402
 from iyakusai_bot.documents import Documents  # noqa: E402
 from iyakusai_bot.knowledge import Knowledge  # noqa: E402
@@ -673,13 +676,15 @@ class ImageEnabledTests(AssistantCase):
         self.run_all(cog)
         done = self.store.get(job.id)
         self.assertEqual(done.state, "done", done.error_message)
-        self.assertEqual([f["name"] for f in done.result["files"]], ["image.png"])
-        self.assertIsNotNone(self.store.get_file(job.id, "image.png"))
+        # 生成物は先頭に【AI】を付けて保存する（write_guard。2026-11-03）
+        self.assertEqual([f["name"] for f in done.result["files"]], ["【AI】image.png"])
+        self.assertIsNotNone(self.store.get_file(job.id, "【AI】image.png"))
         self.assertIsNone(self.store.get_file(job.id, "image.svg"))   # SVG はアプリでは配らない型
         header, post = self.share.sent
         self.assertEqual(header.content, "📱 アプリから テスト委員 さんの画像")
         self.assertEqual(done.discord_url, header.jump_url)
-        self.assertEqual([f.filename for f in post.attachments], ["image.png", "image.svg"])
+        # Bot が作る画像は先頭に【AI】を付ける（write_guard。2026-11-03）
+        self.assertEqual([f.filename for f in post.attachments], ["【AI】image.png", "【AI】image.svg"])
         self.assertIn("模擬店の値段表", done.result["text"])
         self.assertTrue(all(m is not None and m.everyone is False for m in self.share.mentions_seen))
 
@@ -772,6 +777,62 @@ class RunnerTests(AssistantCase):
             await cog.poll.coro(cog)   # 1 周期分だけ実行(Bot の定期処理と同じ関数)
         asyncio.run(go())
         self.assertEqual(self.store.get(job.id).error_code, "INTERRUPTED")
+
+
+class WebJobPermissionTests(AssistantCase):
+    """統合アプリの依頼の権限（access の表）と監査の行、生成物の名前（【AI】と重複の番号）。"""
+
+    def setUp(self):
+        super().setUp()
+        self.audit = AuditLog(self.dir / "audit")
+        ACHK.configure(ACCESS.AccessSettings(), self.audit)
+        self.addCleanup(ACHK.configure, ACCESS.AccessSettings(), None)
+
+    def audit_rows(self):
+        path = self.dir / "audit" / "audit.jsonl"
+        if not path.exists():
+            return []
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+    def test_a_job_refused_by_the_table_fails_as_forbidden_and_leaves_only_the_denial_row(self):
+        ACHK.configure(ACCESS.AccessSettings.from_mapping({"roles": {"send": ["広報係"]}}, admin_roles=("役員",)),
+                       self.audit)
+        job = self.job("doc", {"docType": "free", "content": "何か", "format": "md", "useSources": False,
+                               "model": "auto"})
+
+        async def go():
+            cog = self.cog()
+            await cog._run(self.store.claim_next(("doc",)), "ask_doc")
+
+        asyncio.run(go())
+        failed = self.store.get(job.id)
+        self.assertEqual(failed.state, "failed")
+        self.assertEqual(failed.error_code, "FORBIDDEN")
+        self.assertEqual([(r["cmd"], r["result"]) for r in self.audit_rows()], [("assistant.doc", "denied")])
+
+    def test_outcome_rows_follow_the_kind_read_jobs_leave_none(self):
+        cog = self.cog()
+        ask = self.job("ask", {"question": "資料の所在", "format": "none", "model": "auto", "tone": None,
+                               "effort": "low", "useSources": True})
+        doc = self.job("doc", {"docType": "free", "content": "何か", "format": "md", "useSources": False,
+                               "model": "auto"})
+        cog._job_outcome(ask, "ok")
+        cog._job_outcome(doc, "failed", "UNAVAILABLE")
+        cog._job_outcome(doc, "ok")
+        self.assertEqual([(r["cmd"], r["result"], r["code"]) for r in self.audit_rows()],
+                         [("assistant.doc", "failed", "UNAVAILABLE"), ("assistant.doc", "ok", None)])
+
+    def test_same_names_after_the_prefix_do_not_overwrite_each_other(self):
+        # 「報告.md」と「【AI】報告.md」は、接頭辞を付けると同じ名前になる。別々の名前にして両方残す
+        cog = self.cog()
+        job = self.job("doc", {"docType": "free", "content": "何か", "format": "md", "useSources": False,
+                               "model": "auto"})
+        saved = cog._persist(job.id, [("報告.md", "旧".encode("utf-8")), ("【AI】報告.md", "新".encode("utf-8"))])
+        names = [item["name"] for item in saved]
+        self.assertEqual(names, ["【AI】報告.md", "【AI】2-報告.md"])
+        folder = self.dir / "files" / job.id
+        self.assertEqual((folder / "【AI】報告.md").read_bytes(), "旧".encode("utf-8"))
+        self.assertEqual((folder / "【AI】2-報告.md").read_bytes(), "新".encode("utf-8"))
 
 
 if __name__ == "__main__":

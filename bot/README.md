@@ -51,6 +51,13 @@ Discord の側で要るもの：
 - 招待のときに `bot` と `applications.commands` のスコープ。
 - 権限は View Channels・Send Messages・Embed Links など、使う機能に要るものだけ。Administrator は付けない。
 
+## 権限と監査
+
+操作の種類（読む・書く・投稿・配布・起草・管理）ごとに、許すロールを `config.toml` の `[permissions]` で決められます。書かなければ今と同じく全員が使えます。監査ログは既定で `~/.iyakusai/audit` に書きます。
+
+- 使い方・規則・監査ログの形: [docs/permissions.md](docs/permissions.md)
+- 設計（現状の洗い出し・攻撃の筋・選択肢・引き継ぎ・契約）: [docs/permissions-design.md](docs/permissions-design.md)
+
 ## 試験
 
 ```sh

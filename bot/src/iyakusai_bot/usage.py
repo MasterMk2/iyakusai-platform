@@ -13,6 +13,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from . import access_check
 from .usage_log import UsageLog, fmt_tokens
 
 
@@ -22,6 +23,7 @@ class Usage(commands.Cog):
         self.usage_log = usage_log
 
     @app_commands.command(name="usage", description="BotのAI使用量(トークン)を表示する")
+    @access_check.require("usage")
     async def usage(self, itx: discord.Interaction):
         s = await asyncio.to_thread(self.usage_log.summarize)
         e = discord.Embed(

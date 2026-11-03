@@ -52,7 +52,14 @@ check_sec = 60             # 期限チェック間隔(秒)
 # keep_mail_domains = ["adm.example.ac.jp"]
 
 [permissions]
-admin_roles = ["役員", "システム課"]
+admin_roles = ["役員", "システム課"]   # 文字列で書くと起動が止まる（一覧で書く）
+# 操作の種類ごとの表(2026-11-03)。書かない種類は全員が使える（今と同じ）。
+# 種類は read(読む)・write(書く)・send(投稿・配布・起草)・admin(管理)。詳細は docs/permissions.md。
+# audit = true                                  # 監査ログを書く（既定 true）
+# audit_dir = "/home/<user>/.iyakusai/audit"    # 既定 ~/.iyakusai/audit（共有データの外）
+# [permissions.roles]
+# send  = ["広報係", "担当委員"]    # /doc・/mail・/image・/ネタ動画（投稿・配布・起草）
+# admin = []                        # 空の一覧は admin_roles の人だけ（表に無い命令も同じ）
 
 [ai]
 provider = "claude-cli"   # claude-cli(Claude Code CLI・既定。認証は CLI の設定) | none(grep直返しのみ)
