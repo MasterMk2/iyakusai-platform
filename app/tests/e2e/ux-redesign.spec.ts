@@ -29,7 +29,7 @@ test('the tab reads メール on every screen and names the page', async ({ page
   await installWorld(page);
   await page.goto('/#/all');
   const tabs = page.getByRole('navigation', { name: '機能' });
-  await expect(tabs.getByRole('link')).toHaveText(['ホーム', 'タスク', '物品貸出', 'メール', '連絡先', 'Bot', '設定']);
+  await expect(tabs.getByRole('link')).toHaveText(['ホーム', 'タスク', '物品貸出', 'メール', '公式LINE', '連絡先', 'Bot', '設定']);
   await expect(tabs.getByRole('link', { name: 'メール', exact: true })).toHaveAttribute('aria-current', 'page');
   await expect(page).toHaveTitle('メール｜医薬祭 委員会アプリ');
 });

@@ -48,11 +48,11 @@ export function listInbox(mail: AppState, line: LineState | null, user: User, qu
   };
 }
 
-export function inboxLabels(mail: AppState, line: LineState | null, user: User, scope: { mailboxId?: string; lineAccountId?: string }): LabelFacet[] {
+export function inboxLabels(mail: AppState, line: LineState | null, user: User, scope: { mailboxId?: string; lineAccountId?: string; source?: 'all' | 'email' | 'line' }): LabelFacet[] {
   if (scope.lineAccountId !== undefined && !line) throw notFound();
   const counts = new Map<string, number>();
   const add = (facets: LabelFacet[]) => facets.forEach((f) => counts.set(f.label, (counts.get(f.label) ?? 0) + f.count));
-  if (scope.lineAccountId === undefined) add(labelFacets(mail, user, scope.mailboxId));
-  if (line && scope.mailboxId === undefined) add(lineLabelFacets(line, user, scope.lineAccountId));
+  if (scope.lineAccountId === undefined && scope.source !== 'line') add(labelFacets(mail, user, scope.mailboxId));
+  if (line && scope.mailboxId === undefined && scope.source !== 'email') add(lineLabelFacets(line, user, scope.lineAccountId));
   return [...counts.entries()].map(([label, count]) => ({ label, count })).sort((a, b) => a.label.localeCompare(b.label, 'ja'));
 }

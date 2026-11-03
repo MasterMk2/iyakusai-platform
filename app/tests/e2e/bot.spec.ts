@@ -17,7 +17,7 @@ test('the Bot tab sits between 受信箱 and 設定 and opens the question scree
   await start(page);
   await page.goto('/#/home');
   const tabs = page.getByRole('navigation', { name: '機能' });
-  await expect(tabs.getByRole('link')).toHaveText(['ホーム', 'タスク', '物品貸出', 'メール', '連絡先', 'Bot', '設定']);
+  await expect(tabs.getByRole('link')).toHaveText(['ホーム', 'タスク', '物品貸出', 'メール', '公式LINE', '連絡先', 'Bot', '設定']);
   await tabs.getByRole('link', { name: 'Bot', exact: true }).click();
   await expect(page.getByTestId('nav-bot')).toHaveAttribute('aria-current', 'page');
   await expect(page).toHaveURL(/#\/bot\/ask$/);
@@ -276,7 +276,7 @@ test('phone widths: no horizontal scroll on the Bot screens and the module tabs,
     await expect(page.getByTestId('home-bot')).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `home at ${width}px`).toBe(true);
     const tabs = await page.locator('.global-nav a').evaluateAll((els) => els.map((el) => el.getBoundingClientRect().height));
-    expect(tabs).toHaveLength(7);
+    expect(tabs).toHaveLength(8);
     for (const height of tabs) expect(height).toBeGreaterThanOrEqual(44);
   }
 });

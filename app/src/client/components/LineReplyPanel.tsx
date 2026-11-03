@@ -120,7 +120,7 @@ export function LineReplyPanel({ detail, onSent }: { detail: LineConversationDet
     <section className="line-reply" aria-label="LINE で返信">
       <h4>{mock ? 'LINE で返信（手動・模擬送信）' : 'LINE で返信'}</h4>
       <p className="hint">
-        手動の返信だけを扱います（自動返信はしません。複数の相手には公式LINE の画面の「一斉送信」から）。送信前に送信先と本文を確認し、確認した内容だけを 1 回送ります。
+        手動の返信だけを扱います（自動返信はしません。複数の相手には「公式LINE」タブの「公式LINEを送信」から）。送信前に送信先と本文を確認し、確認した内容だけを 1 回送ります。
       </p>
       <textarea aria-label="返信本文" rows={4} value={body} onChange={(e) => edit(e.target.value)} disabled={busy} placeholder="返信本文を入力" />
       <span className={`counter ${length > LINE_LIMITS.replyMaxLength ? 'over' : ''}`}>

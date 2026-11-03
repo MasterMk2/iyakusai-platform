@@ -135,7 +135,7 @@ const inboxQuery = z
   })
   .refine((q) => q.mailboxId === undefined || q.lineAccountId === undefined, { message: '受信箱と LINE アカウントは同時に指定できません' });
 const inboxLabelQuery = z
-  .strictObject({ mailboxId: shortId.optional(), lineAccountId: shortId.optional() })
+  .strictObject({ source: z.enum(['all', 'email', 'line']).default('all'), mailboxId: shortId.optional(), lineAccountId: shortId.optional() })
   .refine((q) => q.mailboxId === undefined || q.lineAccountId === undefined, { message: '受信箱と LINE アカウントは同時に指定できません' });
 
 const noteBody = z.strictObject({ body: z.string().max(LIMITS.noteMaxLength * 2) });

@@ -57,6 +57,18 @@ describe('integrated inbox coexistence', () => {
     expect(labels.json.map((l: { label: string }) => l.label)).not.toContain('契約');
   });
 
+  it('labels can be asked for one kind: the メール and 公式LINE tabs together make up the merged list', async () => {
+    type Facet = { label: string; count: number };
+    const all: Facet[] = (await t.call(EDITOR_C, 'GET', '/api/inbox/labels')).json;
+    const email: Facet[] = (await t.call(EDITOR_C, 'GET', '/api/inbox/labels?source=email')).json;
+    const lineOnly: Facet[] = (await t.call(EDITOR_C, 'GET', '/api/inbox/labels?source=line')).json;
+    expect(email.map((l) => l.label)).toContain('契約');
+    expect(lineOnly.map((l) => l.label)).not.toContain('契約');
+    const sum = new Map<string, number>();
+    for (const f of [...email, ...lineOnly]) sum.set(f.label, (sum.get(f.label) ?? 0) + f.count);
+    expect(Object.fromEntries(sum)).toEqual(Object.fromEntries(all.map((f) => [f.label, f.count])));
+  });
+
   it('never exposes external LINE IDs, retry keys or consent hashes', async () => {
     const p = await prepare(t, EDITOR_C, CONV.l1, BODY);
     await p.send(uuid(1));

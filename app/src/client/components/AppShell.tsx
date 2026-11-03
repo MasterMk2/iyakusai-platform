@@ -7,7 +7,7 @@ import { nextTheme, storeTheme, THEME_LABELS, useTheme } from '../theme';
  * looks and works the same everywhere (../docs/ui-guidelines.md).
  */
 
-export type NavKey = 'home' | 'tasks' | 'rental' | 'inbox' | 'contacts' | 'bot' | 'settings';
+export type NavKey = 'home' | 'tasks' | 'rental' | 'inbox' | 'line' | 'contacts' | 'bot' | 'settings';
 
 export interface NavItem {
   key: NavKey;
@@ -27,6 +27,8 @@ const ICONS: Record<NavKey, ReactNode> = {
   tasks: <path d="M10 6.5h10M10 12h10M10 17.5h10M3.5 6.5l1.5 1.5 2.5-3M3.5 12l1.5 1.5 2.5-3M3.5 17.5 5 19l2.5-3" />,
   rental: <path d="M3.5 7.5 12 3.5l8.5 4v9L12 20.5l-8.5-4zM3.5 7.5 12 11.5l8.5-4M12 11.5v9" />,
   inbox: <path d="M3.5 13.5 6.5 5h11l3 8.5V19a1 1 0 0 1-1 1h-15a1 1 0 0 1-1-1zM3.5 13.5h5l1.5 2.5h4l1.5-2.5h5" />,
+  // A round speech balloon with lines of text, apart from the Bot's square one (2026-11-03).
+  line: <path d="M12 4c-4.7 0-8.5 3-8.5 6.8 0 3.3 2.9 6 6.8 6.6L9.5 20.5l3.9-3.1c4-.5 7.1-3.3 7.1-6.6C20.5 7 16.7 4 12 4zM8 9.5h8M8 12.5h5" />,
   // An address book: a person on a card with tabs at the edge (2026-10-26).
   contacts: <path d="M6 3.5h12a1.5 1.5 0 0 1 1.5 1.5v14a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 19V5A1.5 1.5 0 0 1 6 3.5zM2.5 8h2M2.5 12h2M2.5 16h2M12 11.5a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5zM8 16.5c.7-2 2.2-3 4-3s3.3 1 4 3" />,
   bot: <path d="M4.5 6.5h15a1.5 1.5 0 0 1 1.5 1.5v7.5a1.5 1.5 0 0 1-1.5 1.5h-8.5L7 20.5V17h-2.5A1.5 1.5 0 0 1 3 15.5V8a1.5 1.5 0 0 1 1.5-1.5zM8 12h.01M12 12h.01M16 12h.01" />,

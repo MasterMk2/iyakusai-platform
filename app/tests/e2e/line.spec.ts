@@ -11,18 +11,24 @@ test.beforeEach(async ({ page }) => {
 const lineItem = (page: Page, title: string) =>
   page.locator('button.thread[data-conversation-id]', { has: page.locator('.subject', { hasText: new RegExp(`^${title}$`) }) });
 
+// The official LINE has its own tab (2026-11-03), apart from the mail tab.
+const openLineTab = (page: Page) => page.getByRole('navigation', { name: '機能' }).getByRole('link', { name: '公式LINE' }).click();
+
 async function openLine(page: Page, accountId: string, title: string) {
+  await openLineTab(page);
   await page.locator(`button[data-line-account-id="${accountId}"]`).click();
   await lineItem(page, title).click();
   await expect(page.locator('.thread-title')).toContainText(title);
 }
 
-test('editor sees email and LINE together, previews the exact reply, edits require re-confirmation, and one mock send is recorded', async ({ page }) => {
+test('editor sees email and LINE on their own tabs, previews the exact reply, edits require re-confirmation, and one mock send is recorded', async ({ page }) => {
   await loginAs(page, 'u-editor-c');
-  await expect(page.getByTestId('source-counts')).toHaveText('内訳: メール 6 件 ／ LINE 7 件');
-  await page.getByLabel('種類').selectOption('line');
-  await page.getByRole('button', { name: '検索', exact: true }).click();
-  await expect(page.getByTestId('thread-count')).toHaveText('全 7 件中 1–5 件');
+  // The mail tab lists mail only; the 公式LINE tab lists the LINE conversations only.
+  await expect(page.getByTestId('thread-count')).toHaveText(/^全 9 件中/);
+  await expect(page.getByLabel('種類')).toHaveCount(0);
+  await expect(page.locator('button.thread[data-conversation-id]')).toHaveCount(0);
+  await openLineTab(page);
+  await expect(page.getByTestId('thread-count')).toHaveText(/^全 7 件中/);
   await expect(page.locator('button.thread .source-email')).toHaveCount(0);
 
   await openLine(page, 'line-oa-support', '顧客サンプルL1');
@@ -68,7 +74,9 @@ test('editor sees email and LINE together, previews the exact reply, edits requi
 
 test('read-only viewer cannot reply, legacy history is read-only, and users without LINE access see nothing', async ({ page }) => {
   await loginAs(page, 'u-viewer-b');
-  const sidebar = page.getByRole('navigation', { name: '受信箱' });
+  await expect(page.getByRole('navigation', { name: '受信箱' })).not.toContainText('LINE');
+  await openLineTab(page);
+  const sidebar = page.getByRole('navigation', { name: '公式LINE のアカウント' });
   await expect(sidebar).toContainText('LINE公式 サポート（模擬）');
   await expect(sidebar).not.toContainText('店舗');
 
@@ -90,9 +98,12 @@ test('read-only viewer cannot reply, legacy history is read-only, and users with
   await expect(page.locator('.thread-detail')).toContainText('［暗号化のため内容を取得できませんでした］');
 
   await loginAs(page, 'u-noaccess-d');
+  await openLineTab(page);
   await expect(page.locator('[data-line-account-id]')).toHaveCount(0);
+  await expect(page.getByTestId('line-unavailable')).toBeVisible();
   await page.goto(convUrl);
-  await expect(page.getByTestId('thread-not-found')).toBeVisible();
+  await expect(page.getByTestId('line-unavailable')).toBeVisible();
+  await expect(page.locator('.thread-detail')).toHaveCount(0);
 });
 
 test('administrator manages LINE grants and releases synthetic events without reading contents; unsend hides the text', async ({ page }) => {

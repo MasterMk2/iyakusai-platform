@@ -157,15 +157,15 @@ test('contacts have their own tab on every width, and the rows per page can be c
     await app(page);
     await page.goto('/#/home');
     const tabs = page.getByRole('navigation', { name: '機能' });
-    await expect(tabs.getByRole('link')).toHaveText(['ホーム', 'タスク', '物品貸出', 'メール', '連絡先', 'Bot', '設定']);
+    await expect(tabs.getByRole('link')).toHaveText(['ホーム', 'タスク', '物品貸出', 'メール', '公式LINE', '連絡先', 'Bot', '設定']);
     await tabs.getByRole('link', { name: '連絡先', exact: true }).click();
     await expect(page).toHaveURL(/#\/contacts$/);
     await expect(page).toHaveTitle('連絡先｜医薬祭 委員会アプリ');
     await expect(tabs.getByRole('link', { name: '連絡先', exact: true })).toHaveAttribute('aria-current', 'page');
     await noSideScroll(page);
-    // Every label but 物品 | 貸出 stays on one line, even with seven tabs at 320px.
+    // Every label but 物品 | 貸出 and 公式 | LINE (their set break points) stays on one line, even with eight tabs at 320px.
     const lines = await tabs.locator('a span').evaluateAll((els) => els.map((el) => [el.textContent, Math.round(el.getBoundingClientRect().height / parseFloat(getComputedStyle(el).lineHeight))] as const));
-    for (const [label, count] of lines) if (label !== '物品貸出') expect(count, `${label} at ${width}px`).toBe(1);
+    for (const [label, count] of lines) if (label !== '物品貸出' && label !== '公式LINE') expect(count, `${label} at ${width}px`).toBe(1);
     if (width === 320) await page.screenshot({ path: '.tmp/contacts-tab-320.png' });
     await page.unrouteAll({ behavior: 'ignoreErrors' });
   }
@@ -200,10 +200,10 @@ test('contacts have their own tab on every width, and the rows per page can be c
     .replace('<script src="/rental/app.js" defer></script>', '');
   await rental.setContent(rentalHtml);
   const rentalTabs = rental.getByRole('navigation', { name: '機能' });
-  await expect(rentalTabs.getByRole('link')).toHaveText(['ホーム', 'タスク', '物品貸出', 'メール', '連絡先', 'Bot', '設定']);
+  await expect(rentalTabs.getByRole('link')).toHaveText(['ホーム', 'タスク', '物品貸出', 'メール', '公式LINE', '連絡先', 'Bot', '設定']);
   await expect(rentalTabs.getByRole('link', { name: '連絡先' })).toHaveAttribute('href', '/#/contacts');
   const rentalLines = await rentalTabs.locator('a span').evaluateAll((els) => els.map((el) => [el.textContent, Math.round(el.getBoundingClientRect().height / parseFloat(getComputedStyle(el).lineHeight))] as const));
-  for (const [label, count] of rentalLines) if (label !== '物品貸出') expect(count, `rental ${label}`).toBe(1);
+  for (const [label, count] of rentalLines) if (label !== '物品貸出' && label !== '公式LINE') expect(count, `rental ${label}`).toBe(1);
   await rental.screenshot({ path: '.tmp/contacts-rental-tabs-320.png' });
   await rental.close();
 });
