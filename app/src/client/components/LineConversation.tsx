@@ -20,11 +20,23 @@ const HISTORY_LABEL: Record<LineHistoryView['action'], string> = {
   reply_result: '返信の結果',
 };
 
+/** A received image; if it cannot be read (not kept by the receiver), the placeholder instead. */
+function ReceivedImage({ url, mediaType }: { url: string; mediaType: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return <span className="line-placeholder">［{mediaType}：画像を取得できませんでした］</span>;
+  return (
+    <a className="line-image" href={url} target="_blank" rel="noopener">
+      <img src={url} alt="受け取った画像" loading="lazy" onError={() => setFailed(true)} />
+    </a>
+  );
+}
+
 function Content({ m }: { m: LineMessageView }) {
   switch (m.content.kind) {
     case 'text':
       return <span className="line-text">{m.content.text}</span>;
     case 'unsupported':
+      if (m.imageUrl) return <ReceivedImage key={m.imageUrl} url={m.imageUrl} mediaType={m.content.mediaType} />;
       return <span className="line-placeholder">［{m.content.mediaType}：内容は取り込んでいません］</span>;
     case 'unavailable':
       return <span className="line-placeholder">{m.content.reason === 'e2ee' ? '［暗号化のため内容を取得できませんでした］' : '［本文がありません］'}</span>;

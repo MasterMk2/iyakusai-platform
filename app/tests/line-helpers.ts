@@ -5,6 +5,7 @@ import type { AppState } from '../src/server/domain/types.js';
 import { buildApp, SESSION_COOKIE } from '../src/server/http/app.js';
 import { MockLinePushConnector } from '../src/server/line/connector.js';
 import { BOT, LINE_GROUP, LINE_LEGACY, LINE_ROOM, LINE_SHOP, LINE_SUPPORT, LINE_USER, mockEventId } from '../src/server/line/fixtures.js';
+import type { InboundImageSource } from '../src/server/line/inbound-media.js';
 import { conversationIdFor } from '../src/server/line/ingest.js';
 import { createLineSeedState } from '../src/server/line/seed.js';
 import { LineStore, type FileWriter } from '../src/server/line/store.js';
@@ -45,7 +46,7 @@ export class FlakyDisk {
 
 type Method = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type Res = { status: number; json: any; raw: string };
+export type Res = { status: number; json: any; raw: string; headers: Record<string, unknown> };
 
 export interface LineTestApp {
   app: FastifyInstance;
@@ -66,6 +67,7 @@ export interface LineAppOptions {
   replyGrants?: boolean;
   startAt?: number;
   auth?: TrustedProxyAuth;
+  inboundImages?: InboundImageSource;
 }
 
 export async function makeLineApp(opts: LineAppOptions = {}): Promise<LineTestApp> {
@@ -79,7 +81,7 @@ export async function makeLineApp(opts: LineAppOptions = {}): Promise<LineTestAp
     listenPort: TEST_PORT,
     clock,
     ...(opts.auth ? { auth: opts.auth } : {}),
-    line: { store: line, connector, seed: (at) => createLineSeedState(at, { replyGrants: opts.replyGrants ?? true }) },
+    line: { store: line, connector, seed: (at) => createLineSeedState(at, { replyGrants: opts.replyGrants ?? true }), ...(opts.inboundImages ? { inboundImages: opts.inboundImages } : {}) },
   });
   const call: LineTestApp['call'] = async (userId, method, url, body, headers = {}) => {
     const base = opts.auth
@@ -98,7 +100,7 @@ export async function makeLineApp(opts: LineAppOptions = {}): Promise<LineTestAp
     } catch {
       json = null;
     }
-    return { status: res.statusCode, json, raw: res.body };
+    return { status: res.statusCode, json, raw: res.body, headers: res.headers };
   };
   return { app, mail, line, connector, advance: (ms) => (now += ms), now: clock, call };
 }

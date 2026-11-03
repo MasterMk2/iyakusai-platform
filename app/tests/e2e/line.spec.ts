@@ -34,7 +34,10 @@ test('editor sees email and LINE on their own tabs, previews the exact reply, ed
   await openLine(page, 'line-oa-support', '顧客サンプルL1');
   const detail = page.locator('.thread-detail');
   await expect(page.getByTestId('line-mock-notice')).toContainText('実際の LINE への送信は接続されていません');
-  await expect(detail.locator('.line-placeholder').first()).toContainText('内容は取り込んでいません');
+  // A received image is shown (the demo's synthetic picture), not a placeholder.
+  const received = detail.getByRole('img', { name: '受け取った画像' }).first();
+  await expect(received).toBeVisible();
+  await expect.poll(() => received.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0);
 
   const box = detail.getByRole('textbox', { name: '返信本文' });
   await box.fill('E2E の返信（合成）');

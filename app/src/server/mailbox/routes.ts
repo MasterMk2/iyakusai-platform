@@ -221,7 +221,7 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
       return user && !departmentsOfLabel(user.roleLabel).includes(TEMPORARY_STAFF_DEPARTMENT) ? user : null;
     };
     const handle = registerLineRoutes(app, {
-      line: { store: opened.store, connector: opened.connector, seed: () => opened.store.current },
+      line: { store: opened.store, connector: opened.connector, seed: () => opened.store.current, inboundImages: opened.inboundImages },
       mail: {
         get current() {
           return { users: deps.people.list() };

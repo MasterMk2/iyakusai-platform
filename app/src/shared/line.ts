@@ -72,6 +72,8 @@ export interface LineMessageView {
   provenance: 'legacy_export' | 'event_feed' | 'oa_history';
   /** oa_history only: the committee member who sent it (outgoing rows) and whether it was an automatic answer. */
   history?: { staff: string | null; autoReply: boolean };
+  /** A received image the app can show (2026-11-04): signed-in route, read access checked. */
+  imageUrl?: string;
 }
 
 export type LineHistoryAction =
