@@ -237,6 +237,14 @@ def format_tags(tags) -> str:
     return "・".join(DEPARTMENTS[t][0] for t in tags if t in DEPARTMENTS) or "（部局なし）"
 
 
+_MD_SPECIAL = re.compile(r"([\\*_~`|>\[\]])")
+
+
+def md_inline(text: str) -> str:
+    """Discord の 1 行の表示に入れる文字の無害化。空白を詰め、記号の効果を消す(リンク・強調・引用が効かないように)。"""
+    return _MD_SPECIAL.sub(r"\\\1", " ".join(str(text).split()))
+
+
 def clean_operation_id(value: object) -> str:
     if not isinstance(value, str) or not _OPERATION_ID.fullmatch(value):
         raise _invalid("操作 ID の形式が正しくありません")

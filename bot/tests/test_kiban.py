@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import http.client
 import http.server
 import json
 import os
@@ -19,6 +20,7 @@ import threading
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -339,6 +341,52 @@ class FetchTests(unittest.TestCase):
                     {"version": 1, "generatedAt": "x", "mailbox": {"mailboxes": []}}):
             with self.subTest(bad=bad), self.assertRaises(K.KibanFetchError):
                 K.check_snapshot(bad)
+
+
+class _BrokenResponse:
+    """読み取りの途中で壊れる応答(合成)。"""
+
+    status = 200
+
+    def __init__(self, error):
+        self.error = error
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self, size=-1):
+        raise self.error
+
+
+class _BrokenOpener:
+    def __init__(self, *, open_error=None, read_error=None):
+        self.open_error = open_error
+        self.read_error = read_error
+
+    def open(self, req, timeout=None):
+        if self.open_error is not None:
+            raise self.open_error
+        return _BrokenResponse(self.read_error)
+
+
+class TransportErrorTests(unittest.TestCase):
+    """HTTP の形が壊れた・応答が途中で切れた場合も、KibanFetchError で返す(呼び出し側が節を省けるように)。"""
+
+    def _fetch(self, opener):
+        settings = K.KibanSettings(enabled=True, app_url="https://app.example.test", sources=("decisions",))
+        with mock.patch.object(K.urllib.request, "build_opener", return_value=opener):
+            return K.fetch_app(settings, b"k" * 32)
+
+    def test_a_malformed_status_line_is_a_fetch_error(self):
+        with self.assertRaises(K.KibanFetchError):
+            self._fetch(_BrokenOpener(open_error=http.client.BadStatusLine("HTTP/9")))
+
+    def test_a_response_cut_off_while_reading_is_a_fetch_error(self):
+        with self.assertRaises(K.KibanFetchError):
+            self._fetch(_BrokenOpener(read_error=http.client.IncompleteRead(b"part", 10)))
 
 
 if __name__ == "__main__":

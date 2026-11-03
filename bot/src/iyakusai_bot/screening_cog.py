@@ -29,6 +29,7 @@ from pathlib import Path
 import discord
 from discord.ext import commands, tasks
 
+from .notify import routed_channel_id
 from .screening_store import CandidateRow, ScreeningStore
 from .task_domain import JST, REQUIREMENT_LABELS, Actor, Scope, TaskError, format_date_only, format_tags
 from .task_store import Budget, TaskSettings, TaskStore
@@ -209,8 +210,12 @@ class TaskScreening(commands.Cog):
         return await asyncio.wait_for(asyncio.to_thread(fn, *args, budget=budget, **kwargs),
                                       timeout=STORE_TIMEOUT_SEC * 2)
 
+    def _post_channel_id(self, c: CandidateRow) -> int:
+        """候補の投稿先。[notify] の task_candidates が設定されていればそこ(無ければ部局の経路の先)。2026-11-03"""
+        return routed_channel_id(self.bot, "task_candidates", c.channel_id) or c.channel_id
+
     def _channel(self, c: CandidateRow) -> discord.TextChannel | None:
-        channel = self.bot.get_channel(c.channel_id)
+        channel = self.bot.get_channel(self._post_channel_id(c))
         if not isinstance(channel, discord.TextChannel) or not self.settings.allows(channel.guild.id, channel.id):
             return None
         me = channel.guild.me
@@ -350,7 +355,8 @@ class TaskScreening(commands.Cog):
             raise TaskError("UNAVAILABLE", "タスク機能が停止中のため操作できません。")
         access = task_cog.authorize(itx, edit=True)
         c = await self._store(self.store.get, cid)
-        if c is None or c.channel_id != access.channel.id:
+        # 投稿された場所(経路の先、または [notify] の上書き先)でだけ操作できる
+        if c is None or access.channel.id not in (c.channel_id, self._post_channel_id(c)):
             raise TaskError("NOT_FOUND", "この候補は見つかりません。")
         return access, c
 

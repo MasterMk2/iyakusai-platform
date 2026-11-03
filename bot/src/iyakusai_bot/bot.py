@@ -117,6 +117,9 @@ class IyakusaiBot(commands.Bot):
                 log.error("タスク保存先を開けないため /todo を停止状態で登録: %s", e)
                 task_store = None
             await self.add_cog(TaskCog(self, task_settings, task_store))
+            # 週1回の一覧の「引き受ける」ボタン。[weekly] を止めた後や DB を開けないときに押されても、停止中と返すため登録しておく(2026-11-03)
+            from .weekly_cog import AssignButton
+            self.add_dynamic_items(AssignButton)
             # 定期タスクスクリーニングの候補を投稿・起票する。
             # 候補台帳を開けなくても /todo 本体は動かし続ける。
             screening = self.cfg.task_screening
@@ -129,6 +132,14 @@ class IyakusaiBot(commands.Bot):
                 else:
                     await self.add_cog(cog)
                     log.info("定期タスクスクリーニングの投稿を有効化")
+            # 週1回のタスク一覧と、担当なしタスクの追い投稿([weekly] が無ければ何もしない・2026-11-03)
+            if self.cfg.weekly.enabled and task_store is not None:
+                from .weekly_cog import WeeklyCog
+                await self.add_cog(WeeklyCog(self, self.cfg.weekly, task_settings, task_store, self.cfg.data_dir))
+            elif self.cfg.weekly.enabled:
+                log.error("タスク DB を開けないため週1回のタスク一覧を停止")
+        if self.cfg.weekly.enabled and not task_settings.enabled:
+            log.error("[weekly] は [tasks] が有効なときだけ動きます(週1回のタスク一覧は停止)")
         await self._setup_kiban(task_settings, task_store)
         # 統合アプリの「Bot」タブ(2026-10-14)。[assistant] enabled のときだけ読み込む。
         # ジョブ表を開けなくても Bot 本体は動かし続ける(/todo と同じ扱い)。

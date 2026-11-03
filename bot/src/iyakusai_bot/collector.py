@@ -27,6 +27,8 @@ from pathlib import Path
 
 from discord.ext import commands, tasks
 
+from .notify import routed_channel_id
+
 log = logging.getLogger("iyakusai.collect")
 
 _DONE_RE = re.compile(r"完了: 新規\s*(\d+)\s*件")
@@ -267,7 +269,8 @@ class Collector(commands.Cog):
         log.warning("digest が raw に遅れています(未反映 %s件・人間%s件)。digest を再生成してください。",
                     total, human)
         # Discord 通知は 1 日 1 回まで(チャンネル未設定ならログのみ)
-        chan_id = getattr(cfg, "collect_staleness_channel_id", None)
+        # 送り先は [notify] の collect_staleness(無ければ従来の collect.staleness_channel_id・2026-11-03)
+        chan_id = routed_channel_id(self.bot, "collect_staleness", getattr(cfg, "collect_staleness_channel_id", None))
         if not chan_id or not self._staleness_notify_due():
             return
         try:

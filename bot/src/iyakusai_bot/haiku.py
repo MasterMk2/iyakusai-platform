@@ -42,6 +42,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from . import haiku_logic as hl
+from .notify import routed_channel_id
 from .remind_logic import now_jst
 from .storage import read_json, write_json
 
@@ -232,9 +233,14 @@ class Haiku(commands.Cog):
                 or self.names["by_name"].get(user.name)
                 or user.display_name)
 
+    def _target_id(self) -> int | None:
+        """転記先(digest・both)。[notify] の haiku_digest が設定されていればそこ(2026-11-03)。"""
+        cid = routed_channel_id(self.bot, "haiku_digest", self.cfg.haiku_channel_id)
+        return int(cid) if cid else None
+
     def _target_channel(self) -> discord.abc.Messageable | None:
-        cid = self.cfg.haiku_channel_id
-        return self.bot.get_channel(int(cid)) if cid else None
+        cid = self._target_id()
+        return self.bot.get_channel(cid) if cid else None
 
     def _channel_ok(self, message: discord.Message) -> bool:
         """機微チャンネルを除外し、public_only なら公開CH・公開スレッドだけに限る(全モード)。"""
@@ -243,7 +249,8 @@ class Haiku(commands.Cog):
         names = [getattr(ch, "name", "") or "", getattr(parent, "name", "") or ""]
         if any(b in n for n in names for b in self.blocklist):
             return False
-        if self.cfg.haiku_channel_id and ch.id == int(self.cfg.haiku_channel_id):
+        target = self._target_id()
+        if target and ch.id == target:
             return False                              # 転記先そのものは対象外(自己言及の防止)
         # 公開CH限定は react/reply でも適用する。その場に付けるだけでも、句の本文は共有ドライブの
         # haiku.json に残り /haiku list で読めるため(2026-10-09)。

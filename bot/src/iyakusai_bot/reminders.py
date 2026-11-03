@@ -12,6 +12,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from . import remind_logic as rl
+from .notify import routed_channel_id
 from .storage import ReminderStore
 
 log = logging.getLogger("iyakusai.reminders")
@@ -154,10 +155,16 @@ class Reminders(commands.Cog):
         await self.bot.wait_until_ready()
 
     async def _notify(self, rem: dict, act: str):
-        channel = self.bot.get_channel(rem["channel_id"])
+        # 送り先は登録したチャンネル。[notify] の reminder が設定されていればそこ(2026-11-03)。
+        # 上書き先が見えないときは登録のチャンネルに戻す(上書き先の不調で全部のリマインドを止めない)。
+        target_id = routed_channel_id(self.bot, "reminder", rem["channel_id"])
+        if target_id != rem["channel_id"] and self.bot.get_channel(target_id) is None:
+            log.warning("リマインド #%s: 上書き先が見えないため登録のチャンネルに送ります", rem.get("id"))
+            target_id = rem["channel_id"]
+        channel = self.bot.get_channel(target_id)
         if channel is None:
             try:
-                channel = await self.bot.fetch_channel(rem["channel_id"])
+                channel = await self.bot.fetch_channel(target_id)
             except discord.NotFound:
                 # チャンネルが削除済み = 何度試しても届かない。従来はここが汎用 except に
                 # 落ちるだけで、check_loop が **毎tick(60秒)エラーログを吐き続け**、その

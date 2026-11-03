@@ -33,6 +33,7 @@ from . import assistant_logic as L
 from . import remind_logic as rl
 from .assistant_store import AssistantStore, Job
 from .config import AssistantSettings
+from .notify import routed_channel_id
 from .reminders import _fmt_item
 from .storage import ReminderStore
 from .web_interaction import WebInteraction
@@ -208,14 +209,24 @@ class Assistant(commands.Cog):
     # ---- 共通: 共有先・依頼者 ----
 
     def _share_channel(self):
-        channel = self.bot.get_channel(self.settings.share_channel_id)
-        if channel is None or not hasattr(channel, "send"):
+        # 送り先は [notify] の app_share(無ければ従来の assistant.share_channel_id・2026-11-03)
+        share_id = self.settings.share_channel_id
+        routed = routed_channel_id(self.bot, "app_share", share_id)
+        channel = self._channel(routed)
+        if channel is None and routed != share_id:
+            channel = self._channel(share_id)     # 上書き先が見えないときは従来の共有先に戻す
+        if channel is None:
             raise JobError("UNAVAILABLE", "共有先のチャンネル(#bottest)に接続できません。少し待って再実行してください。")
         return channel
 
     def _channel(self, channel_id: int):
         channel = self.bot.get_channel(channel_id)
         return channel if channel is not None and hasattr(channel, "send") else None
+
+    def _reminder_channel(self, channel_id: int):
+        """リマインドの確認の投稿先。[notify] の reminder が設定されていればそこ(無ければ登録のチャンネル)。"""
+        channel = self._channel(routed_channel_id(self.bot, "reminder", channel_id))
+        return channel if channel is not None else self._channel(channel_id)
 
     async def _guild_member(self, guild, user_id: int):
         """サーバーのメンバーを返す(キャッシュ → 取得)。見つからなければ None。"""
@@ -359,7 +370,7 @@ class Assistant(commands.Cog):
         # 保存が済んだ後の失敗で依頼を failed にすると、利用者が再依頼して二重登録になる。
         # だから確認の投稿と写しの更新は失敗しても登録の結果は変えない(ログに残すだけ)。
         confirmed = await self._post_quietly(
-            channel,
+            self._reminder_channel(channel_id),
             f"📱 アプリから {job.actor_name} さんが登録\n"
             f"⏰ 登録しました {_fmt_item(rem)} {rep}\n"
             f"通知: 前日・期限時刻・超過中は24時間ごとに催促(`/remind done id:{rem['id']}` で完了)")
@@ -393,7 +404,8 @@ class Assistant(commands.Cog):
             message = f"🗑️ 削除しました: `#{rem_id}` {rem['text']}"
         if channel is not None:
             verb = "完了" if job.op == "done" else "削除"
-            await self._post_quietly(channel, f"📱 アプリから {job.actor_name} さんが{verb}\n{message}")
+            await self._post_quietly(self._reminder_channel(channel.id),
+                                     f"📱 アプリから {job.actor_name} さんが{verb}\n{message}")
         await self.publish_state()
         return {"text": "", "files": [], "message": message}, None
 
@@ -542,7 +554,9 @@ class Assistant(commands.Cog):
             "maxActivePerUser": self.settings.max_active_per_user,
             "reminderChannels": [{"id": str(cid), "name": getattr(self._channel(cid), "name", "不明")}
                                  for cid in self.settings.reminder_channel_ids],
-            "shareChannel": ({"id": str(self.settings.share_channel_id), "name": getattr(share, "name", "不明")}
+            # 実際に投稿する先の id(上書き時は [notify] の app_share。無ければ従来の共有先と同じ)
+            "shareChannel": ({"id": str(getattr(share, "id", self.settings.share_channel_id)),
+                              "name": getattr(share, "name", "不明")}
                              if share is not None else None),
             "updatedAt": rl.now_jst().isoformat(timespec="seconds"),
         }

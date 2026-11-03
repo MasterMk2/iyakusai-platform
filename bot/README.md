@@ -20,6 +20,8 @@
 | `/remind` | リマインドの登録・一覧・完了・削除と、期限の通知 | `reminders.py`・`remind_logic.py` |
 | `/todo` | 委員会のタスク。統合アプリのタスク画面と同じデータ | `task_cog.py`・`task_domain.py`・`task_store.py` |
 | タスク候補 | Discord の会話からタスクの候補を抜き出し、承認されたら起票する | `screening_*.py` |
+| 週1回のタスク一覧 | 週1回（既定は月曜 8:40）に部局ごとの進行中・期限切れ・担当なしを投稿する。「引き受ける」ボタンで主担当を決められる。担当なしのまま 2 日たつと追い投稿（[説明](docs/weekly-tasks.md)） | `weekly_cog.py`・`weekly_logic.py`・`weekly_service.py` |
+| 投稿先の振り分け | Bot が自分から投稿する先を `[notify]` で一か所に決める（[一覧と解決の順](docs/notify-routing.md)） | `notify.py` |
 | 統合アプリの Bot タブ | アプリから受けた依頼（ジョブ）を実行して結果を返す（[取り決め](../docs/contracts/bot-front.md)） | `assistant_*.py` |
 | 基盤のデータ | 統合アプリの物品と受信箱の状態を `/ask` の資料に加える（[取り決め](../docs/contracts/bot-datasource.md)） | `kiban.py`・`kiban_cog.py` |
 | 収集 | Discord の記録の収集（`collectors/discord/`）を定期的に動かす | `collector.py` |
