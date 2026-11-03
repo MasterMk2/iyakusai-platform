@@ -2,6 +2,8 @@
 // Only authorized, display-ready data appears here. Hidden delivery metadata
 // (connector keys, provider IDs, raw headers) is deliberately absent.
 
+import type { MessageDueView, ThreadDueView } from './mailDue.js';
+
 export const HANDLING_STATUSES = ['unhandled', 'in_progress', 'on_hold', 'done'] as const;
 export type HandlingStatus = (typeof HANDLING_STATUSES)[number];
 
@@ -154,6 +156,8 @@ export interface ThreadListItem {
   assignees: string[];
   /** Committee mail: the viewer may set the status of the whole thread (PATCH /api/threads/:threadId/status). */
   canSetStatus?: boolean;
+  /** Committee mail: the deadlines of the thread (2026-11-03). */
+  due?: ThreadDueView;
 }
 
 export interface ThreadListResponse {
@@ -181,7 +185,8 @@ export interface HistoryView {
   id: string;
   at: string;
   actorName: string;
-  action: 'assignee' | 'status' | 'labels' | 'note_added';
+  /** 'due' and 'reply_wait' are the committee mail's deadlines (2026-11-03). */
+  action: 'assignee' | 'status' | 'labels' | 'note_added' | 'due' | 'reply_wait';
   from: string | null;
   to: string | null;
 }
@@ -226,6 +231,8 @@ export interface ReceiptView {
   remoteImages?: number;
   attachments: AttachmentView[];
   triage: TriageView;
+  /** Committee mail: the deadlines of this message (2026-11-03). */
+  due?: MessageDueView;
   notes: NoteView[];
   history: HistoryView[];
 }

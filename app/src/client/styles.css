@@ -1357,4 +1357,22 @@ button.task-tree-toggle:focus-visible { outline-offset: -3px; }
   .decisions-list .field-row,
   .minutes-decisions .field-row,
   .decision-sources .source-row { grid-template-columns: minmax(0, 1fr); }
+/* Mail deadlines (2026-11-03): chips in the list and on the thread, the deadline panel, the compose field and the
+   home card. The words say the state; the colour only repeats it. Inputs keep 16px (no zoom on iPhone) and a
+   44px touch height on a coarse pointer. */
+.chip.due-chip.overdue { background: var(--red-bg); color: var(--red); }
+.chip.due-chip.wait { background: var(--info-bg); color: var(--navy); }
+.due-panel { margin: 10px 0; padding: 8px 12px; border: 1px solid var(--line); border-radius: 6px; }
+.due-panel h4 { margin: 0 0 6px; }
+.due-panel p { margin: 4px 0; }
+.handling .due-panel { margin: 10px 0 0; padding: 8px 0 0; border: 0; border-top: 1px solid var(--line); border-radius: 0; }
+.due-form { display: flex; flex-direction: column; gap: 6px; }
+.compose-due { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; }
+.compose-due label { font-size: 14px; }
+.due-panel input[type='date'], .compose-due input[type='date'] { font-size: 16px; max-width: 16em; min-height: 40px; }
+.home-mail-due h3 { font-size: 16px; margin: 10px 0 4px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.home-mail-due .rows { margin: 0; padding: 0; list-style: none; }
+.home-mail-due .rows li { padding: 6px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+@media (pointer: coarse) {
+  .due-panel input[type='date'], .compose-due input[type='date'] { min-height: 44px; }
 }

@@ -3,7 +3,9 @@ import { departmentsOfLabel, TEMPORARY_STAFF_DEPARTMENT, type MailAccessResponse
 import { sanitizeMailHtml } from '../domain/sanitize.js';
 import { normalizeLabels } from '../domain/triage.js';
 import { DomainError, notFound, type User } from '../domain/types.js';
+import { isDueDate, japaneseDay, jstDay, type MailDueResponse, type MessageDueView } from '../../shared/mailDue.js';
 import type { CommitteeAddresses } from './addresses.js';
+import { AUTO_ACTOR, AUTO_ACTOR_NAME, dueEntries, loadDue, messageDueView, NO_DUE, openDueRows, threadDueView, writeDue, type DueHistoryInput, type DueState } from './due.js';
 import type { MailboxDefinition } from './config.js';
 import { contentIdOf, eachLimited, imageSources, MAIL_IMAGE_MAX_BYTES, MAIL_IMAGES_TOTAL_BYTES, MAIL_REMOTE_IMAGES_MAX, remoteImageUrl, sniffMailImage, type RemoteImageFetch } from './images.js';
 import { SIGN_IN_MAIL_SUBJECT, SIGN_IN_MAIL_TEXT } from './restricted.js';
@@ -27,11 +29,17 @@ export interface ThreadQuery {
   status?: HandlingStatus;
   label?: string;
   assignee?: string;
+  /** Threads awaiting a reply, or with a deadline passed (2026-11-03). */
+  due?: 'awaiting' | 'overdue';
+  /** The nearest deadline first, instead of the newest activity first. */
+  sort?: 'latest' | 'due';
   page: number;
   pageSize: number;
 }
 
 const unique = <T>(values: T[]): T[] => [...new Set(values)];
+/** Lines per list on the home screen's deadline card (the counts are not cut). */
+const HOME_DUE_LIST = 5;
 
 export class MailboxService {
   constructor(
@@ -40,10 +48,16 @@ export class MailboxService {
     private readonly people: People,
     /** Mailboxes the server can send from, or null when sending is not set up. */
     private readonly sendable: readonly string[] | null = null,
+    /** The current time (ISO); the deadlines are judged by the Japan calendar day of it. */
+    private readonly clock: () => string = () => new Date().toISOString(),
   ) {}
 
   private get mailboxes(): readonly MailboxDefinition[] {
     return this.addresses.mailboxes;
+  }
+
+  private today(): string {
+    return jstDay(this.clock());
   }
 
   private mailbox(id: string): MailboxDefinition | undefined {
@@ -61,7 +75,7 @@ export class MailboxService {
   }
 
   /** Sign-in mail this person may not read. */
-  private hidden(user: User, row: MessageRow): boolean {
+  private hidden(user: User, row: Pick<MessageRow, 'subject' | 'from_address' | 'text'>): boolean {
     return !user.canManageAccess && this.store.isSignInMail(row);
   }
 
@@ -75,6 +89,8 @@ export class MailboxService {
       ...(query.status ? { status: query.status } : {}),
       ...(query.label ? { label: query.label } : {}),
       ...(query.assignee ? { assignee: query.assignee === 'me' ? user.id : query.assignee } : {}),
+      ...(query.due ? { due: { kind: query.due, today: this.today() } } : {}),
+      ...(query.sort === 'due' ? { sort: 'due' as const } : {}),
     };
   }
 
@@ -125,6 +141,8 @@ export class MailboxService {
     const all = this.store.threadMessages(f, ids, false);
     const matched = new Set(this.store.threadMessages(f, ids, true).map((m) => m.id));
     const links = this.store.links(all.map((m) => m.id));
+    const dues = loadDue(this.store, all.map((m) => m.id));
+    const today = this.today();
     const items = threads.map((t) => {
       const messages = all.filter((m) => m.thread_id === t.thread_id);
       const first = messages[0]!;
@@ -147,6 +165,10 @@ export class MailboxService {
         labels: unique(messages.flatMap((m) => JSON.parse(m.labels_json) as string[])).sort(),
         assignees: unique(messages.flatMap((m) => (m.assignee_id ? [this.name(m.assignee_id)] : []))),
         canSetStatus: !user.disabled,
+        due: threadDueView(
+          messages.map((m) => ({ status: m.status, due: dues.get(m.id) ?? NO_DUE })),
+          today,
+        ),
       };
     });
     return { items, total, page: query.page, pageSize: query.pageSize };
@@ -196,8 +218,9 @@ export class MailboxService {
       ...(sanitized ? this.imageCounts(row.id, row.html!) : {}),
       attachments,
       triage: this.triageView(row),
+      due: messageDueView(loadDue(this.store, [row.id]).get(row.id) ?? NO_DUE, row.status, this.today(), row.version, editable, this.addresses.isCommitteeAddress(row.from_address)),
       notes,
-      history: this.store.history(row.id).map((h) => ({ id: String(h.id), at: h.at, actorName: this.name(h.actor_id), action: h.action, from: h.from_value, to: h.to_value })),
+      history: this.store.history(row.id).map((h) => ({ id: String(h.id), at: h.at, actorName: h.actor_id === AUTO_ACTOR ? AUTO_ACTOR_NAME : this.name(h.actor_id), action: h.action, from: h.from_value, to: h.to_value })),
     };
   }
 
@@ -358,6 +381,64 @@ export class MailboxService {
     if (text.length > LIMITS.noteMaxLength) throw new DomainError('validation', `メモは ${LIMITS.noteMaxLength} 文字以内で入力してください。`, { field: 'body' });
     const note = this.store.addNote(id, user.id, text, now);
     return { id: note.id, authorName: user.displayName, createdAt: now, body: text };
+  }
+
+  private dueViewOf(id: string, today: string, canEdit: boolean): MessageDueView {
+    const row = this.store.message(id)!;
+    return messageDueView(loadDue(this.store, [id]).get(id) ?? NO_DUE, row.status, today, row.version, canEdit, this.addresses.isCommitteeAddress(row.from_address));
+  }
+
+  /**
+   * Sets, changes or removes a message's deadlines (2026-11-03): 対応期限 (responseDue) and 回答期限 (replyDue, which
+   * makes the thread wait for a reply). Needs the mailbox edit grant, as notes do. `undefined` keeps a deadline,
+   * `null` removes it. A 回答期限 can only be set on a mail the committee sent. The version must be the message's
+   * current one, or the answer is a conflict with the newer state. Every change is in the history.
+   */
+  updateDue(user: User, id: string, change: { expectedVersion: number; responseDue?: string | null; replyDue?: string | null }, now: string): MessageDueView {
+    const { row, linked } = this.visible(id);
+    if (!this.canEdit(user, linked)) throw new DomainError('forbidden', '期限を付ける・変えるには、このメールの受信箱の編集権限が要ります。権限管理者に依頼してください。');
+    const today = jstDay(now);
+    const conflict = () => new DomainError('conflict', '他の利用者が先に更新しました。最新の内容を確認してから、もう一度保存してください。', { current: this.dueViewOf(id, today, true) });
+    if (change.expectedVersion !== row.version) throw conflict();
+    for (const [field, value] of [
+      ['responseDue', change.responseDue],
+      ['replyDue', change.replyDue],
+    ] as const) {
+      if (value !== undefined && value !== null && !isDueDate(value)) throw new DomainError('validation', '期限は、実在する日付（例：2026-11-10）で指定してください。', { field });
+    }
+    // Only a mail the committee sent can wait for a reply. Removing a wait (null) is allowed on any mail.
+    if (typeof change.replyDue === 'string' && !this.addresses.isCommitteeAddress(row.from_address)) {
+      throw new DomainError('validation', '回答期限は、委員会が送ったメールに付けます。受信したメールには付けられません。', { field: 'replyDue' });
+    }
+    const current = loadDue(this.store, [id]).get(id) ?? NO_DUE;
+    const next: DueState = { responseDue: change.responseDue === undefined ? current.responseDue : change.responseDue, replyDue: current.replyDue, replySince: current.replySince };
+    if (change.replyDue === null) {
+      next.replyDue = null;
+      next.replySince = null;
+    } else if (change.replyDue !== undefined) {
+      if (change.replyDue !== current.replyDue && change.replyDue < today) throw new DomainError('validation', '回答期限は今日以降の日付にしてください。', { field: 'replyDue' });
+      next.replyDue = change.replyDue;
+      next.replySince = current.replySince ?? now;
+    }
+    const day = (value: string | null) => (value === null ? null : japaneseDay(value, today));
+    const history: DueHistoryInput[] = [];
+    if (next.responseDue !== current.responseDue) history.push({ action: 'due', from: day(current.responseDue), to: day(next.responseDue) });
+    if (next.replyDue !== current.replyDue) history.push({ action: 'reply_wait', from: current.replyDue === null ? null : `${day(current.replyDue)}まで`, to: next.replyDue === null ? null : `${day(next.replyDue)}まで` });
+    if (history.length === 0) return this.dueViewOf(id, today, true);
+    if (!writeDue(this.store, id, change.expectedVersion, next, history, user.id, now)) throw conflict();
+    return this.dueViewOf(id, today, true);
+  }
+
+  /** The home screen's deadline lists (mail only): the reply waits passed and the response dues near or passed. */
+  dueSummary(user: User): MailDueResponse {
+    const today = this.today();
+    const rows = openDueRows(this.store, this.mailboxes.map((m) => m.id));
+    const links = this.store.links(rows.map((r) => r.message_id));
+    const items = rows.map((row) => {
+      const box = this.mailboxesOf(links.get(row.message_id));
+      return { row, mailboxName: box[0]?.name ?? '', subject: this.hidden(user, row) ? SIGN_IN_MAIL_SUBJECT : row.subject || '（件名なし）' };
+    });
+    return { today, ...dueEntries(items, today, HOME_DUE_LIST) };
   }
 
   /** For task links: the message title and where it opens, or null when it cannot be read. */

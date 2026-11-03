@@ -10,13 +10,14 @@ import { MailBody } from './MailBody';
 import { botReplyRequest, type BotReplyRequest, type DraftToSend } from '../../shared/mailHandoff';
 import type { ContactAddressMatch } from '../../shared/contacts';
 import type { ContactPrefill } from './contacts/ContactsView';
-import { MailCompose, replyDraft } from './MailCompose';
+import { MailCompose, replyDraft, sentNoteText } from './MailCompose';
 import { Notes } from './Notes';
 import { ThreadStatusButtons } from './ThreadStatusButtons';
 import { DONE_HINT, TriageForm } from './TriageForm';
+import { DueForm } from './DueForm';
 import { CaseTasks } from './tasks/CaseTasks';
 
-const HISTORY_LABEL = { assignee: '担当', status: '状態', labels: 'ラベル', note_added: 'メモ追加' } as const;
+const HISTORY_LABEL = { assignee: '担当', status: '状態', labels: 'ラベル', note_added: 'メモ追加', due: '対応期限', reply_wait: '返事待ち' } as const;
 
 function fmtAddress(a: Address): string {
   return a.name ? `${a.name} <${a.address}>` : a.address;
@@ -142,6 +143,8 @@ function ReceiptCard({
             </p>
           </div>
         )}
+        {/* The deadlines (2026-11-03) are part of the handling. Only committee mail carries them. */}
+        {receipt.due && <DueForm basePath={`/api/receipts/${receipt.receiptId}`} due={receipt.due} onSaved={onChanged} />}
       </section>
       <MailBody receipt={receipt} />
       {receipt.attachments.length > 0 && (
@@ -213,11 +216,14 @@ export function ThreadDetail({
   draft = null,
   onDraftUsed,
   contacts = null,
+  notice = null,
 }: {
   threadId: string;
   refresh: number;
   onChanged: () => void;
   caseTasks?: boolean;
+  /** The line shown once on opening, when a new mail of this thread was just sent (see sentNoteText). */
+  notice?: string | null;
   /** The mail screens need the password again (committee mailbox idle limit). */
   onReauthRequired?: () => void;
   /** Committee mailbox: what this person can send (replies appear only with a From address). */
@@ -273,7 +279,7 @@ export function ThreadDetail({
   // Replies: committee mail only, for people with a send grant (the server checks again on sending).
   const canSend = !!data?.receipts[0]?.mailboxes && !!sendOptions?.enabled && sendOptions.from.length > 0;
   const [opened, setOpened] = useState<{ mode: 'reply' | 'replyAll'; receipt: ReceiptView; key: string } | null>(null);
-  const [sentNote, setSentNote] = useState<string | null>(null);
+  const [sentNote, setSentNote] = useState<string | null>(notice);
   // A Bot draft for this thread opens as the reply to the message it was asked for (the newest if that one
   // is gone), until the form is closed or sent (then the app forgets the draft).
   const draftReceipt = draft?.reply && canSend && !opened ? (data?.receipts.find((r) => r.receiptId === draft.reply!.receiptId) ?? latest ?? null) : null;
@@ -298,7 +304,7 @@ export function ThreadDetail({
   const askBot = (r: ReceiptView) => (canSend && onAskBot ? () => onAskBot(botReplyRequest(r)) : undefined);
   const sent = (result: MailSendResponse) => {
     closeCompose();
-    setSentNote(result.threadDone ? '送信しました。スレッドを「完了」にしました。' : '送信しました。');
+    setSentNote(sentNoteText(result));
     onChanged();
   };
 

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { HANDLING_STATUSES, LIMITS, PAGE_SIZE_CHOICES, STATUS_LABELS, type HandlingStatus, type LabelFacet } from '../../shared/api';
+import { japaneseDay, jstDay, type ThreadDueView } from '../../shared/mailDue';
 import type { InboxItem, InboxResponse } from '../../shared/line';
 import { REAUTH_REQUIRED } from '../../shared/mailbox';
 import { api, fmtListDate } from '../api';
@@ -13,12 +14,16 @@ interface Filters {
   status: string;
   label: string;
   assignee: string;
+  /** Deadlines (2026-11-03): '' | 'awaiting' (返事待ち) | 'overdue' (期限切れ). */
+  due: string;
+  /** '' (newest first) or 'due' (the nearest deadline first). */
+  sort: string;
 }
 
 /** Shortcut a link may open the list with (home counts). */
 export type InboxFilter = 'unhandled' | 'mine';
 
-const EMPTY: Filters = { q: '', source: '', status: '', label: '', assignee: '' };
+const EMPTY: Filters = { q: '', source: '', status: '', label: '', assignee: '', due: '', sort: '' };
 // The chosen page size is remembered on this device only; storage may be blocked (private windows).
 const PAGE_SIZE_KEY = 'iyakusai-mail-page-size';
 // Without a remembered choice the list shows 20 rows: with one-line rows that fills a PC screen.
@@ -48,8 +53,9 @@ export type Selection = { kind: 'thread' | 'conversation'; id: string };
  * The marks under a row. The status is written out only where the row has no status buttons, or where
  * its messages differ (no button is pressed then); otherwise the pressed button already says it.
  */
-function Chips({ statuses, labels, assignees, showStatus }: { statuses: HandlingStatus[]; labels: string[]; assignees: string[]; showStatus: boolean }) {
-  if (!showStatus && labels.length === 0 && assignees.length === 0) return null;
+function Chips({ statuses, labels, assignees, showStatus, due }: { statuses: HandlingStatus[]; labels: string[]; assignees: string[]; showStatus: boolean; due?: ThreadDueView }) {
+  const waiting = due?.replyWait ?? null;
+  if (!showStatus && labels.length === 0 && assignees.length === 0 && !waiting && !due?.responseDue) return null;
   return (
     <span className="chips">
       {showStatus &&
@@ -58,6 +64,17 @@ function Chips({ statuses, labels, assignees, showStatus }: { statuses: Handling
             {STATUS_LABELS[s]}
           </span>
         ))}
+      {/* Deadlines (2026-11-03): the words say the state; the colour only repeats it. */}
+      {waiting && (
+        <span className={`chip due-chip ${waiting.overdue ? 'overdue' : 'wait'}`}>
+          {waiting.overdue ? '返事待ち・期限切れ' : '返事待ち'} {japaneseDay(waiting.dueOn, jstDay(new Date()))}まで
+        </span>
+      )}
+      {due?.responseDue && (
+        <span className={`chip due-chip ${due.responseOverdue ? 'overdue' : 'wait'}`}>
+          {due.responseOverdue ? '対応期限切れ' : '対応期限'} {japaneseDay(due.responseDue, jstDay(new Date()))}
+        </span>
+      )}
       {assignees.map((a) => (
         <span key={a} className="chip assignee">
           担当: {a}
@@ -236,7 +253,8 @@ export function ThreadList(props: {
   }
 
   const data = threads.data;
-  const filtered = Object.values(applied).some(Boolean);
+  // The sort is not a condition: a list sorted only by the nearest deadline with no match says nothing is found, not "clear the conditions".
+  const filtered = Object.entries(applied).some(([key, value]) => key !== 'sort' && Boolean(value));
   const title = mailboxId || lineAccountId ? (props.mailboxName ?? (lineAccountId ? 'LINE アカウント' : '受信箱')) : (props.allTitle ?? 'すべての許可された受信箱');
   const showSource = data?.lineEnabled === true && !mailboxId && !lineAccountId && !source;
   const lineOnly = source === 'line' || !!lineAccountId;
@@ -306,6 +324,25 @@ export function ThreadList(props: {
               ))}
             </select>
           </label>
+          {!lineOnly && (
+            <>
+              <label>
+                期限
+                <select aria-label="期限" value={draft.due} onChange={(e) => choose('due', e.target.value)}>
+                  <option value="">すべて</option>
+                  <option value="awaiting">返事待ち</option>
+                  <option value="overdue">期限切れ</option>
+                </select>
+              </label>
+              <label>
+                並び
+                <select aria-label="並び" value={draft.sort} onChange={(e) => choose('sort', e.target.value)}>
+                  <option value="">新しい順</option>
+                  <option value="due">期限の近い順</option>
+                </select>
+              </label>
+            </>
+          )}
         </div>
       </form>
       {formError && <p className="status error" role="alert">{formError}</p>}
@@ -360,7 +397,7 @@ export function ThreadList(props: {
                   <Item item={t} selectedId={props.selectedId} filtered={filtered} showSource={showSource} showMailbox={!mailboxId && !lineAccountId} onSelect={props.onSelect} />
                   {/* Labels and assignee on the left, the row's own status buttons on the right. */}
                   <div className="row-foot">
-                    <Chips statuses={t.statuses} labels={t.labels} assignees={t.assignees} showStatus={!withButtons || t.statuses.length > 1} />
+                    <Chips statuses={t.statuses} labels={t.labels} assignees={t.assignees} showStatus={!withButtons || t.statuses.length > 1} due={t.source === 'email' ? t.due : undefined} />
                     {withButtons && (
                       <ThreadStatusButtons
                         target={t.source === 'email' ? { kind: 'thread', threadId: t.threadId } : { kind: 'line', conversationId: t.conversationId, version: t.triageVersion ?? 0 }}

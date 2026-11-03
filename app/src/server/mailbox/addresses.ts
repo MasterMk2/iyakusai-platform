@@ -74,6 +74,15 @@ export class CommitteeAddresses {
     return this.byAddress.get(this.normalize(address));
   }
 
+  /**
+   * An address on a committee domain (or a domain alias of one), a member's own address included. Mail from
+   * such an address is never a reply from outside the committee (due.ts).
+   */
+  isCommitteeAddress(address: string): boolean {
+    const normalized = this.normalize(address);
+    return this.domains.has(normalized.slice(normalized.lastIndexOf('@') + 1));
+  }
+
   /** A List-Id header value such as `"協賛" <sponsorship.iyakusai.com>`. */
   ofListId(value: string): MailboxDefinition | undefined {
     const inner = /<([^<>\s]+)>/.exec(value)?.[1] ?? value.trim();

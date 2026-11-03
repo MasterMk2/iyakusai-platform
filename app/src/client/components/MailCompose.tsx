@@ -11,6 +11,7 @@ import {
   type MailSendRequest,
   type MailSendResponse,
 } from '../../shared/mailbox';
+import { isDueDate, japaneseDay, jstDay, replyDueSentence } from '../../shared/mailDue';
 import { screenMail } from '../../shared/mailScreen';
 import { apiForm, fmtDate, toFailure } from '../api';
 import { MailReview } from './MailReview';
@@ -115,18 +116,39 @@ interface Checked {
   bcc: string[];
   /** Null when none is needed (empty, or From itself). */
   replyTo: string | null;
+  /** The body as it will be sent: with the reply deadline sentence when it is asked for. */
+  body: string;
+  /** The reply deadline (YYYY-MM-DD), or null: the sent message then waits for the reply (2026-11-03). */
+  replyDue: string | null;
+}
+
+/** The deadline sentence goes at the end of what the sender wrote: before the signature when there is one. */
+export function withDueSentence(options: MailSendOptions, mailboxId: string, body: string, sentence: string): string {
+  const sig = signature(options, mailboxId);
+  if (body.includes(sig)) return body.replace(sig, () => `${sentence}\n\n${sig}`);
+  return `${body.replace(/\s+$/, '')}\n\n${sentence}`;
 }
 
 const TITLES: Record<ComposeMode, string> = { new: '新しいメール', reply: '返信', replyAll: '全員に返信' };
 
-export function MailCompose({ options, initial, mode, onSent, onCancel }: { options: MailSendOptions; initial: ComposeDraft; mode: ComposeMode; onSent: (result: MailSendResponse) => void; onCancel: () => void }) {
+/** The line shown after a send: that it went, and whether its reply deadline was kept (the thread and the app use it). */
+export function sentNoteText(result: MailSendResponse): string {
+  const base = result.threadDone ? '送信しました。スレッドを「完了」にしました。' : '送信しました。';
+  const waitNote = result.replyWait === 'set' ? ' 返事待ちとして記録しました。' : result.replyWait === 'failed' ? ' ただし回答期限は保存できませんでした。下の「期限」から付け直してください。' : '';
+  return base + waitNote;
+}
+
+export function MailCompose({ options, initial, mode, onSent, onCancel }:{ options: MailSendOptions; initial: ComposeDraft; mode: ComposeMode; onSent: (result: MailSendResponse) => void; onCancel: () => void }) {
   const [draft, setDraft] = useState<ComposeDraft>(initial);
   const [files, setFiles] = useState<File[]>([]);
   const [markDone, setMarkDone] = useState(mode !== 'new');
   const [preview, setPreview] = useState<Checked | null>(null);
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [errors, setErrors] = useState<Partial<Record<'to' | 'cc' | 'bcc' | 'replyTo' | 'subject' | 'body' | 'attachments', string>>>({});
+  const [errors, setErrors] = useState<Partial<Record<'to' | 'cc' | 'bcc' | 'replyTo' | 'subject' | 'body' | 'attachments' | 'replyDue', string>>>({});
+  // Reply deadline (2026-11-03): only for a From mailbox the sender may edit; the sentence is on by default.
+  const [replyDue, setReplyDue] = useState('');
+  const [dueSentence, setDueSentence] = useState(true);
   const [message, setMessage] = useState<{ kind: 'error' | 'warning'; text: string } | null>(null);
   const [locked, setLocked] = useState(false);
   // CC, BCC and the reply-to address are folded until asked for, and open from the start when any of them has
@@ -141,9 +163,11 @@ export function MailCompose({ options, initial, mode, onSent, onCancel }: { opti
   const from = options.from.find((f) => f.mailboxId === draft.mailboxId) ?? null;
   const size = files.reduce((n, f) => n + f.size, 0);
   const parsed = (values: string[]) => values.flatMap((v) => parseRecipient(v) ?? []);
+  const dueHere = options.dueMailboxIds?.includes(draft.mailboxId) ?? false;
+  const today = jstDay(new Date());
   // Checks before sending (fixed rules): shown with what will be sent.
   const findings = preview
-    ? screenMail({ subject: draft.subject, body: draft.body, to: parsed(preview.to), cc: parsed(preview.cc), replyTo: preview.replyTo ? parseRecipient(preview.replyTo) : null, fromAddress: from?.address ?? '', fromName: options.fromName, attachments: files.length })
+    ? screenMail({ subject: draft.subject, body: preview.body, to: parsed(preview.to), cc: parsed(preview.cc), replyTo: preview.replyTo ? parseRecipient(preview.replyTo) : null, fromAddress: from?.address ?? '', fromName: options.fromName, attachments: files.length })
     : [];
   const warnings = findings.filter((f) => f.level === 'warning').length;
   const toNames = parsed(splitRecipients(draft.to)).map((a) => a.name ?? '（名前なし）');
@@ -160,6 +184,14 @@ export function MailCompose({ options, initial, mode, onSent, onCancel }: { opti
     const before = signature(options, draft.mailboxId);
     const body = draft.body.includes(before) ? draft.body.replace(before, signature(options, mailboxId)) : draft.body;
     setDraft((d) => ({ ...d, mailboxId, body }));
+    setPreview(null);
+    setConfirmed(false);
+  }
+
+  /** The deadline or whether its sentence is added: what was checked is no longer what would be sent. */
+  function changeDue(value: string | null, sentence: boolean) {
+    if (value !== null) setReplyDue(value);
+    setDueSentence(sentence);
     setPreview(null);
     setConfirmed(false);
   }
@@ -199,11 +231,15 @@ export function MailCompose({ options, initial, mode, onSent, onCancel }: { opti
     if (to.length + cc.length + bcc.length > options.maxRecipients) next.to = `宛先・CC・BCC は合わせて ${options.maxRecipients} 件までです。`;
     if (!draft.subject.trim()) next.subject = '件名を入力してください。';
     else if (draft.subject.length > MAIL_SUBJECT_MAX) next.subject = `件名は ${MAIL_SUBJECT_MAX} 文字以内にしてください。`;
-    if (draft.body.length > MAIL_BODY_MAX) next.body = `本文は ${MAIL_BODY_MAX.toLocaleString('ja-JP')} 文字以内にしてください。`;
     if (files.length > MAIL_ATTACHMENTS_MAX) next.attachments = `添付ファイルは ${MAIL_ATTACHMENTS_MAX} 個までです。`;
     else if (size > options.maxAttachmentBytes) next.attachments = `添付ファイルは合わせて ${fmtSize(options.maxAttachmentBytes)} までです（いま ${fmtSize(size)}）。`;
+    const due = dueHere && replyDue ? replyDue : null;
+    if (due && !isDueDate(due)) next.replyDue = '回答期限は、実在する日付で入力してください。';
+    else if (due && due < today) next.replyDue = '回答期限は今日以降の日付にしてください。';
+    const body = due && dueSentence && isDueDate(due) ? withDueSentence(options, draft.mailboxId, draft.body, replyDueSentence(due, today)) : draft.body;
+    if (body.length > MAIL_BODY_MAX) next.body = `本文は ${MAIL_BODY_MAX.toLocaleString('ja-JP')} 文字以内にしてください。`;
     setErrors(next);
-    return Object.keys(next).length === 0 ? { to, cc, bcc, replyTo } : null;
+    return Object.keys(next).length === 0 ? { to, cc, bcc, replyTo, body, replyDue: due } : null;
   }
 
   async function send() {
@@ -218,10 +254,11 @@ export function MailCompose({ options, initial, mode, onSent, onCancel }: { opti
       cc: preview.cc,
       bcc: preview.bcc,
       subject: draft.subject,
-      body: draft.body,
+      body: preview.body,
       replyToReceiptId: draft.replyToReceiptId,
       markThreadDone: !!draft.replyToReceiptId && markDone,
       replyTo: preview.replyTo,
+      replyDue: preview.replyDue,
     };
     const form = new FormData();
     form.append('message', JSON.stringify(body));
@@ -380,6 +417,20 @@ export function MailCompose({ options, initial, mode, onSent, onCancel }: { opti
             </p>
             {errorOf('attachments')}
           </div>
+          {dueHere && (
+            <div className="compose-due">
+              <label htmlFor="compose-reply-due">回答期限（任意）</label>
+              <input id="compose-reply-due" type="date" min={today} value={replyDue} onChange={(e) => changeDue(e.target.value, dueSentence)} disabled={busy} {...field('replyDue')} data-testid="compose-reply-due" />
+              <p className="hint">期限を入れると、送ったスレッドは「返事待ち」になり、相手の返信が届くまで期限の一覧に出ます。</p>
+              {replyDue && isDueDate(replyDue) && (
+                <label className="confirm-check plain">
+                  <input type="checkbox" checked={dueSentence} onChange={(e) => changeDue(null, e.target.checked)} disabled={busy} />
+                  本文の末尾に「{replyDueSentence(replyDue, today)}」を入れる
+                </label>
+              )}
+              {errorOf('replyDue')}
+            </div>
+          )}
           {draft.replyToReceiptId && (
             <label className="confirm-check plain">
               <input type="checkbox" checked={markDone} onChange={(e) => setMarkDone(e.target.checked)} />
@@ -437,9 +488,22 @@ export function MailCompose({ options, initial, mode, onSent, onCancel }: { opti
                 <dd>{files.map((f) => `${f.name}（${fmtSize(f.size)}）`).join('、')}</dd>
               </>
             )}
+            {preview.replyDue && (
+              <>
+                <dt>回答期限</dt>
+                <dd data-testid="preview-reply-due">
+                  {japaneseDay(preview.replyDue, today)}まで <span className="hint">（送ったあと、このスレッドは「返事待ち」になります）</span>
+                </dd>
+              </>
+            )}
           </dl>
+          {!dueHere && replyDue.trim() !== '' && (
+            <p className="status warning" role="status" data-testid="preview-due-unavailable">
+              この受信箱では回答期限を付けられないため、期限は付きません。
+            </p>
+          )}
           <pre className="mail-text compose-preview-body" data-testid="preview-body">
-            {draft.body}
+            {preview.body}
           </pre>
           {draft.replyToReceiptId && markDone && <p className="hint">送ったあと、このスレッドを「完了」にします。</p>}
           <section className="compose-screen" aria-labelledby="compose-screen-title" data-testid="compose-screen">

@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { verifyBytesSignature } from '../tasks/signing.js';
 import type { CommitteeAddresses } from './addresses.js';
 import type { MailboxConfig, MailboxDefinition } from './config.js';
+import { answerReplyWaits } from './due.js';
 import { MAX_RAW_BYTES, MailParseError, parseRawMail, type ParsedMail } from './parse.js';
 import type { MailboxStore, MailSource } from './store.js';
 
@@ -93,7 +94,18 @@ export function attachMailIngest(app: FastifyInstance, rt: IngestRuntime): void 
       }
       const mailboxes = routeMailboxes(rt.addresses, rt.config, source, parsed);
       if (mailboxes.length === 0) return { status: 'skipped', mailboxes: [] };
-      const outcome = rt.store.store({ source, providerId, receivedAt, parsed, mailboxIds: mailboxes.map((m) => m.id), now: new Date(now()).toISOString() });
+      const nowIso = new Date(now()).toISOString();
+      const outcome = rt.store.store({ source, providerId, receivedAt, parsed, mailboxIds: mailboxes.map((m) => m.id), now: nowIso });
+      // A new message from outside the committee answers the reply waits of its thread (2026-11-03). The
+      // waits are kept if this fails: the message itself is stored and the answer is still "stored".
+      if (outcome.status === 'stored' && !rt.addresses.isCommitteeAddress(parsed.from.address)) {
+        const threadId = rt.store.message(outcome.id)?.thread_id;
+        try {
+          if (threadId) answerReplyWaits(rt.store, threadId, receivedAt, nowIso);
+        } catch (err) {
+          console.error('返事待ちの判定に失敗しました。', err instanceof Error ? err.name : 'error');
+        }
+      }
       return { status: outcome.status, mailboxes: mailboxes.map((m) => m.id) };
     });
   });

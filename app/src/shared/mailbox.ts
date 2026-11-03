@@ -58,6 +58,8 @@ export interface MailSendOptions {
   fromName: string;
   /** Added to every message as BCC (the committee archive), or null. */
   bcc: string | null;
+  /** From mailboxes this person may also put a reply deadline on (the edit grant too); empty when none (2026-11-03). */
+  dueMailboxIds?: string[];
   maxAttachmentBytes: number;
   /** To, Cc and Bcc together, the archive BCC not counted. */
   maxRecipients: number;
@@ -82,6 +84,8 @@ export interface MailSendRequest {
   markThreadDone: boolean;
   /** Reply-To: one "名前 <address>" or "address" that answers should go to instead of From; null or empty for none. */
   replyTo?: string | null;
+  /** Reply deadline (YYYY-MM-DD): the message then waits for the partner's reply (2026-11-03). Null or absent: none. */
+  replyDue?: string | null;
 }
 
 export interface MailSendResponse {
@@ -90,6 +94,8 @@ export interface MailSendResponse {
   receiptId: string | null;
   threadId: string | null;
   threadDone: boolean;
+  /** The reply deadline as kept: 'set', 'failed' (the mail is sent; set it again on the screen), or 'none' (none asked). */
+  replyWait?: 'none' | 'set' | 'failed';
 }
 
 /** Error code: the connection ended after the message was handed over; it may have been sent. Do not send it again. */

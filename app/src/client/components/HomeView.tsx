@@ -10,6 +10,7 @@ import { useLoader } from '../useLoader';
 import { BotSummaryCard } from './bot/BotSummaryCard';
 import { isBotDisabled } from './bot/BotView';
 import { LoadStatus } from './LoadStatus';
+import { MailDueCard } from './MailDueCard';
 import { TaskSummaryCard } from './tasks/TaskSummaryCard';
 import { UpcomingCard } from './calendar/UpcomingCard';
 import type { InboxFilter } from './ThreadList';
@@ -191,6 +192,7 @@ export function HomeView({
               onOpenLine={onOpenLine}
             />
           )}
+          {mailOpen && <MailDueCard onOpenThread={onOpenThread} />}
           {tasks?.enabled && <TaskSummaryCard context={tasks} loader={taskSummary} onOpenTasks={onOpenTasks} />}
           <UpcomingCard />
         </div>

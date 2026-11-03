@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { HANDLING_STATUSES, LIMITS } from '../../shared/api.js';
 import type { InboxResponse } from '../../shared/line.js';
 import { MAIL_ATTACHMENTS_MAX, MAIL_BODY_MAX, MAIL_SUBJECT_MAX, REAUTH_REQUIRED, type MailSendOptions, type MailStatusResponse } from '../../shared/mailbox.js';
+import { DUE_DATE_PATTERN } from '../../shared/mailDue.js';
 import { registerContactRoutes } from '../contacts/routes.js';
 import { ContactsStore } from '../contacts/store.js';
 import type { DecisionsStore } from '../decisions/store.js';
@@ -93,7 +94,11 @@ const filters = {
   status: z.enum(HANDLING_STATUSES).optional(),
   label: z.string().min(1).max(LIMITS.labelMaxLength).optional(),
   assignee: z.string().min(1).max(40).regex(/^[a-z0-9-]+$/).optional(),
+  // Deadlines (2026-11-03): threads awaiting a reply or past a deadline; the nearest deadline first.
+  due: z.enum(['awaiting', 'overdue']).optional(),
+  sort: z.enum(['latest', 'due']).default('latest'),
 };
+const dueDay = z.string().regex(DUE_DATE_PATTERN);
 const threadQuery = z.strictObject({ ...filters, ...page });
 const inboxQuery = z.strictObject({ ...filters, ...page, source: z.enum(['all', 'email', 'line']).default('all'), lineAccountId: shortId.optional() });
 // `source` narrows the labels to one tab's kind (2026-11-03: メール and 公式LINE are separate tabs).
@@ -134,7 +139,12 @@ const sendBody = z.strictObject({
   markThreadDone: z.boolean(),
   // Optional: screens opened before 2026-10-26 do not send it.
   replyTo: z.string().max(400).nullable().optional(),
+  // Reply deadline (2026-11-03), optional: screens opened before it do not send it.
+  replyDue: dueDay.nullable().optional(),
 });
+const dueBody = z
+  .strictObject({ expectedVersion: z.number().int().min(1), responseDue: dueDay.nullable().optional(), replyDue: dueDay.nullable().optional() })
+  .refine((b) => b.responseDue !== undefined || b.replyDue !== undefined, { message: '変更内容がありません' });
 
 // eslint-disable-next-line no-control-regex
 const FILENAME_CONTROL = /[\u0000-\u001f\u007f]/g;
@@ -158,7 +168,7 @@ const USE_RECORD_INTERVAL_MS = 60_000;
 const FORGET_USE_AFTER_MS = 15 * 86_400_000;
 
 export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, deps: MailboxRouteDeps): { service: MailboxService; cases: MailCaseSource } {
-  const service = new MailboxService(rt.store, rt.addresses, deps.people, rt.config.send?.mailboxIds ?? null);
+  const service = new MailboxService(rt.store, rt.addresses, deps.people, rt.config.send?.mailboxIds ?? null, deps.clock);
   const sendConfig = rt.config.send;
   // EHLO says the app's public host (2026-11-03, review M6); the SMTP account itself is in the configuration.
   const ehloHost = deps.publicOrigin ? new URL(deps.publicOrigin).hostname : undefined;
@@ -303,6 +313,12 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
     return service.mailboxSummaries(reader(request, false));
   });
 
+  // The home screen's deadline lists (2026-11-03): mail only; not mail use, like the mailbox list.
+  app.get('/api/mail/due', async (request) => {
+    const user = reader(request, false);
+    return service.dueSummary(user);
+  });
+
   app.get('/api/threads', async (request) => {
     const user = reader(request, true);
     return service.listThreads(user, deps.parse(threadQuery, request.query));
@@ -314,8 +330,9 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
     if (q.mailboxId !== undefined && q.lineAccountId !== undefined) throw new DomainError('validation', '受信箱と LINE アカウントは同時に指定できません');
     if (q.lineAccountId !== undefined && !line) throw notFound();
     const withMail = q.source !== 'line' && q.lineAccountId === undefined;
+    // Deadlines (2026-11-03) are mail only: a deadline filter or order leaves the LINE conversations out.
     const lineItems =
-      line && q.source !== 'email' && q.mailboxId === undefined
+      line && q.source !== 'email' && q.mailboxId === undefined && q.due === undefined && q.sort === 'latest'
         ? collectLineItems(line.store.current, lineNames(), user, { accountId: q.lineAccountId, q: q.q, status: q.status, label: q.label, assignee: q.assignee })
         : [];
     if (lineItems.length === 0) {
@@ -396,6 +413,13 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
     const user = reader(request, true);
     const { receiptId } = deps.parse(messageParams, request.params);
     return service.updateTriage(user, receiptId, deps.parse(triageBody, request.body), deps.clock());
+  });
+
+  // Deadlines of one message (2026-11-03): needs the mailbox edit grant; the version must be the current one.
+  app.patch('/api/receipts/:receiptId/due', async (request) => {
+    const user = reader(request, true);
+    const { receiptId } = deps.parse(messageParams, request.params);
+    return service.updateDue(user, receiptId, deps.parse(dueBody, request.body), deps.clock());
   });
 
   app.post('/api/receipts/:receiptId/notes', async (request, reply) => {

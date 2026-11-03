@@ -16,7 +16,7 @@ import { HomeView } from './components/HomeView';
 import { LoadStatus } from './components/LoadStatus';
 import { LineBroadcast } from './components/LineBroadcast';
 import { LineConversation } from './components/LineConversation';
-import { MailCompose, newDraft } from './components/MailCompose';
+import { MailCompose, newDraft, sentNoteText } from './components/MailCompose';
 import { MailReauth } from './components/MailReauth';
 import { Login } from './components/Login';
 import { ProxyBar } from './components/ProxyBar';
@@ -358,6 +358,9 @@ export function App() {
   const [composeTo, setComposeTo] = useState<string | null>(null);
   const [contactQuery, setContactQuery] = useState('');
   const clearContactPrefill = useCallback(() => setContactPrefill(null), []);
+  // The line after a new mail was sent (2026-11-03): shown once on its thread, and forgotten when another thread opens.
+  const [newMailNote, setNewMailNote] = useState<{ threadId: string; text: string } | null>(null);
+  if (newMailNote && route.threadId !== newMailNote.threadId) setNewMailNote(null);
   const [handoffScreen, setHandoffScreen] = useState({ compose: route.mailCompose, contactNew: route.contactNew, contacts: route.view === 'contacts' });
   if (handoffScreen.compose !== route.mailCompose || handoffScreen.contactNew !== route.contactNew || handoffScreen.contacts !== (route.view === 'contacts')) {
     setHandoffScreen({ compose: route.mailCompose, contactNew: route.contactNew, contacts: route.view === 'contacts' });
@@ -967,6 +970,7 @@ export function App() {
                     clearDraftToSend();
                     setComposeTo(null);
                     navigate({ ...route, mailCompose: false, threadId: result.threadId });
+                    if (result.threadId) setNewMailNote({ threadId: result.threadId, text: sentNoteText(result) });
                     bump();
                   }}
                 />
@@ -975,6 +979,7 @@ export function App() {
                   key={route.threadId}
                   threadId={route.threadId}
                   refresh={refresh}
+                  notice={newMailNote?.threadId === route.threadId ? newMailNote.text : null}
                   onChanged={bump}
                   caseTasks={caseTasks}
                   onReauthRequired={bump}
