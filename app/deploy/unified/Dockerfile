@@ -11,6 +11,10 @@ RUN npm run build && npm prune --omit=dev
 RUN chmod -R a+rX dist node_modules package.json
 
 FROM node:24.20.0-bookworm-slim
+# The commit the image was built from, so a running container can be traced back to main (docker inspect).
+ARG GIT_COMMIT=unknown
+LABEL org.opencontainers.image.revision=$GIT_COMMIT \
+      org.opencontainers.image.source=https://github.com/MasterMk2/iyakusai-platform
 ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=build /src/package.json ./

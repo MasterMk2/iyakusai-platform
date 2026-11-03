@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, connect, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -68,7 +68,9 @@ describe('the "send" settings', () => {
       const c = parseMailboxConfig({ SMM_MAIL_DIR: path.join(d, 'data'), SMM_MAIL_CONFIG: file }, true);
       expect(c?.send?.smtp.password).toBe('abcdefghijklmnop');
       if (process.platform !== 'win32') {
-        writeFileSync(pwFile, 'abcdefghijklmnop', { mode: 0o644 });
+        // mode only applies when a file is created; the file already exists here
+        writeFileSync(pwFile, 'abcdefghijklmnop');
+        chmodSync(pwFile, 0o644);
         expect(() => parseMailboxConfig({ SMM_MAIL_DIR: path.join(d, 'data'), SMM_MAIL_CONFIG: file }, true)).toThrow(/600/);
       }
     } finally {

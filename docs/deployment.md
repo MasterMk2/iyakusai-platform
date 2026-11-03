@@ -172,8 +172,19 @@ GAS は 3 つあります。どれも Gmail・ドライブに対して読むか�
 
 ## 7. 更新と切り戻し
 
-1. 手元で `npm run check`（[getting-started.md](getting-started.md) §2）を通す。
-2. 新しいタグでイメージを作る。古いイメージは消さない（戻すために使う）。
+運用に入れる版は、いつも main のコミットから作ります。作業の枝・手元の作業ツリー・ビルド済みのファイルへの差し替えからは作りません。運用中のファイルを直接直すこともしません（直したいときは main への PR にする）。
+
+1. 変更を main への PR にし、CI（`.github/workflows/ci.yml`）が通ってからマージする。CI は lint・型検査・ビルド・試験（既知の失敗は `app/tests/known-failures.json`）と、イメージのビルドと起動を確かめる。
+2. 入れる main のコミットを決め、そのコミットからイメージを作る。タグは `<日付>-<コミットの先頭 12 文字>` にする。古いイメージは消さない（戻すために使う）。
+
+   ```sh
+   git clone https://github.com/MasterMk2/iyakusai-platform.git && cd iyakusai-platform
+   git checkout <コミット>
+   cd app
+   docker build -f deploy/unified/Dockerfile --build-arg GIT_COMMIT="$(git rev-parse HEAD)" -t iyakusai-app:<日付>-<コミットの先頭 12 文字> .
+   ```
+
+   作ったコミットは、イメージのラベル `org.opencontainers.image.revision` に入る。動いている版のコミットは `docker inspect -f '{{ index .Config.Labels "org.opencontainers.image.revision" }}' <コンテナ名>` で確かめる。
 3. compose のタグを変えて `docker compose up -d`。
 4. コンテナが healthy になること、ログインできること、物品の画面が開くことを確かめる。healthy にならず再起動を繰り返すときは、すぐに前のタグへ戻してから原因を調べる。
 5. データの形が変わる更新では、先に §5 のバックアップを取る。

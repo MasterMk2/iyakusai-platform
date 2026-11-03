@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { StateStore } from '../../src/server/domain/store.js';
@@ -451,6 +451,7 @@ describe('failure injection, retry and persistence', () => {
   afterAll(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
 
   it('persists changes to the local demo file and resets to the synthetic sample', async () => {
+    mkdirSync(join(process.cwd(), '.tmp'), { recursive: true });
     const dir = mkdtempSync(join(process.cwd(), '.tmp', 'api-'));
     dirs.push(dir);
     const file = join(dir, 'state.json');
