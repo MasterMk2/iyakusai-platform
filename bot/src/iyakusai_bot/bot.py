@@ -143,13 +143,16 @@ class IyakusaiBot(commands.Bot):
                 await self.add_cog(Assistant(self, self.cfg.assistant, assistant_store,
                                              reminders=ReminderStore(self.cfg.data_dir)))
                 log.info("統合アプリの Bot タブ連携を有効化")
+        from .roles import RoleStatus
+        await self.add_cog(RoleStatus(self, self.cfg.mirror_dir))
         from .help import Help
         await self.add_cog(Help(self, ai_enabled=provider is not None,
                                 haiku_enabled=self.cfg.haiku_enabled,
                                 haiku_mode=self.cfg.haiku_mode, video_enabled=video_enabled,
                                 tasks_enabled=task_settings.enabled,
                                 assistant_enabled=self.get_cog("Assistant") is not None,
-                                image_enabled=self.get_cog("Images") is not None))
+                                image_enabled=self.get_cog("Images") is not None,
+                                roles_enabled=self.get_cog("RoleStatus") is not None))
         # F3: Discord 収集の常駐化(raw を最新化 → /ask の raw 検索に反映)
         if self.cfg.collect_enabled and self.cfg.knowledge_dir:
             from .collector import Collector

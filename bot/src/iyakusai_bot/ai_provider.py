@@ -221,7 +221,7 @@ def agent_stage_deadline(deadline: float) -> float:
 ABOUT_ME = """\
 - 名前: IyakusaiBot。医薬祭実行委員会のDiscord用アシスタント。
 - できること: /ask(資料を検索して出典付きで回答)・/doc(文書のたたき台を起草)・
-  /remind(リマインド・催促)・/usage(AI使用量)・/persona(口調の恒久切替)・
+  /remind(リマインド・催促)・/usage(AI使用量)・/roles(Discord のロールの付与状況)・/persona(口調の恒久切替)・
   /haiku(発言がたまたま5-7-5だとその発言に🎋を付ける。句は /haiku list で読める。
   対象外にするなら /haiku optout)。詳しい使い方は /help。
 - 仕組み: 質問から共有ドライブの目録(_目録)にある digest・要約・文書の原文・メール/Discord/LINE の

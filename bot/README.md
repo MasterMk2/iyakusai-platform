@@ -23,6 +23,7 @@
 | 統合アプリの Bot タブ | アプリから受けた依頼（ジョブ）を実行して結果を返す（[取り決め](../docs/contracts/bot-front.md)） | `assistant_*.py` |
 | 基盤のデータ | 統合アプリの物品と受信箱の状態を `/ask` の資料に加える（[取り決め](../docs/contracts/bot-datasource.md)） | `kiban.py`・`kiban_cog.py` |
 | 収集 | Discord の記録の収集（`collectors/discord/`）を定期的に動かす | `collector.py` |
+| `/roles` | Discord のロールごとの人数・そのロールの人・その人のロールを表示する。同じ内容を約 10 分ごとに `/ask` の資料へ写す。メンバーは REST で読むので、Server Members Intent の許可が要る（Gateway では要求しない） | `roles.py`・`role_logic.py` |
 | そのほか | 使い方（`/help`）、AI の使用量（`/usage`）、口調の設定、連絡先の案内、俳句の検出など | `help.py`・`usage.py`・`persona*.py`・`contact.py`・`haiku*.py` |
 
 AI の呼び出しは `ai_provider.py` にまとめています。Claude のコマンドライン（`claude -p`）を使い、つながらないときは検索の結果をそのまま返します。
