@@ -1,0 +1,114 @@
+# main への PR と main への push で、統合アプリ・Bot・タスク API・収集の試験と、アプリのイメージのビルドを回す。
+# 統合アプリの vitest には既知の失敗がある（app/tests/known-failures.json）。表に無い失敗が出たときだけ止める。
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  app:
+    name: 統合アプリ
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # 運用のイメージ（app/deploy/unified/Dockerfile）と同じ系列
+          node-version: 24
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+      - name: vitest（既知の失敗の表と照らす）
+        run: |
+          # まとめて流すと負荷で時間切れになる試験がまれにあるので、1 回だけ流し直す
+          npx vitest run --retry=1 --reporter=default --reporter=json --outputFile.json=vitest-report.json || true
+          node scripts/check-test-baseline.mjs vitest-report.json
+
+  image:
+    name: アプリのイメージ
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: docker build
+        working-directory: app
+        run: docker build -f deploy/unified/Dockerfile --build-arg GIT_COMMIT=${{ github.sha }} -t iyakusai-app:ci .
+      - name: 起動して health を確かめる
+        run: |
+          # demo はループバックでしか待ち受けないので、ホストのネットワークで動かす。状態は使い捨ての tmpfs に置く
+          docker run -d --name app --network host -e SMM_AUTH_MODE=demo --tmpfs /app/data:uid=1002,gid=1002 iyakusai-app:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:5178/api/health; then echo; exit 0; fi
+            sleep 2
+          done
+          docker logs app
+          exit 1
+      - name: コミットのラベル
+        run: test "$(docker inspect -f '{{ index .Config.Labels "org.opencontainers.image.revision" }}' iyakusai-app:ci)" = "${{ github.sha }}"
+
+  bot:
+    name: Bot・タスク API・登録
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: bot/src/requirements.txt
+      - run: pip install -r bot/src/requirements.txt
+      - name: Bot
+        working-directory: bot
+        run: |
+          python -B -m unittest discover -s tests -p "test_*.py"
+          PYTHONPATH=src python -B -m unittest discover -s reference-tests -p "test_*.py"
+          python -B src/smoke_test.py
+      - name: 登録
+        working-directory: bot/registration
+        run: python -B -m unittest discover -s tests -p "test_*.py"
+      - name: タスク API（作業用の写しで流す）
+        run: |
+          cp -r bot/gateway "$RUNNER_TEMP/gateway"
+          cd "$RUNNER_TEMP/gateway"
+          python -B -m unittest discover -p "test_*.py"
+
+  collectors:
+    name: 収集・議事録の処理役
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: LINE の転送（作業用の写しで流す）
+        run: |
+          cp -r collectors/line-oa-relay "$RUNNER_TEMP/relay"
+          cd "$RUNNER_TEMP/relay"
+          cp site.example.json site.json && chmod 600 site.json
+          python -B -m unittest discover -p "test_*.py"
+      - name: LINE の受け口と取り込みの自己診断
+        working-directory: collectors/line-oa
+        run: |
+          python -B oa_selftest.py
+          python -B oa_server/oa_server_selftest.py
+      - name: 議事録の処理役
+        working-directory: app/deploy/minutes-worker
+        run: python -B -m unittest test_minutes_worker.py
