@@ -92,3 +92,4 @@ npm run test:e2e    # ブラウザの試験（Playwright の Chromium。ビル�
 - [LINE 連携](docs/line-integration.md)・[LINE の返信の取り決め](docs/line-reply-contract.md)
 - [タスクサービスの API](docs/task-service/integration-api.md) とその設計（`docs/task-service/`）
 - 物品貸出：`docs/unified/rental-workflow.md` など
+- 決定事項の台帳：[docs/decisions.md](docs/decisions.md)（決めたことの登録・変更・取り消し、Bot の読み取り）

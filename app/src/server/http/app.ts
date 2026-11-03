@@ -4,8 +4,12 @@ import cookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import { z } from 'zod';
 import { HANDLING_STATUSES, LIMITS, type ApiError, type FaultState, type SessionResponse, type SessionUser } from '../../shared/api.js';
+import { departmentsOfLabel, TEMPORARY_STAFF_DEPARTMENT } from '../../shared/mailbox.js';
 import { installAccount, type AccountRuntime } from '../account/http.js';
 import { installDiscordAuth, type DiscordAuthRuntime } from '../discord-auth/http.js';
+import { isTemporaryStaffLoginId } from '../discord-auth/temporary-staff.js';
+import { registerDecisionRoutes } from '../decisions/routes.js';
+import type { DecisionsStore } from '../decisions/store.js';
 import { assertMappedUsers, ConfigError, IDENTITY_HEADER, isValidIdentity, normalizeAddress, type AuthConfig, type TrustedProxyAuth } from '../auth.js';
 import { MockInboundConnector, type MockConnectorOptions } from '../connector/mock.js';
 import type { InboundConnector } from '../connector/types.js';
@@ -60,6 +64,8 @@ export interface AppOptions {
   mailbox?: MailboxRuntime | null;
   /** Discord login only: key of the Bot's read-only data source (POST /v1/bot/datasource). Absent: the route does not exist. */
   botDatasourceKey?: Buffer | null;
+  /** The decision register (decisions.sqlite3). Absent: the register is off (its meta route answers enabled: false). */
+  decisions?: DecisionsStore | null;
 }
 
 const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '[::1]']);
@@ -421,6 +427,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
         parse,
         publicOrigin: auth.mode === 'discord' ? auth.publicOrigin : null,
         fromTrustedProxy: (request) => discordApi!.fromTrustedProxy(request),
+        decisions: options.decisions ?? null,
       })
     : null;
 
@@ -428,6 +435,18 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   registerAssistantRoutes(app, { assistant: options.assistant ?? null, mailDraftBcc: options.mailbox?.config.draftBccAddress ?? null, parse, requireUser });
 
   await registerRentalRoutes(app, { rental: options.rental ?? null, requireUser, lookupUser: (userId) => (discordApi ? discordApi.lookupUser(userId) : findUser(store.current, userId)), listUsers: () => discordApi ? discordApi.listUsers() : store.current.users.filter((u) => !u.disabled) });
+  // Decision register (2026-11-03): committee members only. Temporary staff and a Discord-less account are refused, reads too.
+  registerDecisionRoutes(app, options.decisions ?? null, {
+    viewer: (request) => {
+      const user = requireUser(request);
+      if (user.disabled || isTemporaryStaffLoginId(user.id) || departmentsOfLabel(user.roleLabel).includes(TEMPORARY_STAFF_DEPARTMENT)) return null;
+      if (discordApi && (discordApi.discordUserIdOf(user.id) === null || discordApi.currentSession(request)?.discordUserId.startsWith('staff:'))) return null;
+      return user;
+    },
+    nameOf: (userId) => (discordApi ? discordApi.lookupUser(userId)?.displayName : findUser(store.current, userId)?.displayName) ?? '（不明な利用者）',
+    clock,
+    parse,
+  });
   // Copy to Google Drive: signed requests of the committee's Apps Script, Discord login only (the gate lets its report through).
   if (options.rental?.driveSyncKey) {
     if (auth.mode !== 'discord') throw new ConfigError('物品の Drive 同期は discord モードでだけ使えます。');
@@ -440,6 +459,8 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       rental: options.rental ?? null,
       mailbox,
       tasks: options.tasks ?? null,
+      decisions: options.decisions ?? null,
+      origin: auth.mode === 'discord' ? auth.publicOrigin : null,
       displayName: (userId) => discordApi!.rosterNameOf(userId),
       now: () => Date.parse(clock()),
     });

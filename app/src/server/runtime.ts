@@ -43,6 +43,8 @@ import { seedRentalDemo } from './rental/seed.js';
 import { CommitteeAddresses } from './mailbox/addresses.js';
 import type { MailboxRuntime } from './mailbox/routes.js';
 import { MailboxStore } from './mailbox/store.js';
+import { DecisionsStore } from './decisions/store.js';
+import { seedDecisionsDemo } from './decisions/seed.js';
 
 // Server composition from a validated configuration (used by main.ts and by tests that exercise
 // the real production composition). Nothing here listens or installs signal handlers.
@@ -314,6 +316,19 @@ export async function composeServer(config: ServerConfig, overrides: ComposeOver
     }
   }
 
+  // Decision register (2026-11-03): decisions.sqlite3 next to mail.sqlite3 in production (so the mail folder's backup
+  // carries it); in the demo, next to the demo data file, starting with synthetic decisions. Off in other modes.
+  let decisions: DecisionsStore | null = null;
+  const decisionsDir = config.mailbox ? config.mailbox.dataDir : config.auth.mode === 'demo' ? path.dirname(config.dataFile) : null;
+  if (decisionsDir) {
+    try {
+      decisions = new DecisionsStore(decisionsDir);
+    } catch {
+      if (config.mailbox) refuse('決定事項の保存先（受信箱の保存先）を開けないか、保存ファイルの形式が正しくありません。ファイルは変更していません。');
+    }
+    if (decisions && config.auth.mode === 'demo') seedDecisionsDemo(decisions, initial.users.find((u) => u.canManageAccess)?.id ?? initial.users[0]?.id ?? 'system', now);
+  }
+
   // Bot tab: the Bot host's signed assistant API, on the task API's host and key, with the same identity bridge.
   const assistant: AssistantRuntime | null =
     config.assistant.mode === 'on' && tasks
@@ -330,9 +345,14 @@ export async function composeServer(config: ServerConfig, overrides: ComposeOver
     rental,
     mailbox,
     botDatasourceKey: config.botDatasourceKey,
+    decisions,
     ...(discord ? { discord } : {}),
     ...(account ? { account } : {}),
     ...(line ? { line } : {}),
   });
+  if (decisions) {
+    const opened = decisions;
+    app.addHook('onClose', async () => opened.close());
+  }
   return { app, account, hosted };
 }

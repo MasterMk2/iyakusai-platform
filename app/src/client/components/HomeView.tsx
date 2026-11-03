@@ -1,3 +1,4 @@
+import { DecisionsHomeCard } from './decisions/DecisionsHomeCard';
 import { useCallback, useState, type FormEvent, type ReactNode } from 'react';
 import type { MailboxSummary } from '../../shared/api';
 import type { AssistantSummary } from '../../shared/assistant';
@@ -195,6 +196,7 @@ export function HomeView({
           {rental && <RentalCard loader={rentalSummary} />}
           <BotSummaryCard loader={bot} onOpenBot={onOpenBot} />
           {onOpenContacts && <ContactsCard onOpen={onOpenContacts} />}
+          <DecisionsHomeCard />
         </div>
       </div>
     </main>

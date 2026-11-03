@@ -6,20 +6,22 @@ import type { RentalRuntime } from '../rental/routes.js';
 import type { RentalSummary, OverviewItem } from '../rental/store.js';
 import { MAX_SKEW_MS, verifySignature } from '../tasks/signing.js';
 import type { TaskRuntime } from '../tasks/routes.js';
+import { botDecisions, type BotDecisionsResponse } from '../decisions/bot.js';
+import type { DecisionsStore } from '../decisions/store.js';
 
 // Read-only data source of IyakusaiBot (../docs/contracts/bot-datasource.md): the Bot host posts a signed
 // request every few minutes and answers /ask from what comes back (the rental ledger, and the handling state of
 // the committee mailbox). svc-auth/v1 with a key of its own (client "iyakusai-bot-datasource", no actor), so a
 // leak reveals no other secret and can only read. Every failure is the same 401, so a caller learns nothing.
 //
-//   POST /v1/bot/datasource    {"sources":["rental","mailbox"]}    (1 or 2 distinct sources, 1 KB at most)
+//   POST /v1/bot/datasource    {"sources":["rental","mailbox","decisions"]}    (1 to 3 distinct sources, 1 KB at most)
 
 export const BOT_DATASOURCE_PATH = '/v1/bot/datasource';
 export const BOT_DATASOURCE_CLIENT = 'iyakusai-bot-datasource';
 export const MAX_REQUEST_BYTES = 1024;
 export const MAX_MESSAGES = 5000;
 const MAX_NONCES = 1024;
-const SOURCES = ['rental', 'mailbox'] as const;
+const SOURCES = ['rental', 'mailbox', 'decisions'] as const;
 type Source = (typeof SOURCES)[number];
 const UNKNOWN_PERSON = '（不明）';
 const REJECTED = { error: 'rejected' };
@@ -29,6 +31,10 @@ export interface BotDatasourceRuntime {
   rental: RentalRuntime | null;
   mailbox: MailboxRuntime | null;
   tasks: TaskRuntime | null;
+  /** The decision register (2026-11-03); answered only when `decisions` is requested. */
+  decisions: DecisionsStore | null;
+  /** The app's public origin (https://…) for the links in the decision view, or null. */
+  origin: string | null;
   /** Roster name of an account, or null (never a student ID or login ID). */
   displayName: (userId: string) => string | null;
   now?: () => number;
@@ -55,6 +61,8 @@ export interface BotDatasourceResponse {
   generatedAt: string;
   rental: { summary: RentalSummary; items: OverviewItem[] } | null;
   mailbox: { mailboxes: { id: string; name: string; threads: number; unhandled: number }[]; messages: BotMailMessage[] } | null;
+  /** Only when requested: the register's newest changes (docs/contracts/bot-datasource.md §3). */
+  decisions?: BotDecisionsResponse | null;
 }
 
 /** The sender's display name only: none when it is absent or is itself an address (no address is handed over). */
@@ -193,6 +201,7 @@ export function attachBotDatasource(app: FastifyInstance, rt: BotDatasourceRunti
         generatedAt: new Date(now()).toISOString(),
         rental: sources.has('rental') && rt.rental ? { summary: rt.rental.store.summary(), items: rt.rental.store.overview().items } : null,
         mailbox: sources.has('mailbox') && rt.mailbox ? mailboxView(rt, rt.mailbox) : null,
+        ...(sources.has('decisions') ? { decisions: rt.decisions ? botDecisions(rt.decisions, rt.origin) : null } : {}),
       };
       // The path is not under /api/, so the app's no-store rule does not cover it.
       return reply.header('Cache-Control', 'no-store').send(response);

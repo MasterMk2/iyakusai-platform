@@ -6,6 +6,7 @@ import type { InboxResponse } from '../../shared/line.js';
 import { MAIL_ATTACHMENTS_MAX, MAIL_BODY_MAX, MAIL_SUBJECT_MAX, REAUTH_REQUIRED, type MailSendOptions, type MailStatusResponse } from '../../shared/mailbox.js';
 import { registerContactRoutes } from '../contacts/routes.js';
 import { ContactsStore } from '../contacts/store.js';
+import type { DecisionsStore } from '../decisions/store.js';
 import { registerMinutesRoutes } from '../minutes/routes.js';
 import { MinutesStore } from '../minutes/store.js';
 import { DomainError, notFound, type User } from '../domain/types.js';
@@ -70,6 +71,8 @@ export interface MailboxRouteDeps {
   publicOrigin?: string | null;
   /** The request came through the trusted reverse proxy (socket address); the internal routes refuse it. */
   fromTrustedProxy?: (request: FastifyRequest) => boolean;
+  /** The decision register, for the minutes' decision items (null or absent: the register is off). */
+  decisions?: DecisionsStore | null;
 }
 
 /** Mail as a source of committee tasks (the task routes check it before linking or showing a task's origin). */
@@ -197,7 +200,7 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
         minutes = null;
       }
     }
-    registerMinutesRoutes(app, rt.config.minutes, minutes, { requireUser: deps.requireUser, session: deps.session, people: deps.people, discordUserIdOf: deps.discordUserIdOf, clock: deps.clock, ...(deps.now ? { now: deps.now } : {}), parse: deps.parse });
+    registerMinutesRoutes(app, rt.config.minutes, minutes, { requireUser: deps.requireUser, session: deps.session, people: deps.people, discordUserIdOf: deps.discordUserIdOf, clock: deps.clock, ...(deps.now ? { now: deps.now } : {}), parse: deps.parse, decisions: deps.decisions ?? null });
   }
 
   // The official LINE account (2026-10-28), when line.json is next to the mail configuration. It shares the mail

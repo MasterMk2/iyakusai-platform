@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { STATUS_LABELS, type Address, type ReceiptView, type ThreadDetailResponse } from '../../shared/api';
+import { DecisionRegisterLink } from './decisions/DecisionRegisterLink';
+import { japanDay } from './decisions/decisionLinks';
 import { isMailAddress, REAUTH_REQUIRED, type MailSendOptions, type MailSendResponse } from '../../shared/mailbox';
 import { api, fmtDate } from '../api';
 import { useLoader } from '../useLoader';
@@ -322,6 +324,9 @@ export function ThreadDetail({
               <span>{receipts.length} 通</span>
               <span>最新 {fmtDate(latest.receivedAt)}</span>
             </p>
+            <div className="actions">
+              <DecisionRegisterLink prefill={{ title: data.subject, decidedOn: japanDay(latest.receivedAt), source: { kind: 'mail', refId: threadId, label: data.subject || 'メール', link: `#/all?thread=${threadId}` } }} />
+            </div>
           </header>
           {threadStatus && (
             <section className="thread-status" aria-label="スレッドの対応状況">

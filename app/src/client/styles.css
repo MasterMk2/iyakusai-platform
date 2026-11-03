@@ -1292,3 +1292,69 @@ button.task-tree-toggle:focus-visible { outline-offset: -3px; }
 @media (max-width: 340px) {
   .global-nav a { padding-left: 0; padding-right: 0; font-size: 13px; }
 }
+
+/* Decision register (2026-11-03): the list beside the decision; one pane on a phone. Status words always show next to their colour. */
+.decisions-layout { grid-template-columns: minmax(340px, 0.9fr) minmax(0, 1fr); align-items: start; }
+.decisions-layout .decisions-list,
+.decisions-layout .decisions-detail { min-width: 0; }
+.decisions-detail { display: grid; gap: 12px; max-width: 780px; }
+.decisions-layout .detail-placeholder { padding: 16px; }
+.decision-form,
+.decision-detail,
+.decisions-list,
+.minutes-decisions { display: grid; gap: 12px; }
+.decision-form .field,
+.decisions-list .field,
+.minutes-decisions .field,
+.decision-detail .field { display: grid; gap: 4px; }
+.decision-form .field-row,
+.decisions-list .field-row,
+.minutes-decisions .field-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; align-items: end; }
+.decision-form input:not([type='checkbox']),
+.decision-form select,
+.decision-form textarea,
+.decisions-list input:not([type='checkbox']),
+.decisions-list select,
+.decision-revoke input,
+.minutes-decisions select { width: 100%; max-width: 100%; box-sizing: border-box; font: inherit; }
+.chip-check input[type='checkbox'] { width: auto; min-height: 0; margin: 0; }
+.decision-more > summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; font-weight: 600; }
+.decision-more[open] > summary { margin-bottom: 8px; }
+.decision-form fieldset,
+.decision-depts { border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; margin: 0; min-width: 0; display: grid; gap: 8px; }
+.decision-form legend { padding: 0 4px; }
+.chip-row { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.chip-check { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; }
+.decision-sources .source-row { display: grid; grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.3fr); gap: 6px; padding-bottom: 8px; border-bottom: 1px dashed var(--line); }
+.decision-sources .source-row button { justify-self: start; }
+.decision-filters { display: grid; gap: 8px; }
+.decisions-list .panel-head { flex-wrap: wrap; }
+.decision-list-items { list-style: none; padding: 0; margin: 0; }
+.decision-list-items li { border-top: 1px solid var(--line); }
+.decision-row { display: grid; gap: 4px; padding: 10px 4px; color: inherit; text-decoration: none; }
+.decision-row[aria-current='true'] { background: var(--surface); }
+.decision-row-title { font-weight: 600; overflow-wrap: anywhere; }
+.decision-status { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 14px; font-weight: 600; white-space: nowrap; }
+.decision-status-active { color: #126744; background: #dcefe6; }
+.decision-status-changed { color: #865006; background: #fff0cf; }
+.decision-status-revoked { color: #172c40; background: #edf2f7; }
+.decision-body { white-space: pre-wrap; margin: 0; overflow-wrap: anywhere; }
+.decision-chain { padding-left: 1.4em; display: grid; gap: 8px; margin: 0; }
+.decision-history { font-size: 15px; }
+.decision-revoke { display: grid; gap: 8px; border-top: 1px solid var(--line); padding-top: 12px; }
+.decision-actions { flex-wrap: wrap; }
+.decisions-layout .pager { display: flex; gap: 8px; justify-content: space-between; flex-wrap: wrap; }
+.decisions-layout .empty-state { display: grid; gap: 8px; }
+.home-decisions .rows li { padding: 4px 0; overflow-wrap: anywhere; }
+.minutes-decisions .minutes-decision-items li { padding: 6px 0; border-top: 1px solid var(--line); }
+@media (max-width: 900px) {
+  .decisions-layout { grid-template-columns: minmax(0, 1fr); }
+  .decisions-layout:not(.has-detail) .decisions-detail { display: none; }
+  .decisions-layout.has-detail .decisions-list { display: none; }
+}
+@media (max-width: 680px) {
+  .decision-form .field-row,
+  .decisions-list .field-row,
+  .minutes-decisions .field-row,
+  .decision-sources .source-row { grid-template-columns: minmax(0, 1fr); }
+}

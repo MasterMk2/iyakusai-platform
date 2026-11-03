@@ -1,3 +1,4 @@
+import { MinutesDecisionPanel } from '../decisions/MinutesDecisionPanel';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from 'react';
 import {
   fmtOffset,
@@ -698,6 +699,8 @@ function MinutesDetailView({ meetingId, onBack }: { meetingId: string; onBack: (
                   </li>
                 ))}
               </ul>
+              {/* Registered after the minutes are confirmed (the text the people confirmed), never from the AI draft. */}
+              {m.stage === 'confirmed' && d.decisions.length > 0 && <MinutesDecisionPanel meetingId={m.id} heldOn={m.heldOn} visibility={m.visibility} items={d.decisions} />}
               {d.todos.length > 0 && <h4>ToDo</h4>}
               <ul className="rows">
                 {d.todos.map((x, i) => (
