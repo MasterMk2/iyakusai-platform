@@ -128,6 +128,9 @@ class Config:
     # Bot が自分から投稿する先([notify]・2026-11-03)と、週1回のタスク一覧([weekly])。省略時は従来どおり・OFF
     notify: NotifySettings = field(default_factory=NotifySettings)
     weekly: WeeklySettings = field(default_factory=WeeklySettings)
+    # /line返信(#公式line転送 のスレッドから公式LINE へ返信・2026-11-02。line_reply.LineReplySettings で検証)。
+    # app_url・key_file・forum_channel_id のどれかが無ければコマンドは「設定されていません」と答えるだけ。
+    line_reply: dict = field(default_factory=dict)
     # digest 本文の鮮度リマインド(収集後に「digest が raw に遅れていないか」を通知)
     collect_staleness_threshold: int = 30      # 未反映がこの件数以上で digest 再生成を促す
     collect_staleness_channel_id: int | None = None  # 通知先チャンネルID(未設定ならログのみ)
@@ -497,6 +500,7 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         kiban=raw.get("kiban", {"enabled": False}),
         notify=_notify_section(raw),
         weekly=_weekly_section(raw),
+        line_reply=raw.get("line_reply", {}),
         collect_staleness_threshold=_as_int(collect.get("staleness_threshold"),
                                             "collect.staleness_threshold", 30),
         # チャンネルIDは「未設定・0・空文字なら None(通知しない)」の判定をそのまま残す

@@ -76,6 +76,7 @@ COMMAND_KINDS: dict[str, str] = {
     "neta_video": "send",
     "assistant.doc": "send",
     "assistant.image": "send",
+    "line返信": "send",              # 公式LINE への返信（line_reply_cog）
     # 管理
     "persona.set": "admin",
     "persona.off": "admin",
