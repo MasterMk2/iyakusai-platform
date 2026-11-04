@@ -183,3 +183,11 @@ timeout_sec = 20
 # follow_up_days = 2                        # 担当なしのまま何日たったら追い投稿するか(1〜14・既定 2)
 # mention_candidates = false                # true のときだけ、追い投稿で候補の人に通知を鳴らす(既定 false)
 # candidate_limit = 5                       # 未割当の一覧に出す件数(1〜5・既定 5)
+
+# [line_reply]
+# /line返信：#公式line転送 のフォーラムの団体ごとのスレッドから、公式LINE へ返信する(本人だけに確認を出してから送る)。
+# 統合アプリの内部 API(/internal/line/discord/preview・send)を呼ぶ。3 つのどれかが無ければ「設定されていません」と答えるだけ。
+# app_url = "http://iyakusai-app:5178"      # 統合アプリのオリジン(パスなし)。http は内部の網だけ
+# key_file = "/home/<BOT_USER>/.iyakusai/line-discord.key"   # この口専用の鍵(600)。アプリの line.json の discord.keyFile と同じ値。今の Bot は Bearer で送るので discord.auth は "bearer"
+# forum_channel_id = 1000000000000000007    # #公式line転送 のフォーラム(合成ID)
+# timeout_sec = 15                          # 1〜15

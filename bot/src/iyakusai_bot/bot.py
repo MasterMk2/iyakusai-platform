@@ -159,6 +159,7 @@ class IyakusaiBot(commands.Bot):
                 log.info("統合アプリの Bot タブ連携を有効化")
         from .roles import RoleStatus
         await self.add_cog(RoleStatus(self, self.cfg.mirror_dir))
+        await self._setup_line_reply()
         from .help import Help
         await self.add_cog(Help(self, ai_enabled=provider is not None,
                                 haiku_enabled=self.cfg.haiku_enabled,
@@ -228,6 +229,25 @@ class IyakusaiBot(commands.Bot):
         await self.add_cog(KibanSyncCog(self, sync, settings.interval_sec))
         log.info("基盤システムの写しを有効化 (タスク=%s, アプリ=%s, 間隔=%d秒)",
                  "あり" if list_tasks else "なし", "/".join(settings.sources) or "なし", settings.interval_sec)
+
+    async def _setup_line_reply(self) -> None:
+        """/line返信(#公式line転送 のスレッドから公式LINE へ返信・2026-11-02)。
+
+        コマンドは常に登録し、設定(app_url・key_file・forum_channel_id)が揃わない・誤っている・
+        鍵を読めないときは「この機能は設定されていません」と答えるだけにする(Bot 全体は止めない)。
+        """
+        from .line_reply import LineReplyConfigError, LineReplySettings, load_key
+        from .line_reply_cog import LineReply
+        settings, key = LineReplySettings(), None
+        try:
+            settings = LineReplySettings.from_mapping(self.cfg.line_reply)
+            if settings.configured:
+                key = await asyncio.to_thread(load_key, settings.key_file)
+        except LineReplyConfigError as e:
+            log.error("/line返信 を停止(設定の誤り): %s", e)
+            settings, key = LineReplySettings(), None
+        await self.add_cog(LineReply(self, settings, key))
+        log.info("/line返信: %s", "有効" if settings.configured and key else "未設定(案内だけ返す)")
 
     async def _on_app_command_error(self, itx: discord.Interaction, error: Exception):
         """どのコマンドでも捕り漏らした例外を最後に受け止め、**必ず利用者に返す**。
