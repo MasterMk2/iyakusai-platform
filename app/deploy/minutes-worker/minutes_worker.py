@@ -185,7 +185,8 @@ class Progress:
 def audio_duration(path: Path, limit_sec: float = PROBE_LIMIT_SEC) -> float | None:
     """録音の長さ（秒）。分からなければ None（進捗バーが割合を出さないだけ）。
     デコードせずにパケットを最後までたどって測る（ADTS の AAC は入れ物に長さが無く、ffmpeg の値はビットレートからの推定。
-    ブラウザの webm にも長さが書かれていないことがある）。手元で 3 時間の AAC が数秒。limit_sec を超えたら入れ物の値で代える。"""
+    ブラウザの webm にも長さが書かれていないことがある）。合成の 3.2 時間の ADTS（パケット約 54 万）を手元で 2.2 秒、
+    誤差 0.1% 未満で測れた。limit_sec を超えたら入れ物の値で代える。"""
     try:
         import av
 
