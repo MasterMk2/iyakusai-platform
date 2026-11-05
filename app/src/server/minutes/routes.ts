@@ -20,6 +20,7 @@ import {
   type MinutesListResponse,
   type MinutesMeta,
   type MinutesPerson,
+  type MinutesProgress,
 } from '../../shared/minutes.js';
 import { SESSION_COOKIE } from '../discord-auth/http.js';
 import { isTemporaryStaffLoginId } from '../discord-auth/temporary-staff.js';
@@ -46,7 +47,16 @@ import { checkedDraft, draftSchema, transcriptSchema } from './validate.js';
 // administrator.
 
 export const WORKER_CLIENT = 'iyakusai-minutes-worker';
-export const WORKER_PATHS = { claim: '/v1/minutes/worker/claim', audio: '/v1/minutes/worker/audio', result: '/v1/minutes/worker/result' } as const;
+export const WORKER_PATHS = {
+  claim: '/v1/minutes/worker/claim',
+  audio: '/v1/minutes/worker/audio',
+  result: '/v1/minutes/worker/result',
+  progress: '/v1/minutes/worker/progress',
+} as const;
+/** Meetings whose progress is kept at once (one per running stage; more only if reports outlive their leases). */
+const MAX_REPORTED = 200;
+/** The pace of a stage is told only after this long, so the first seconds (download, loading the model) do not skew it. */
+const PACE_AFTER_MS = 30_000;
 const WORKER_BODY_MAX = 16 * 1024 * 1024;
 const MAX_NONCES = 1024;
 const REJECTED = { error: 'rejected' };
@@ -123,6 +133,25 @@ const resultBody = z.strictObject({
   draft: draftSchema.optional(),
   error: z.string().max(500).optional(),
 });
+/** transcribe: seconds of the recording; summarize: parts of the transcript. */
+const progressBody = z.strictObject({
+  id: z.string().regex(/^mt_[0-9a-f]{16}$/),
+  leaseToken: z.string().min(16).max(64),
+  stage: z.enum(['transcribe', 'summarize']),
+  done: z.number().min(0).max(1_000_000),
+  total: z.number().positive().max(1_000_000).nullable(),
+});
+
+/** A stage's progress as the worker reported it, with where the pace is counted from. */
+interface Reported {
+  stage: WorkerStage;
+  leaseToken: string;
+  done: number;
+  total: number | null;
+  firstAt: number;
+  firstDone: number;
+  at: number;
+}
 
 /** The extension of an upload, from its name or else its type; null when it is not a recording we take. */
 export function audioExtension(filename: string | undefined, mimetype: string | undefined): MinutesAudioExtension | null {
@@ -207,6 +236,24 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
     return { user, row };
   }
 
+  // Progress of the running stages (2026-11-05), in memory only: it is a display aid, and the worker reports again
+  // within seconds after a restart. A report counts only while its lease still holds the stage, so a report of a lease
+  // that ran out (and was claimed again) is not shown.
+  const reported = new Map<string, Reported>();
+  const holds = (row: MeetingRow, p: { stage: WorkerStage; leaseToken: string }) => row.stage === `${p.stage}_run` && row.leaseToken === p.leaseToken;
+
+  const progressOf = (row: MeetingRow): MinutesProgress | null => {
+    const p = reported.get(row.id);
+    if (!p || !holds(row, p)) return null;
+    const ageMs = Math.max(0, now() - p.at);
+    // A recording's length is sometimes an estimate, so a running stage never shows 100.
+    const percent = p.total === null ? null : Math.min(99, Math.max(0, Math.floor((p.done / p.total) * 100)));
+    const elapsed = p.at - p.firstAt;
+    const gained = p.done - p.firstDone;
+    const remaining = p.total !== null && elapsed >= PACE_AFTER_MS && gained > 0 ? (Math.max(0, p.total - p.done) * elapsed) / gained - ageMs : null;
+    return { stage: p.stage, done: p.done, total: p.total, percent, remainingSec: remaining === null ? null : Math.max(0, Math.round(remaining / 1000)), ageSec: Math.round(ageMs / 1000) };
+  };
+
   const detail = (row: MeetingRow, user: User): MinutesDetail => {
     const keeps = row.confirmedAt && !row.audioDeletedAt ? dayAfter(row.confirmedAt, config.audioRetentionDays) : null;
     return {
@@ -216,6 +263,7 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
       stage: row.stage,
       failedStage: row.stage === 'failed' ? row.failedStage : null,
       error: row.stage === 'failed' ? row.error : null,
+      progress: progressOf(row),
       visibility: row.visibility,
       viewers: row.viewers.map((id) => ({ id, name: nameOf(id) })),
       createdByName: nameOf(row.createdBy),
@@ -250,7 +298,17 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
       items: store
         .all()
         .filter((row) => canView(row, user))
-        .map((row) => ({ id: row.id, title: row.title, heldOn: row.heldOn, stage: row.stage, createdByName: nameOf(row.createdBy), createdAt: row.createdAt, confirmedAt: row.confirmedAt, durationSec: row.transcript?.durationSec ?? null })),
+        .map((row) => ({
+          id: row.id,
+          title: row.title,
+          heldOn: row.heldOn,
+          stage: row.stage,
+          createdByName: nameOf(row.createdBy),
+          createdAt: row.createdAt,
+          confirmedAt: row.confirmedAt,
+          durationSec: row.transcript?.durationSec ?? null,
+          progressPercent: progressOf(row)?.percent ?? null,
+        })),
     };
   });
 
@@ -466,6 +524,7 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
     const { expectedVersion } = deps.parse(deleteQuery, request.query);
     if (row.version !== expectedVersion) throw new DomainError('conflict', 'ほかの人が先にこの議事録を変更しました。内容を確かめてから消してください。');
     store.delete(row.id, user.id, deps.clock());
+    reported.delete(row.id);
     rmSync(store.audioPath(row), { force: true });
     return reply.code(204).send();
   });
@@ -632,6 +691,42 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
         return reply.code(400).send({ error: 'invalid', issues: ['transcript, draft or error is required for the stage'] });
       }
       if (!ok) return reply.code(409).send({ error: 'not_held' });
+      reported.delete(body.id);
+      return reply.header('Cache-Control', 'no-store').send({ ok: true });
+    });
+
+    // How far the running stage has got (2026-11-05). Only while the worker holds the stage with this lease; a worker of
+    // an older app gets 404 here and stops reporting.
+    scope.post(WORKER_PATHS.progress, { bodyLimit: 1024 }, async (request, reply) => {
+      let body: z.infer<typeof progressBody>;
+      try {
+        const parsed = progressBody.safeParse(verified(request, WORKER_PATHS.progress));
+        if (!parsed.success) return reply.code(400).send({ error: 'invalid', issues: parsed.error.issues.slice(0, 5).map((i) => `${i.path.join('.')}: ${i.message}`) });
+        body = parsed.data;
+      } catch {
+        return reply.code(401).send(REJECTED);
+      }
+      const row = store.get(body.id);
+      if (!row || !holds(row, body)) return reply.code(409).send({ error: 'not_held' });
+      if (!reported.has(row.id) && reported.size >= MAX_REPORTED) {
+        for (const [id, p] of reported) {
+          const r = store.get(id);
+          if (!r || !holds(r, p)) reported.delete(id);
+        }
+        if (reported.size >= MAX_REPORTED) return reply.header('Cache-Control', 'no-store').send({ ok: true });
+      }
+      const at = now();
+      const prev = reported.get(row.id);
+      const same = prev && prev.stage === body.stage && prev.leaseToken === body.leaseToken && body.done >= prev.firstDone;
+      reported.set(row.id, {
+        stage: body.stage,
+        leaseToken: body.leaseToken,
+        done: body.done,
+        total: body.total,
+        firstAt: same ? prev.firstAt : at,
+        firstDone: same ? prev.firstDone : body.done,
+        at,
+      });
       return reply.header('Cache-Control', 'no-store').send({ ok: true });
     });
   });

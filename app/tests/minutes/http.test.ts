@@ -327,6 +327,57 @@ describe('meeting minutes', () => {
     expect((await call('GET', `/api/minutes/${id}`, { cookie: chosen })).status).toBe(200);
   });
 
+  it('show how far the running stage has got, only from the worker that holds it, and only while it runs', async () => {
+    await build();
+    const recorder = await signIn(MEMBER, '21000002');
+    const outsider = await signIn(THIRD, '21000004');
+    const id = (await upload(recorder, audio, { title: '長い役員会', heldOn: '2026-11-05', visibility: 'selected', viewers: [] })).json.id as string;
+    const detailOf = async (cookie = recorder) => (await call('GET', `/api/minutes/${id}`, { cookie })).json;
+    expect((await detailOf()).progress).toBeNull();
+
+    const job = (await worker(WORKER_PATHS.claim, { stages: ['transcribe'] })).json.job;
+    const report = (body: Record<string, unknown>, key?: Buffer) => worker(WORKER_PATHS.progress, { id, leaseToken: job.leaseToken, stage: 'transcribe', ...body }, key);
+    // Unsigned, of another lease or stage, or out of shape: refused, and nothing shows.
+    expect((await report({ done: 0, total: 11_600 }, randomBytes(32))).status).toBe(401);
+    expect((await call('POST', WORKER_PATHS.progress, { body: { id, leaseToken: job.leaseToken, stage: 'transcribe', done: 0, total: null } })).status).toBe(401);
+    expect((await worker(WORKER_PATHS.progress, { id, leaseToken: 'x'.repeat(24), stage: 'transcribe', done: 0, total: 11_600 })).status).toBe(409);
+    expect((await report({ stage: 'summarize', done: 0, total: 2 })).status).toBe(409);
+    expect((await report({ done: -1, total: 11_600 })).status).toBe(400);
+    expect((await detailOf()).progress).toBeNull();
+
+    expect((await report({ done: 0, total: 11_600 })).status).toBe(200);
+    expect((await detailOf()).progress).toEqual({ stage: 'transcribe', done: 0, total: 11_600, percent: 0, remainingSec: null, ageSec: 0 });
+    // Ten minutes later, 2,320 of 11,600 seconds done: 20 %, and the rest at that pace takes 40 minutes.
+    ctx.clock.now += 600_000;
+    expect((await report({ done: 2_320, total: 11_600 })).status).toBe(200);
+    expect((await detailOf()).progress).toEqual({ stage: 'transcribe', done: 2_320, total: 11_600, percent: 20, remainingSec: 2_400, ageSec: 0 });
+    expect((await call('GET', '/api/minutes', { cookie: recorder })).json.items[0].progressPercent).toBe(20);
+    // Someone not chosen learns nothing, as before.
+    expect((await call('GET', `/api/minutes/${id}`, { cookie: outsider })).status).toBe(404);
+    // A minute without a report: the time left counts down, and the age shows (the screen warns after ten minutes).
+    ctx.clock.now += 60_000;
+    expect((await detailOf()).progress).toMatchObject({ remainingSec: 2_340, ageSec: 60 });
+    // An estimated length the worker runs past still shows below 100 %; without a length there is no percent.
+    expect((await report({ done: 12_000, total: 11_600 })).status).toBe(200);
+    expect((await detailOf()).progress).toMatchObject({ percent: 99 });
+    expect((await report({ done: 3_000, total: null })).status).toBe(200);
+    expect((await detailOf()).progress).toMatchObject({ total: null, percent: null, remainingSec: null });
+
+    // Once the stage is done the report is gone, and a late one is refused.
+    expect((await worker(WORKER_PATHS.result, { id, leaseToken: job.leaseToken, stage: 'transcribe', transcript: { segments, durationSec: 11_600, model: 'large-v3' } })).status).toBe(200);
+    expect((await detailOf()).progress).toBeNull();
+    expect((await report({ done: 11_600, total: 11_600 })).status).toBe(409);
+
+    // The summary counts its parts; a lease that ran out and was claimed again starts without the old report.
+    const s = (await worker(WORKER_PATHS.claim, { stages: ['summarize'] })).json.job;
+    expect((await worker(WORKER_PATHS.progress, { id, leaseToken: s.leaseToken, stage: 'summarize', done: 1, total: 3 })).status).toBe(200);
+    expect((await detailOf()).progress).toMatchObject({ stage: 'summarize', done: 1, total: 3, percent: 33 });
+    ctx.clock.now += 46 * 60_000;
+    const again = (await worker(WORKER_PATHS.claim, { stages: ['summarize'] })).json.job;
+    expect(again.leaseToken).not.toBe(s.leaseToken);
+    expect((await detailOf()).progress).toBeNull();
+  });
+
   it('take a recording of up to 2 GB and say the limit beyond it', async () => {
     await build();
     const recorder = await signIn(MEMBER, '21000002');

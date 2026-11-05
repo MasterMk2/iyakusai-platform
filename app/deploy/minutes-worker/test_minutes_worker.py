@@ -168,6 +168,93 @@ class Windows(unittest.TestCase):
         self.assertIn("協賛", model.kw["initial_prompt"])
 
 
+class ProgressReports(unittest.TestCase):
+    JOB = {"id": "mt_0000000000000001", "stage": "transcribe", "leaseToken": "t" * 24}
+
+    def test_reports_at_most_once_per_interval_unless_forced(self):
+        app = mock.Mock()
+        app.notify.return_value = 200
+        now = [0.0]
+        p = w.Progress(app, self.JOB, every=20, clock=lambda: now[0])
+        p.report(0, 600.0, force=True)
+        now[0] = 5
+        p.report(30, 600.0)
+        now[0] = 21
+        p.report(60, 600.0)
+        now[0] = 22
+        p.report(90, 600.0, force=True)
+        sent = [c.args[1] for c in app.notify.call_args_list]
+        self.assertEqual([s["done"] for s in sent], [0, 60, 90])
+        self.assertEqual(sent[0], {"id": self.JOB["id"], "leaseToken": self.JOB["leaseToken"], "stage": "transcribe", "done": 0, "total": 600.0})
+        self.assertEqual(app.notify.call_args.args[0], w.PATHS["progress"])
+
+    def test_an_old_app_or_a_lost_lease_stops_the_reports_and_errors_never_escape(self):
+        for status in (404, 409):
+            app = mock.Mock()
+            app.notify.return_value = status
+            p = w.Progress(app, self.JOB, every=0)
+            p.report(1, None)
+            p.report(2, None)
+            self.assertEqual(app.notify.call_count, 1)
+        app = mock.Mock()
+        app.notify.side_effect = RuntimeError("壊れた")
+        p = w.Progress(app, self.JOB, every=0)
+        p.report(1, float("nan"))
+        p.report(float("inf"), None)
+        p.report(2, None)
+        self.assertEqual([c.args[1]["total"] for c in app.notify.call_args_list], [None, None])
+
+    @unittest.skipIf(np is None, "numpy が無い")
+    def test_transcription_reports_the_seconds_done_across_windows(self):
+        class Seg:
+            def __init__(self, start, end, text):
+                self.start, self.end, self.text = start, end, text
+
+        class Model:
+            def transcribe(self, samples, **kw):
+                return iter([Seg(1.0, 2.5, "はい")]), None
+
+        windows = [(0.0, np.zeros(16000 * 10, dtype=np.float32)), (10.0, np.zeros(16000 * 5, dtype=np.float32))]
+        app = mock.Mock()
+        app.notify.return_value = 200
+        with mock.patch.object(w, "whisper_model", return_value=(Model(), "large-v3")), mock.patch.object(w, "audio_windows", return_value=iter(windows)), \
+                mock.patch.object(w, "audio_duration", return_value=15.0), mock.patch.object(w, "PROGRESS_EVERY_SEC", 3600):
+            w.transcribe(app, dict(self.JOB, audio={"ext": "wav"}))
+        sent = [(c.args[1]["done"], c.args[1]["total"]) for c in app.notify.call_args_list]
+        # 始め（0）と、区切りの終わりごと（10 秒・15 秒）。間の発言ごとの知らせは間隔で間引かれる。
+        self.assertEqual(sent, [(0, 15.0), (10.0, 15.0), (15.0, 15.0)])
+
+    def test_summary_reports_the_parts_done(self):
+        app = mock.Mock()
+        app.notify.return_value = 200
+        job = {"id": "mt_1", "stage": "summarize", "leaseToken": "t" * 24, "title": "t", "heldOn": "2026-11-05",
+               "transcript": {"segments": [{"start": i, "end": i + 1, "text": "あ" * 1000} for i in range(150)]}}
+        with mock.patch.object(w, "ask_claude", return_value='{"summary": "x"}'):
+            w.summarize(job, w.Progress(app, job, every=3600))
+        self.assertEqual([(c.args[1]["done"], c.args[1]["total"]) for c in app.notify.call_args_list], [(0, 3.0), (1, 3.0), (2, 3.0)])
+
+    @unittest.skipIf(av is None or np is None, "av が無い")
+    def test_duration_of_an_adts_recording_and_of_no_file(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "a.aac"
+            with av.open(str(path), "w", format="adts") as out:
+                st = out.add_stream("aac", rate=48000, layout="mono")
+                x = (0.2 * np.sin(2 * np.pi * 440 * np.arange(48000 * 30) / 48000)).astype(np.float32)
+                for i in range(0, len(x), 1024):
+                    fr = av.AudioFrame.from_ndarray(x[i:i + 1024].reshape(1, -1), format="fltp", layout="mono")
+                    fr.sample_rate = 48000
+                    fr.pts = i
+                    for p in st.encode(fr):
+                        out.mux(p)
+                for p in st.encode(None):
+                    out.mux(p)
+            self.assertAlmostEqual(w.audio_duration(path), 30.0, delta=0.2)
+            self.assertIsNone(w.audio_duration(Path(tmp) / "無い.aac"))
+
+
 class Loop(unittest.TestCase):
     def test_a_failure_is_reported_to_the_app(self):
         app = mock.Mock()
