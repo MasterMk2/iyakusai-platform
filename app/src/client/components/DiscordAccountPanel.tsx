@@ -50,10 +50,7 @@ export function DiscordAccountPanel({ session, onChanged }: { session: DiscordSe
 
   return (
     <div className="discord-account" data-testid="discord-account">
-      <p className="hint">
-        ログインID: {session.account?.initialLoginId}
-        {session.account?.departments.length ? ` ／ 部署: ${session.account.departments.join('・')}` : ''}
-      </p>
+      {/* The login ID and the departments are in the facts above this panel (設定 › アカウント, 2026-11-06). */}
       <form onSubmit={saveStudentId} className="account-form">
         <h4>学籍番号（ログインID）</h4>
         <label>

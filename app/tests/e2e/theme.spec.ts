@@ -17,7 +17,7 @@ const toggle = (page: Page) => page.getByTestId('theme-toggle');
 test('若葉 is the default, and the header button steps through ライト and ダーク in step with 設定', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'light' });
   await installWorld(page);
-  await page.goto('/#/settings');
+  await page.goto('/#/settings/theme');
   await expect(settingsChoice(page).getByRole('radio', { name: '若葉' })).toBeChecked();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'wakaba');
   expect(await ground(page)).toBe(WAKABA_GROUND);
@@ -47,7 +47,7 @@ test('若葉 is the default, and the header button steps through ライト and �
 test('a dark device still opens in 若葉; 端末の設定に合わせる turns it dark, and ライト keeps it light', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'dark' });
   await installWorld(page);
-  await page.goto('/#/settings');
+  await page.goto('/#/settings/theme');
   expect(await ground(page)).toBe(WAKABA_GROUND);
 
   await settingsChoice(page).getByRole('radio', { name: '端末の設定に合わせる' }).check();

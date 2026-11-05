@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import type { SessionResponse, SessionUser } from '../../shared/api';
 import type { TaskContextResponse } from '../../shared/tasks';
 import { TASK_ROLE_LABELS } from '../../shared/tasks';
@@ -14,8 +14,52 @@ import { RolloverPanel } from './rollover/RolloverPanel';
 import { CardSettingsPanel } from './CardSettingsPanel';
 import { AccountingAccessPanel } from './payments/AccountingAccessPanel';
 import { BankPanel } from './bank/BankPanel';
+import { Facts } from './books/common';
 import { DayOfSettingsPanel } from './dayof/DayOfSettingsPanel';
 import { storeTheme, THEME_LABELS, useTheme, type ThemeChoice } from '../theme';
+import './payments/payments.css';
+
+/**
+ * The parts of the settings (2026-11-06), in the order of the list. One part is shown at a time, beside the list on a
+ * PC and in place of it on a phone (../docs/ui-guidelines.md §6): before, every part was on one page, some 20,000px
+ * long for an access administrator, with five lists of every member one after another.
+ */
+export const SETTINGS_SECTIONS = ['account', 'card', 'theme', 'mail', 'line', 'accounting', 'rental', 'dayof', 'login', 'bank', 'rollover', 'directory'] as const;
+export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
+
+export function parseSettingsSection(value: string | undefined): SettingsSection | null {
+  return SETTINGS_SECTIONS.find((section) => section === value) ?? null;
+}
+
+type Group = 'self' | 'grants' | 'ops';
+const GROUPS: { key: Group; label: string }[] = [
+  { key: 'self', label: '自分の設定' },
+  { key: 'grants', label: '権限' },
+  { key: 'ops', label: '委員会の運営' },
+];
+
+interface Part {
+  key: SettingsSection;
+  group: Group;
+  label: string;
+  body: ReactNode;
+  /** Listed only once its panel has said it can be used (the bank: most members are not allowed to see it). */
+  listedWhenKnown?: boolean;
+}
+
+const NARROW = '(max-width: 900px)';
+function useNarrow(): boolean {
+  const query = () => (typeof window.matchMedia === 'function' ? window.matchMedia(NARROW) : null);
+  const [narrow, setNarrow] = useState(() => query()?.matches ?? false);
+  useEffect(() => {
+    const list = query();
+    if (!list) return;
+    const changed = () => setNarrow(list.matches);
+    list.addEventListener('change', changed);
+    return () => list.removeEventListener('change', changed);
+  }, []);
+  return narrow;
+}
 
 interface MockPerson {
   principalId: string;
@@ -29,13 +73,15 @@ interface MockPerson {
 
 const PROVENANCE: Record<string, string> = { direct: '直接', nested: '入れ子', organization: '全組織' };
 
-/** Settings: account, task-service status, access administration and (mock only) directory controls. */
+/** Settings: the viewer's own account, card and colours, then (access administrators) the grants and the committee's settings. */
 export function SettingsView({
   session,
   user,
   tasks,
   committeeMail = false,
   committeeLine = false,
+  section = null,
+  onSection = () => undefined,
   onChanged,
 }: {
   session: SessionResponse;
@@ -45,62 +91,161 @@ export function SettingsView({
   committeeMail?: boolean;
   /** The committee's official LINE account is open here (2026-10-28): its grants below the mailbox's. */
   committeeLine?: boolean;
+  /** The part opened (`#/settings/<section>`); none shows the first part on a PC and the list on a phone. */
+  section?: SettingsSection | null;
+  onSection?: (section: SettingsSection | null) => void;
   onChanged: () => void;
 }) {
   const account = 'authMode' in session && session.authMode === 'account' ? session : null;
   const discord = 'authMode' in session && session.authMode === 'discord' ? session : null;
+  const admin = user.canManageAccess;
+  const narrow = useNarrow();
+
+  // Every part stays mounted (hidden when not shown), so a choice not saved yet survives a look at another part, and
+  // a part whose server has no such feature (its panel answers 404 or 403) says so and leaves the list.
+  const [usable, setUsable] = useState<Partial<Record<SettingsSection, boolean>>>({});
+  // One callback per part for the whole life of the screen (the panels report from an effect that depends on it).
+  const [report] = useState(() => {
+    const reporters: Partial<Record<SettingsSection, (ok: boolean) => void>> = {};
+    return (key: SettingsSection) => (reporters[key] ??= (ok: boolean) => setUsable((u) => (u[key] === ok ? u : { ...u, [key]: ok })));
+  });
+
+  const parts: Part[] = [
+    { key: 'account', group: 'self', label: 'アカウント', body: <AccountSection session={session} user={user} tasks={tasks} onChanged={onChanged} /> },
+    // The card login messages and the card writer say 「設定 → 委員カード」: the same name here.
+    ...(discord ? [{ key: 'card', group: 'self', label: '委員カード', body: <CardSettingsPanel admin={admin} onChanged={onChanged} /> } as Part] : []),
+    { key: 'theme', group: 'self', label: '画面の色', body: <ThemeSection /> },
+    ...(admin
+      ? ([
+          {
+            key: 'mail',
+            group: 'grants',
+            label: committeeMail ? 'メールの権限' : '受信箱の権限',
+            body: committeeMail ? <MailAccessPanel /> : <AdminPanel user={user} onChanged={onChanged} demoControls={session.demoAuthentication === true} />,
+          },
+          ...(committeeMail && committeeLine ? [{ key: 'line', group: 'grants', label: '公式LINE の権限', body: <MailAccessPanel variant="line" /> } as Part] : []),
+          { key: 'accounting', group: 'grants', label: '会計の権限', body: <AccountingAccessPanel onAvailable={report('accounting')} /> },
+          { key: 'rental', group: 'grants', label: '物品の権限', body: <RentalAccessPanel onChanged={onChanged} onAvailable={report('rental')} /> },
+          { key: 'dayof', group: 'ops', label: '当日の欄', body: <DayOfSettingsPanel onAvailable={report('dayof')} /> },
+          ...(discord ? [{ key: 'login', group: 'ops', label: 'ログインの記録', body: <LoginActivityPanel /> } as Part] : []),
+        ] as Part[])
+      : []),
+    // 権限管理者 and 会計を見る: the panel says which (its status answers 403 for everyone else).
+    ...(discord && committeeMail ? [{ key: 'bank', group: 'ops', label: '銀行の連携', body: <BankPanel onAvailable={report('bank')} />, listedWhenKnown: !admin } as Part] : []),
+    ...(admin ? [{ key: 'rollover', group: 'ops', label: '年度の切り替え', body: <RolloverPanel onAvailable={report('rollover')} /> } as Part] : []),
+    ...(account?.composition === 'mock' ? [{ key: 'directory', group: 'ops', label: '模擬ディレクトリ', body: <MockDirectory onChanged={onChanged} /> } as Part] : []),
+  ];
+  const listed = parts.filter((p) => usable[p.key] !== false && (!p.listedWhenKnown || usable[p.key] === true));
+  // A part this person may have but whose server has not answered yet is opened (its own loading shows), so a link
+  // to it does not jump to the first part and back.
+  const opened = section ? parts.find((p) => p.key === section && usable[p.key] !== false) : undefined;
+  const shown: SettingsSection = opened?.key ?? 'account';
+  // On a phone with nothing opened, the list is the screen and no part is the current one.
+  const current = narrow && !section ? null : shown;
+
+  const paneRef = useRef<HTMLDivElement>(null);
+  const navRef = useRef<HTMLElement>(null);
+  const chosen = useRef<{ to: SettingsSection | null; from: SettingsSection | null } | null>(null);
+  useEffect(() => {
+    const move = chosen.current;
+    chosen.current = null;
+    if (!move) return;
+    if (move.to) {
+      // The opened part starts at its top (the list may have been scrolled far down); on a phone the list is gone, so
+      // the focus goes to the part instead of being lost with it.
+      if (narrow) paneRef.current?.querySelector<HTMLElement>(`[data-section="${move.to}"]`)?.focus({ preventScroll: true });
+      window.scrollTo({ top: 0 });
+    } else if (move.from) {
+      navRef.current?.querySelector<HTMLElement>(`[data-testid="settings-section-${move.from}"]`)?.focus();
+    }
+  }, [section, narrow]);
+
+  // A link of the list carries its part (data-part); the way back to the list carries none.
+  const select = (event: MouseEvent<HTMLAnchorElement>) => {
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
+    event.preventDefault();
+    const key = parseSettingsSection(event.currentTarget.dataset.part);
+    if (key === section) return;
+    chosen.current = { to: key, from: shown };
+    onSection(key);
+  };
+
   return (
-    <main className="main settings">
-      <h2>設定</h2>
-      {discord && <CardSettingsPanel admin={user.canManageAccess} onChanged={onChanged} />}
-      <section aria-label="アカウント">
-        <h3>アカウント</h3>
-        <p>
-          {user.displayName}（{user.roleLabel}）
-        </p>
-        {discord ? (
-          <DiscordAccountPanel session={discord} onChanged={onChanged} />
-        ) : account ? (
-          <p className="hint">
-            パスワードを変更するときは、ログアウトして「初回登録・パスワード再設定」から、連携済みの Discord に届く確認コードで再設定してください。再設定すると、ほかの端末のログインもすべて終了します。
-          </p>
-        ) : session.demoAuthentication ? (
-          <p className="hint">デモ用モック認証です。ペルソナは画面上部で切り替えます。</p>
-        ) : (
-          <p className="hint">利用者はリバースプロキシの認証で識別しています。</p>
-        )}
-      </section>
-      <ThemeSection />
-      <section aria-label="タスク連携">
-        <h3>委員会タスク</h3>
-        {!tasks ? (
-          <p className="hint">確認中です。</p>
-        ) : !tasks.enabled ? (
-          <p className="hint">このサーバーではタスク機能が設定されていません。</p>
-        ) : !tasks.bound ? (
-          <p className="hint">このアカウントはタスク機能の利用者として登録されていません。</p>
-        ) : (
-          <ul>
-            {tasks.memberships.map((m) => (
-              <li key={m.workspace.id}>
-                {m.workspace.name}: {TASK_ROLE_LABELS[m.role]}
-              </li>
-            ))}
-          </ul>
-        )}
-        <p className="hint">タスクの保存先は委員会タスク管理サービスだけです。Web と Discord の操作は同じタスク・版・履歴を使います。</p>
-      </section>
-      {user.canManageAccess && <DayOfSettingsPanel />}
-      {user.canManageAccess && <RentalAccessPanel onChanged={onChanged} />}
-      {user.canManageAccess && <AccountingAccessPanel />}
-      {/* 権限管理者 and 会計を見る: the panel hides itself for everyone else (its status answers 403). */}
-      {discord && committeeMail && <BankPanel />}
-      {user.canManageAccess && (committeeMail ? <MailAccessPanel /> : <AdminPanel user={user} onChanged={onChanged} demoControls={session.demoAuthentication === true} />)}
-      {user.canManageAccess && committeeMail && committeeLine && <MailAccessPanel variant="line" />}
-      {user.canManageAccess && discord && <LoginActivityPanel />}
-      {user.canManageAccess && <RolloverPanel />}
-      {account?.composition === 'mock' && <MockDirectory onChanged={onChanged} />}
+    <main className={`main settings ${section ? 'has-section' : 'no-section'}`} aria-labelledby="settings-title">
+      <h2 id="settings-title">設定</h2>
+      <div className="settings-body">
+        <nav ref={navRef} className="settings-nav" aria-label="設定の項目">
+          {GROUPS.map((group) => {
+            const items = listed.filter((p) => p.group === group.key);
+            if (items.length === 0) return null;
+            return (
+              <div key={group.key} className="settings-nav-group">
+                <p className="settings-nav-heading" id={`settings-group-${group.key}`}>
+                  {group.label}
+                </p>
+                <ul aria-labelledby={`settings-group-${group.key}`}>
+                  {items.map((p) => (
+                    <li key={p.key}>
+                      <a href={`#/settings/${p.key}`} aria-current={p.key === current ? 'page' : undefined} onClick={select} data-part={p.key} data-testid={`settings-section-${p.key}`}>
+                        {p.label}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            );
+          })}
+        </nav>
+        <div ref={paneRef} className="settings-pane">
+          <a className="settings-back" href="#/settings" onClick={select}>
+            ← 設定の一覧
+          </a>
+          {parts.map((p) => (
+            <div key={p.key} className="settings-part" data-section={p.key} hidden={p.key !== shown} tabIndex={-1}>
+              {p.body}
+            </div>
+          ))}
+        </div>
+      </div>
     </main>
+  );
+}
+
+function AccountSection({ session, user, tasks, onChanged }: { session: SessionResponse; user: SessionUser; tasks: TaskContextResponse | null; onChanged: () => void }) {
+  const account = 'authMode' in session && session.authMode === 'account' ? session : null;
+  const discord = 'authMode' in session && session.authMode === 'discord' ? session : null;
+  const taskRoles = !tasks
+    ? '確認中です。'
+    : !tasks.enabled
+      ? 'このサーバーではタスク機能が設定されていません。'
+      : !tasks.bound
+        ? 'このアカウントはタスク機能の利用者として登録されていません。'
+        : tasks.memberships.length === 0
+          ? 'どの部署にも入っていません。'
+          : tasks.memberships.map((m) => `${m.workspace.name}：${TASK_ROLE_LABELS[m.role]}`).join('、');
+  return (
+    <section aria-labelledby="settings-account-title">
+      <h3 id="settings-account-title">アカウント</h3>
+      <Facts
+        items={[
+          ['名前', user.displayName],
+          ['所属', discord?.account?.departments.length ? discord.account.departments.join('・') : user.roleLabel],
+          ['ログインID', discord?.account?.initialLoginId ?? null],
+          ['委員会タスク', taskRoles],
+        ]}
+      />
+      {discord ? (
+        <DiscordAccountPanel session={discord} onChanged={onChanged} />
+      ) : account ? (
+        <p className="hint">
+          パスワードを変更するときは、ログアウトして「初回登録・パスワード再設定」から、連携済みの Discord に届く確認コードで再設定してください。再設定すると、ほかの端末のログインもすべて終了します。
+        </p>
+      ) : session.demoAuthentication ? (
+        <p className="hint">デモ用モック認証です。ペルソナは画面上部で切り替えます。</p>
+      ) : (
+        <p className="hint">利用者はリバースプロキシの認証で識別しています。</p>
+      )}
+    </section>
   );
 }
 
@@ -109,8 +254,8 @@ function ThemeSection() {
   const theme = useTheme();
   const choose = (next: ThemeChoice) => storeTheme(next);
   return (
-    <section aria-label="画面の色">
-      <h3>画面の色</h3>
+    <section aria-labelledby="settings-theme-title">
+      <h3 id="settings-theme-title">画面の色</h3>
       <fieldset className="theme-choice">
         <legend className="sr-only">画面の色</legend>
         {(Object.keys(THEME_LABELS) as ThemeChoice[]).map((key) => (

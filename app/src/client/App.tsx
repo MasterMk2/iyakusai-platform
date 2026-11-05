@@ -21,7 +21,7 @@ import { MailReauth } from './components/MailReauth';
 import { Login } from './components/Login';
 import { ProxyBar } from './components/ProxyBar';
 import { SessionUnavailableBar } from './components/SessionUnavailableBar';
-import { SettingsView } from './components/SettingsView';
+import { parseSettingsSection, SettingsView, type SettingsSection } from './components/SettingsView';
 import { TasksView, type TaskFocus } from './components/tasks/TasksView';
 import { BotView, parseBotSection, type BotSection } from './components/bot/BotView';
 import { ContactsView, type ContactPrefill } from './components/contacts/ContactsView';
@@ -71,6 +71,8 @@ export interface Route {
   decisionPrefill: DecisionPrefill | null;
   /** 会計 (2026-11-05): the part of the books shown (`#/books/<section>`). */
   booksSection: BooksSection | null;
+  /** 設定 (2026-11-06): the part of the settings shown (`#/settings/<section>`); none is the list on a phone. */
+  settingsSection: SettingsSection | null;
 }
 
 const EMPTY_ROUTE: Route = {
@@ -97,6 +99,7 @@ const EMPTY_ROUTE: Route = {
   decisionNew: false,
   decisionPrefill: null,
   booksSection: null,
+  settingsSection: null,
 };
 
 function parseFocus(value: string | null): TaskFocus | null {
@@ -113,7 +116,7 @@ export function parseHash(hash: string): Route {
   const inboxFilter: InboxFilter | null = filter === 'unhandled' || filter === 'mine' ? filter : null;
   if (parts[0] === 'home') return { ...EMPTY_ROUTE, view: 'home' };
   if (parts[0] === 'admin') return { ...EMPTY_ROUTE, view: 'admin' };
-  if (parts[0] === 'settings') return { ...EMPTY_ROUTE, view: 'settings' };
+  if (parts[0] === 'settings') return { ...EMPTY_ROUTE, view: 'settings', settingsSection: parseSettingsSection(parts[1]) };
   if (parts[0] === 'contacts') {
     const contactId = params.get('c');
     return { ...EMPTY_ROUTE, view: 'contacts', contactId: contactId && /^ct_[0-9a-f]{16}$/.test(contactId) ? contactId : null, contactNew: params.get('new') === '1', contactImport: params.get('import') === '1' };
@@ -146,7 +149,7 @@ function isLineRoute(route: Route): boolean {
 export function toHash(route: Route): string {
   if (route.view === 'home') return '#/home';
   if (route.view === 'admin') return '#/admin';
-  if (route.view === 'settings') return '#/settings';
+  if (route.view === 'settings') return route.settingsSection ? `#/settings/${route.settingsSection}` : '#/settings';
   if (route.view === 'contacts') {
     const q = new URLSearchParams();
     if (route.contactId) q.set('c', route.contactId);
@@ -632,7 +635,16 @@ export function App() {
         {bar}
         {topNav}
         <div className="layout settings-layout">
-          <SettingsView session={session.data} user={user} tasks={taskContext.data ?? null} committeeMail={!!committeeMail} committeeLine={!!committeeMail && (lineAccounts.data?.length ?? 0) > 0} onChanged={bump} />
+          <SettingsView
+            session={session.data}
+            user={user}
+            tasks={taskContext.data ?? null}
+            committeeMail={!!committeeMail}
+            committeeLine={!!committeeMail && (lineAccounts.data?.length ?? 0) > 0}
+            section={route.settingsSection}
+            onSection={(settingsSection) => navigate({ ...EMPTY_ROUTE, view: 'settings', settingsSection })}
+            onChanged={bump}
+          />
         </div>
       </div>
     );

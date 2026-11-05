@@ -18,7 +18,7 @@ const without = <T,>(record: Record<string, T>, key: string) => {
   return rest;
 };
 
-export function AccountingAccessPanel() {
+export function AccountingAccessPanel({ onAvailable }: { onAvailable?: (available: boolean) => void } = {}) {
   const [refresh, setRefresh] = useState(0);
   const load = useCallback(
     async (signal: AbortSignal) => {
@@ -80,7 +80,11 @@ export function AccountingAccessPanel() {
     queue.current = run;
   };
 
-  if (!access.loading && !access.error && !data) return null;
+  const absent = !access.loading && !access.error && !data;
+  useEffect(() => {
+    if (!access.loading) onAvailable?.(!absent);
+  }, [access.loading, absent, onAvailable]);
+  if (absent) return null;
 
   const departmentHas = (department: string, permission: AccountingPermission) => data?.departmentGrants.some((g) => g.department === department && g.permission === permission) ?? false;
   const needle = filter.normalize('NFKC').trim().toLowerCase();

@@ -43,7 +43,7 @@ async function settings(page: Page, o: { delayMs?: number; failFor?: string } = 
     }
     return respond({ error: 'not_found' }, 404);
   });
-  await page.goto('/#/settings');
+  await page.goto('/#/settings/rental');
   const panel = page.getByTestId('rental-access');
   await expect(panel).toBeVisible();
   return { panel, puts, gets: () => gets };

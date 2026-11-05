@@ -1,4 +1,4 @@
-import { useCallback, useId, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useId, useState, type FormEvent } from 'react';
 import { addDays } from '../../../shared/calendar';
 import { DAYOF_LIMITS, periodProblem, type DayOfAdminResponse } from '../../../shared/dayof';
 import { departmentsOfLabel } from '../../../shared/mailbox';
@@ -14,14 +14,18 @@ import './dayof.css';
  * and per person, the same way as the mailbox grants). Each tick saves at once; the period and the rules save together
  * with the version they were read at.
  */
-export function DayOfSettingsPanel() {
+export function DayOfSettingsPanel({ onAvailable }: { onAvailable?: (available: boolean) => void } = {}) {
   const load = useCallback((signal: AbortSignal) => dayofApi.admin(signal), []);
   const loader = useLoader(load);
   const [saved, setSaved] = useState<DayOfAdminResponse | null>(null);
   const [settingsNote, setSettingsNote] = useState(false);
   const data = saved ?? loader.data;
   // A server without the board (404) leaves the panel out.
-  if (loader.error?.status === 404 && !data) return null;
+  const absent = loader.error?.status === 404 && !data;
+  useEffect(() => {
+    if (!loader.loading) onAvailable?.(!absent);
+  }, [loader.loading, absent, onAvailable]);
+  if (absent) return null;
   return (
     <section className="admin dayof-settings" aria-labelledby="dayof-settings-title" data-testid="dayof-settings">
       <h3 id="dayof-settings-title">当日の欄</h3>
