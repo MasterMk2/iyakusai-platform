@@ -177,8 +177,8 @@ def quiet_cut(samples, start: int, frame: int) -> int:
 
 def audio_windows(path: Path, window_sec: float = WINDOW_SEC, search_sec: float = CUT_SEARCH_SEC):
     """音声を 16kHz・モノラルの float32 にして、(開始の秒, 配列) を window_sec ごとに返す。全体を一度にメモリに置かない。
-    区切りは窓の終わりの search_sec の中で一番静かなところ。読み方は faster_whisper.audio.decode_audio と同じ
-    （s16・モノラルへの変換、壊れたフレームは飛ばす、時刻の確認はしない）。"""
+    区切りは窓の終わりの search_sec の中で一番静かなところ。変換は faster_whisper.audio.decode_audio と同じ
+    （s16・モノラル、時刻の確認はしない）。壊れたフレームはパケットごとに飛ばす。"""
     import gc
 
     import av
@@ -193,15 +193,25 @@ def audio_windows(path: Path, window_sec: float = WINDOW_SEC, search_sec: float 
     have = 0
     offset = 0
 
+    def packet_frames(container):
+        # container.decode() の中で例外が出ると generator ごと終わり、残りの音声を全部捨ててしまう
+        # （faster-whisper の decode_audio も同じ）。先頭に壊れた ADTS フレームがある AAC の録音が
+        # 0 秒になったので、パケットごとにデコードして、断られたパケットだけを飛ばす。
+        stream = container.streams.audio[0]
+        skipped = 0
+        try:
+            for packet in container.demux(stream):
+                try:
+                    yield from packet.decode()
+                except av.error.InvalidDataError:
+                    skipped += 1
+        except av.error.InvalidDataError:
+            log.warning("音声の途中から先を読めませんでした（読めた所までで文字起こしします）")
+        if skipped:
+            log.warning("読めないフレームを %d 個飛ばしました", skipped)
+
     def decoded(container):
-        frames = iter(container.decode(audio=0))
-        while True:
-            try:
-                f = next(frames)
-            except StopIteration:
-                break
-            except av.error.InvalidDataError:
-                continue
+        for f in packet_frames(container):
             f.pts = None
             fifo.write(f)
             if fifo.samples >= 500_000:
@@ -249,6 +259,9 @@ def transcribe(app: App, job: dict) -> dict:
                 if s.text.strip() and math.isfinite(s.start) and math.isfinite(s.end):
                     out.append({"start": round(offset + s.start, 2), "end": round(offset + max(s.start, s.end), 2), "text": s.text.strip()[:1000]})
             duration = offset + samples.shape[0] / SAMPLE_RATE
+        if windows == 0:
+            # 空の下書きにすると、録った人には何が起きたか分からない。失敗にして画面に理由を出す。
+            raise RuntimeError("音声を 1 秒も読み取れませんでした（録音の形式が読めないか、ファイルが壊れています）")
         log.info("文字起こし %s: 音声 %.0f 秒を %.0f 秒で（%d 区切り・%d 文）", job["id"], duration, time.monotonic() - started, windows, len(out))
     return {"segments": out, "durationSec": round(duration, 2), "model": name}
 
