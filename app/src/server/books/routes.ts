@@ -4,6 +4,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
   ACCOUNT_ID,
+  ACCOUNT_KINDS,
   accountTitle,
   BOOKS_LIMITS,
   BooksValidationError,
@@ -13,6 +14,7 @@ import {
   fiscalYearOf,
   guessAccount,
   JOURNAL_ID,
+  KIND_GROUPS,
   normalSide,
   PREAPPROVAL_ABOVE_YEN,
   RECEIPT_ID,
@@ -27,6 +29,8 @@ import {
   validateSettings,
   yen,
   type AccountBook,
+  type AccountGuess,
+  type AccountKind,
   type AccountView,
   type BooksHistoryView,
   type BooksMe,
@@ -703,18 +707,23 @@ export function registerBooksRoutes(app: FastifyInstance, opened: BooksStore | n
       if (!request.isMultipart()) throw new DomainError('validation', 'multipart/form-data の形式で送ってください。');
       let data: Buffer | null = null;
       let name = '';
+      let kindsText = '';
       try {
-        for await (const part of request.parts()) {
+        // The scope takes one file and nothing else (receipts); here also the kinds chosen on the preview.
+        for await (const part of request.parts({ limits: { files: 1, fields: 1, parts: 2, fieldSize: 64 * 1024 } })) {
           if (part.type === 'file' && !data) {
             data = await part.toBuffer();
             name = part.filename ?? '';
           } else if (part.type === 'file') await part.toBuffer();
+          else if (part.fieldname === 'kinds') kindsText = String(part.value);
         }
       } catch {
         throw new DomainError('validation', 'ファイルが大きすぎるか、読み取れませんでした（5 MB まで）。', { field: 'file' });
       }
       if (!data || data.length === 0) throw new DomainError('validation', '弥生から書き出したファイルを選んでください。', { field: 'file' });
-      return q.kind === 'journals' ? importJournals(user, data, name, q.dryRun === '1', q.planToken) : importOpenings(user, data, name, q.dryRun === '1', q.planToken);
+      const kinds = chosenKinds(kindsText);
+      const dryRun = q.dryRun === '1';
+      return q.kind === 'journals' ? importJournals(user, data, name, dryRun, q.planToken, kinds) : importOpenings(user, data, name, dryRun, q.planToken, kinds);
     });
   });
 
@@ -976,7 +985,46 @@ export function registerBooksRoutes(app: FastifyInstance, opened: BooksStore | n
 
   const planToken = (data: Buffer, plan: unknown) => createHash('sha256').update(data).update(JSON.stringify(plan)).digest('hex');
 
-  function importJournals(user: User, data: Buffer, name: string, dryRun: boolean, token: string | undefined): YayoiImportResponse {
+  /** The kinds chosen on the preview, by 科目 name: `{"事務費用":"expense"}` in the form's `kinds` field. */
+  function chosenKinds(text: string): Map<string, AccountKind> {
+    if (!text) return new Map();
+    let raw: unknown;
+    try {
+      raw = JSON.parse(text);
+    } catch {
+      throw new DomainError('validation', '科目の種類を読み取れませんでした。もう一度「下見を見る」から進めてください。');
+    }
+    const parsed = z.record(z.string().min(1).max(BOOKS_LIMITS.accountName * 2), z.enum(ACCOUNT_KINDS)).safeParse(raw);
+    if (!parsed.success || Object.keys(parsed.data).length > 500) throw new DomainError('validation', '科目の種類を読み取れませんでした。もう一度「下見を見る」から進めてください。');
+    return new Map(Object.entries(parsed.data));
+  }
+
+  /**
+   * The kind of an account first met in a 弥生 file, from its 科目 name: an account of the same name already here (a
+   * new 補助科目 takes its 科目's kind), else what the name says. Null when neither tells.
+   */
+  const kindOfNew = (accountName: string): AccountGuess | null => {
+    const same = store.accountNamed(accountName);
+    return same ? { kind: same.kind, group: same.grp, money: same.money === 1 } : guessAccount(accountName);
+  };
+
+  /** Each new account's kind, with what the preview chose for the names nothing told; refused while one is missing. */
+  function settleKinds(accounts: YayoiImportResponse['newAccounts'], chosen: Map<string, AccountKind>): Map<string, AccountGuess> {
+    const out = new Map<string, AccountGuess>();
+    const missing = new Set<string>();
+    for (const a of accounts) {
+      if (out.has(a.name)) continue;
+      const known = kindOfNew(a.name);
+      const pick = chosen.get(a.name);
+      if (known) out.set(a.name, known);
+      else if (pick) out.set(a.name, { kind: pick, group: KIND_GROUPS[pick], money: false });
+      else missing.add(a.name);
+    }
+    if (missing.size > 0) throw new DomainError('validation', `種類が分からない科目があります（${[...missing].join('、')}）。下見で種類を選んでから取り込んでください。`);
+    return out;
+  }
+
+  function importJournals(user: User, data: Buffer, name: string, dryRun: boolean, token: string | undefined, chosen: Map<string, AccountKind>): YayoiImportResponse {
     const parsed = parseYayoiJournals(data);
     const rows: YayoiImportRow[] = parsed.problems.map((p) => ({ line: p.line, action: 'unreadable', date: null, amountYen: null, memo: '', reason: p.reason }));
     const known = store.journalsByYayoiKey(parsed.journals.map((j) => j.key));
@@ -1014,7 +1062,7 @@ export function registerBooksRoutes(app: FastifyInstance, opened: BooksStore | n
         work.push({ j, action: 'new', target: null });
       }
       for (const l of j.lines) {
-        if (!store.accountByName(l.account, l.sub)) newAccounts.set(`${l.account}\u001f${l.sub}`, { name: l.account, sub: l.sub, kind: guessAccount(l.account) });
+        if (!store.accountByName(l.account, l.sub)) newAccounts.set(`${l.account}\u001f${l.sub}`, { name: l.account, sub: l.sub, kind: kindOfNew(l.account) });
       }
     }
     rows.sort((a, b) => a.line - b.line);
@@ -1025,10 +1073,7 @@ export function registerBooksRoutes(app: FastifyInstance, opened: BooksStore | n
     const tokenNow = planToken(data, plan);
     if (dryRun) return { dryRun: true, counts, rows, newAccounts: accountsOut, planToken: tokenNow, encoding: parsed.encoding };
     if (token !== tokenNow) throw new DomainError('conflict', '下見のあとで帳簿かファイルが変わりました。もう一度「下見を見る」から進めてください。');
-    const unknownKind = accountsOut.filter((a) => a.kind === null);
-    if (unknownKind.length > 0) {
-      throw new DomainError('validation', `種類が分からない科目があります（${unknownKind.map((a) => a.name).join('、')}）。先に科目の設定で、この名前の科目を種類を選んで足してから取り込んでください。`);
-    }
+    const settled = settleKinds(accountsOut, chosen);
     const now = deps.clock();
     let added = 0;
     let changedCount = 0;
@@ -1036,7 +1081,7 @@ export function registerBooksRoutes(app: FastifyInstance, opened: BooksStore | n
       const accountId = (nameText: string, sub: string): string => {
         const found = store.accountByName(nameText, sub);
         if (found) return found.id;
-        const g = guessAccount(nameText)!;
+        const g = settled.get(nameText)!;
         return store.insertAccount({ name: nameText, sub, kind: g.kind, group: g.group, money: g.money, label: '', taxClass: '対象外', active: true }, user.id, now).id;
       };
       // An account met first in 弥生's file takes the tax class 弥生 uses most for it.
@@ -1092,13 +1137,14 @@ export function registerBooksRoutes(app: FastifyInstance, opened: BooksStore | n
     return { dryRun: false, counts, rows, newAccounts: accountsOut, planToken: tokenNow, encoding: parsed.encoding };
   }
 
-  function importOpenings(user: User, data: Buffer, name: string, dryRun: boolean, token: string | undefined): YayoiImportResponse {
+  function importOpenings(user: User, data: Buffer, name: string, dryRun: boolean, token: string | undefined, chosen: Map<string, AccountKind>): YayoiImportResponse {
     const parsed = parseYayoiOpenings(data);
     const rows: YayoiImportRow[] = parsed.problems.map((p) => ({ line: p.line, action: 'unreadable', date: null, amountYen: null, memo: '', reason: p.reason }));
     const newAccounts = new Map<string, { name: string; sub: string; kind: ReturnType<typeof guessAccount> }>();
     for (const r of parsed.rows) {
       rows.push({ line: r.line, action: 'new', date: r.date, amountYen: r.amountYen, memo: `${r.account}${r.sub ? `（${r.sub}）` : ''}`, reason: r.amountYen === 0 ? '残高 0（入れません）' : '' });
-      if (!store.accountByName(r.account, r.sub)) newAccounts.set(`${r.account}\u001f${r.sub}`, { name: r.account, sub: r.sub, kind: guessAccount(r.account) });
+      // 弥生 lists every 科目 of its template, most of them at 0 (土地, 自己株式…): those add no account here.
+      if (r.amountYen !== 0 && !store.accountByName(r.account, r.sub)) newAccounts.set(`${r.account}\u001f${r.sub}`, { name: r.account, sub: r.sub, kind: kindOfNew(r.account) });
     }
     rows.sort((a, b) => a.line - b.line);
     const counts = { new: 0, duplicate: 0, ours: 0, unreadable: 0 } as YayoiImportResponse['counts'];
@@ -1111,17 +1157,17 @@ export function registerBooksRoutes(app: FastifyInstance, opened: BooksStore | n
     if (token !== tokenNow) throw new DomainError('conflict', '下見のあとで帳簿かファイルが変わりました。もう一度「下見を見る」から進めてください。');
     if (parsed.rows.length === 0) throw new DomainError('validation', '期首残高の行がありません。');
     if (total !== 0) throw new DomainError('validation', `借方と貸方の期首残高が合いません（差 ${yen(Math.abs(total))}）。弥生から書き出し直してください。`);
-    const unknownKind = accountsOut.filter((a) => a.kind === null);
-    if (unknownKind.length > 0) throw new DomainError('validation', `種類が分からない科目があります（${unknownKind.map((a) => a.name).join('、')}）。先に科目の設定で足してから取り込んでください。`);
+    const settled = settleKinds(accountsOut, chosen);
     const fiscalYear = yearOf(parsed.rows[0]!.date);
     const now = deps.clock();
     store.tx(() => {
       const out: { accountId: string; amountYen: number }[] = [];
       const sums = new Map<string, number>();
       for (const r of parsed.rows) {
+        if (r.amountYen === 0) continue;
         let a = store.accountByName(r.account, r.sub);
         if (!a) {
-          const g = guessAccount(r.account)!;
+          const g = settled.get(r.account)!;
           a = store.insertAccount({ name: r.account, sub: r.sub, kind: g.kind, group: g.group, money: g.money, label: '', taxClass: '対象外', active: true }, user.id, now);
         }
         sums.set(a.id, (sums.get(a.id) ?? 0) + r.amountYen);

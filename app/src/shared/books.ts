@@ -178,11 +178,26 @@ export const DEFAULT_ACCOUNTS: AccountSeed[] = [
 
 const KNOWN_KINDS = new Map(DEFAULT_ACCOUNTS.map((a) => [a.name, a]));
 
+export interface AccountGuess {
+  kind: AccountKind;
+  group: string;
+  money: boolean;
+}
+
+/** The group of an account whose kind the accounting section chose on the preview of a 弥生 file. */
+export const KIND_GROUPS: Record<AccountKind, string> = {
+  asset: 'その他の資産',
+  liability: '負債',
+  equity: '純資産',
+  income: '収入',
+  expense: '支出',
+};
+
 /**
  * The kind of an account met in a 弥生 file, from its name: a known name, else the endings 弥生's names use. Null
- * when the name says nothing (the screen then asks the accounting section to choose).
+ * when the name says nothing (the preview then asks the accounting section to choose).
  */
-export function guessAccount(name: string): { kind: AccountKind; group: string; money: boolean } | null {
+export function guessAccount(name: string): AccountGuess | null {
   const known = KNOWN_KINDS.get(name);
   if (known) return { kind: known.kind, group: known.group, money: known.money === true };
   if (/現金|預金|貯金/.test(name)) return { kind: 'asset', group: '現金・預金', money: true };
@@ -190,7 +205,7 @@ export function guessAccount(name: string): { kind: AccountKind; group: string; 
   if (/未収|立替|仮払|前払|売掛|貸付|備品|建物|器具/.test(name)) return { kind: 'asset', group: 'その他の資産', money: false };
   if (/繰越利益|元入金|資本金|剰余金/.test(name)) return { kind: 'equity', group: '純資産', money: false };
   if (/収入|収益|売上|受取|寄付金|協賛|補助金|助成金|利益$|益$/.test(name)) return { kind: 'income', group: '収入', money: false };
-  if (/費$|料$|代$|損$|運賃$|手数料$/.test(name)) return { kind: 'expense', group: '支出', money: false };
+  if (/費$|費用$|料$|代$|損$|運賃$|手数料$/.test(name)) return { kind: 'expense', group: '支出', money: false };
   return null;
 }
 
@@ -701,7 +716,10 @@ export interface YayoiImportResponse {
   dryRun: boolean;
   counts: Record<YayoiImportRow['action'], number>;
   rows: YayoiImportRow[];
-  /** Accounts the file names that the books do not have yet: made when it is imported. */
+  /**
+   * Accounts the file names that the books do not have yet: made when it is imported. Kind null: nothing tells it
+   * (neither the name nor an account of the same name here), so the import is sent with it chosen (`kinds`).
+   */
   newAccounts: { name: string; sub: string; kind: AccountKind | null }[];
   planToken: string;
   encoding: 'utf-8' | 'shift_jis';
