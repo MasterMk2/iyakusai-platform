@@ -10,6 +10,7 @@ import {
   type CalendarEventView,
   type CalendarKind,
 } from '../../../shared/calendar';
+import { compareDepartments } from '../../../shared/departments';
 import { needsDateCheck } from '../../../shared/rollover';
 import { api, ApiFailure } from '../../api';
 
@@ -72,7 +73,7 @@ export function EventForm({
     if (!initial) setRemind(defaultRemindDays(next));
   };
   const toggle = (list: string[], value: string, on: boolean) => (on ? [...new Set([...list, value])] : list.filter((v) => v !== value));
-  const options = [...new Set([...departments, ...chosen])].sort((a, b) => a.localeCompare(b, 'ja'));
+  const options = [...new Set([...departments, ...chosen])].sort(compareDepartments);
 
   const body = (): CalendarEventInput => ({
     title: title.trim(),

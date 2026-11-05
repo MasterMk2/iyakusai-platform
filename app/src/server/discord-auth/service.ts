@@ -6,6 +6,7 @@ import type { Account, AccountState, AccountStore } from './store.js';
 import { isStaffStudentId, isTemporaryStaffAccount, isTemporaryStaffId } from './temporary-staff.js';
 import { CARD_DAYS, DEVICE_DAYS, CardAuthError, cardView, type CardAuthState } from './cards.js';
 import type { CardSettings } from '../../shared/card-login.js';
+import { compareDepartments } from '../../shared/departments.js';
 
 // Discord account login of the common app. Ported from the production minimal runtime on
 // task.iyakusai.com (DiscordAccountService): registration starts from Discord `/register` on the Bot
@@ -249,7 +250,7 @@ export class DiscordAccountService {
   }
 
   private departments(roleIds: string[]): string[] {
-    return [...new Set(roleIds.filter((r) => Object.hasOwn(this.config.departmentRoleIds, r)).map((r) => this.config.departmentRoleIds[r]!))].sort();
+    return [...new Set(roleIds.filter((r) => Object.hasOwn(this.config.departmentRoleIds, r)).map((r) => this.config.departmentRoleIds[r]!))].sort(compareDepartments);
   }
 
   private retire(s: AccountState, a: Account): void {
