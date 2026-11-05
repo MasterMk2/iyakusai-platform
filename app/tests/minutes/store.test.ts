@@ -66,7 +66,7 @@ describe('the minutes ledger', () => {
 
     expect(store.updateBody(id, 1, 'old', 'u2', iso(T0))).toBe('conflict');
     expect(store.updateBody(id, 2, '# 役員会\n直した\n', 'u2', iso(T0))).toMatchObject({ version: 3, updatedBy: 'u2' });
-    expect(store.confirm(id, 3, 'u2', iso(T0 + 1000))).toMatchObject({ stage: 'confirmed', confirmedBy: 'u2', version: 4 });
+    expect(store.confirm(id, 3, '', 'u2', iso(T0 + 1000))).toMatchObject({ stage: 'confirmed', confirmedBy: 'u2', version: 4 });
     expect(store.updateBody(id, 4, 'x', 'u2', iso(T0))).toBe('locked');
 
     expect(store.audioDue(iso(T0))).toHaveLength(0);

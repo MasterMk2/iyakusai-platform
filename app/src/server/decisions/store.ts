@@ -236,6 +236,12 @@ export class DecisionsStore {
     return raw ? DecisionsStore.row(raw) : null;
   }
 
+  /** How many decisions were registered with a token that starts so (the items of one meeting, 2026-11-06). */
+  countByTokenPrefix(prefix: string): number {
+    const r = this.db.prepare('SELECT COUNT(*) AS n FROM decisions WHERE substr(client_token, 1, ?) = ?').get(prefix.length, prefix) as { n: number };
+    return Number(r.n);
+  }
+
   byToken(token: string): DecisionRow | null {
     const raw = this.db.prepare('SELECT * FROM decisions WHERE client_token=?').get(token) as unknown as RawRow | undefined;
     return raw ? DecisionsStore.row(raw) : null;

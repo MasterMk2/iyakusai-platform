@@ -1,6 +1,7 @@
 import { MinutesDecisionPanel } from '../decisions/MinutesDecisionPanel';
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from 'react';
 import {
+  doubtsOf,
   fmtOffset,
   MINUTES_LIMITS,
   MINUTES_PROGRESS_STALE_SEC,
@@ -15,10 +16,14 @@ import {
   type MinutesStage,
   type MinutesVisibility,
   sizeLabel,
+  type TranscriptSegment,
 } from '../../../shared/minutes';
 import { api, ApiFailure, fmtDate, toFailure } from '../../api';
 import { useLoader } from '../../useLoader';
 import { LoadStatus } from '../LoadStatus';
+import { MinutesReviewHistory, MinutesSendBack } from './MinutesSendBack';
+import { MinutesTranscript, type TranscriptMode, type TranscriptTarget } from './MinutesTranscript';
+import { MinutesVersions } from './MinutesVersions';
 
 // Meeting minutes (α, 2026-11-02; _目録/設計/議事録自動化_20261102/設計書.md): record in this browser or pick a
 // recording, wait for the server to transcribe and draft it, correct the draft and confirm it. The audio and the
@@ -31,7 +36,10 @@ const stageTone = (stage: MinutesStage) => (stage === 'confirmed' ? 'ok' : stage
 const mb = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 const today = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Tokyo' });
 
-function StageTag({ stage }: { stage: MinutesStage }) {
+/** The stage, told more closely while the AI reworks a draft or confirmed minutes are being corrected (2026-11-06). */
+function StageTag({ stage, revising = false, reopened = false }: { stage: MinutesStage; revising?: boolean; reopened?: boolean }) {
+  if (revising) return <span className="bot-tag bot-tag-info">AI が手直し中</span>;
+  if (reopened) return <span className="bot-tag bot-tag-warn">訂正中</span>;
   return <span className={`bot-tag bot-tag-${stageTone(stage)}`}>{MINUTES_STAGE_LABELS[stage]}</span>;
 }
 
@@ -176,7 +184,7 @@ function MinutesList({ version, onOpen, onNew }: { version: number; onOpen: (id:
                   {m.heldOn} {m.title}
                 </span>
                 <span className="row-sub">
-                  <StageTag stage={m.stage} />
+                  <StageTag stage={m.stage} revising={m.revising} reopened={m.reopened} />
                   {m.progressPercent !== null ? ` ${m.progressPercent}%` : ''} 録音: {m.createdByName}
                   {m.durationSec !== null ? `・${fmtOffset(m.durationSec)}` : ''}
                   {m.confirmedAt ? `・確定 ${fmtDate(m.confirmedAt)}` : ''}
@@ -675,8 +683,16 @@ function MinutesDetailView({ meetingId, people, onBack }: { meetingId: string; p
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [comment, setComment] = useState('');
+  const [note, setNote] = useState('');
+  const [mode, setMode] = useState<TranscriptMode | null>(null);
+  const [target, setTarget] = useState<TranscriptTarget | null>(null);
   const audio = useRef<HTMLAudioElement | null>(null);
-  const transcriptBox = useRef<HTMLOListElement | null>(null);
+  // One segment's stretch plays and stops by itself at its end (listening again, 2026-11-06).
+  const stopAt = useRef<number | null>(null);
+  const [playing, setPlaying] = useState<number | null>(null);
+  const commentBox = useRef<HTMLTextAreaElement | null>(null);
+  const transcriptSection = useRef<HTMLDivElement | null>(null);
   const processing = m ? PROCESSING.includes(m.stage) : false;
   const { retry } = loader;
 
@@ -690,6 +706,9 @@ function MinutesDetailView({ meetingId, people, onBack }: { meetingId: string; p
   const editing = body && m && body.base === m.version ? body.text : (m?.body ?? '');
   const dirty = !!m && editing !== m.body;
   if (m && body && body.base !== m.version && body.text === m.body) setBody(null);
+
+  const unclearAt = useMemo(() => (m?.draft?.unclear ?? []).flatMap((u) => (u.at === null ? [] : [u.at])), [m?.draft]);
+  const toListen = useMemo(() => (m?.transcript?.segments ?? []).filter((s) => !s.checked && doubtsOf(s, unclearAt).length > 0).length, [m?.transcript, unclearAt]);
 
   const run = async (fn: () => Promise<MinutesDetail | null>, done: string) => {
     setBusy(true);
@@ -709,19 +728,62 @@ function MinutesDetailView({ meetingId, people, onBack }: { meetingId: string; p
     }
   };
 
-  const jump = (at: number) => {
-    if (audio.current) {
-      audio.current.currentTime = at;
-      void audio.current.play().catch(() => undefined);
+  /** Plays the recording from `from`, stopping at `until` (null: plays on). False without a player. */
+  const startAudio = (from: number, until: number | null) => {
+    const el = audio.current;
+    if (!el) return false;
+    stopAt.current = until;
+    el.currentTime = Math.max(0, from);
+    void el.play().catch(() => setPlaying(null));
+    return true;
+  };
+  const playStretch = (index: number, s: TranscriptSegment) => {
+    if (playing === index) {
+      audio.current?.pause();
+      return;
     }
+    // A little before and after: the first and the last sound of a segment are often cut by its timing.
+    if (startAudio(s.start - 0.3, s.end + 0.4)) setPlaying(index);
+  };
+  // Paused by hand (or at the end): the player's own controls play on freely afterwards.
+  const audioStopped = () => {
+    stopAt.current = null;
+    setPlaying(null);
+  };
+
+  const jump = (at: number) => {
+    setPlaying(null);
+    startAudio(at, null);
     const segments = m?.transcript?.segments ?? [];
     let index = segments.findIndex((s) => s.end >= at);
     if (index < 0) index = segments.length - 1;
-    transcriptBox.current?.querySelector<HTMLElement>(`[data-index="${index}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    if (index >= 0) setTarget((t) => ({ index, seq: (t?.seq ?? 0) + 1 }));
+  };
+
+  /** Quotes an AI item into the comment to send back, and puts the cursor after it. */
+  const quote = (label: string, text: string) => {
+    const short = text.length > 40 ? `${text.slice(0, 40)}…` : text;
+    const next = `${comment ? `${comment.replace(/\s+$/, '')}\n` : ''}${label}「${short}」について: `;
+    setComment(next);
+    requestAnimationFrame(() => {
+      const el = commentBox.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(next.length, next.length);
+    });
   };
 
   if (!m) return <LoadStatus loader={loader} what="議事録" />;
   const d = m.draft;
+  const shownMode: TranscriptMode = mode ?? (m.can.check && toListen > 0 ? 'doubt' : 'all');
+  const lastVersion = m.versions.at(-1) ?? null;
+  const lastReview = m.reviews.at(-1) ?? null;
+  const commentButton = (label: string, text: string) =>
+    m.can.review && !m.revising ? (
+      <button type="button" className="quiet minutes-quote" onClick={() => quote(label, text)} aria-label={`${label}「${text}」についてコメントする`}>
+        コメント
+      </button>
+    ) : null;
 
   return (
     <div className="bot-minutes" data-testid="minutes-detail">
@@ -737,8 +799,9 @@ function MinutesDetailView({ meetingId, people, onBack }: { meetingId: string; p
         {m.heldOn} {m.title}
       </h2>
       <p className="row-sub">
-        <StageTag stage={m.stage} /> 録音: {m.createdByName}（{fmtDate(m.createdAt)}）
-        {m.confirmedByName && m.confirmedAt ? `・確定: ${m.confirmedByName}（${fmtDate(m.confirmedAt)}）` : ''}・見られる人: {m.visibility === 'members' ? '委員全員' : m.viewers.map((v) => v.name).join('、') || '録音した人だけ'}
+        <StageTag stage={m.stage} revising={m.revising} reopened={m.reopened} /> 録音: {m.createdByName}（{fmtDate(m.createdAt)}）
+        {m.confirmedByName && m.confirmedAt ? `・確定: ${m.confirmedByName}（${fmtDate(m.confirmedAt)}${lastVersion ? `・第${lastVersion.no}版` : ''}）` : ''}・見られる人:{' '}
+        {m.visibility === 'members' ? '委員全員' : m.viewers.map((v) => v.name).join('、') || '録音した人だけ'}
       </p>
       {m.can.manage && !settingsOpen && (
         <div>
@@ -768,9 +831,33 @@ function MinutesDetailView({ meetingId, people, onBack }: { meetingId: string; p
         />
       )}
       {loader.error && <LoadStatus loader={loader} what="議事録" />}
+      {m.reopened && lastVersion && (
+        <div className="banner banner-warning minutes-reopened" role="status" data-testid="minutes-reopened">
+          <p>
+            確定した第{lastVersion.no}版を訂正しています。訂正を確定すると第{lastVersion.no + 1}版になり、第{lastVersion.no}版は履歴に残ります。それまでは第{lastVersion.no}版が正式な議事録です。
+            {m.registeredDecisions > 0 ? ` この議事録から決定事項の台帳に ${m.registeredDecisions} 件登録しています。訂正しても台帳の項目は変わらないので、必要なら台帳で直してください。` : ''}
+          </p>
+          {m.can.discard && (
+            <button
+              type="button"
+              className="secondary"
+              disabled={busy}
+              onClick={() => {
+                if (!window.confirm(`訂正をやめて、本文と AI の項目を第${lastVersion.no}版に戻します（今の本文は記録に残ります。文字起こしの直しはそのままです）。戻しますか？`)) return;
+                void run(() => api<MinutesDetail>('POST', `/api/minutes/${m.id}/discard`, { expectedVersion: m.version }), `訂正をやめて第${lastVersion.no}版に戻しました。`);
+              }}
+              data-testid="minutes-discard"
+            >
+              訂正をやめて第{lastVersion.no}版に戻す
+            </button>
+          )}
+        </div>
+      )}
       {processing && (
         <p className="status loading" role="status" data-testid="minutes-processing">
-          {MINUTES_STAGE_LABELS[m.stage]}です。終わるとこの画面が自動で変わります（1 時間の会議で数十分かかることがあります）。
+          {m.revising
+            ? 'AI がコメントに沿って下書きを直しています。終わるとこの画面が自動で変わります（数分かかることがあります）。'
+            : `${MINUTES_STAGE_LABELS[m.stage]}です。終わるとこの画面が自動で変わります（1 時間の会議で数十分かかることがあります）。`}
         </p>
       )}
       {processing && m.progress && <ProgressLine p={m.progress} />}
@@ -784,22 +871,66 @@ function MinutesDetailView({ meetingId, people, onBack }: { meetingId: string; p
           )}
         </p>
       )}
+      {m.stage === 'draft' && lastReview?.status === 'failed' && (
+        <p className="status error" role="alert" data-testid="minutes-review-failed">
+          最後の差し戻しは AI が直せませんでした（{lastReview.error ?? '理由は不明'}）。下書きは差し戻す前のままです。もう一度差し戻すか、本文を直接直してください。
+        </p>
+      )}
       {message && (
         <p className={`status ${message.tone}`} role={message.tone === 'error' ? 'alert' : 'status'}>
           {message.text}
         </p>
       )}
 
-      {m.can.listen && m.audio.present && <audio ref={audio} controls preload="metadata" src={`/api/minutes/${m.id}/audio`} className="minutes-audio" />}
+      {m.can.listen && m.audio.present && (
+        <audio
+          ref={audio}
+          controls
+          preload="metadata"
+          src={`/api/minutes/${m.id}/audio`}
+          className="minutes-audio"
+          onTimeUpdate={(e) => {
+            if (stopAt.current !== null && e.currentTarget.currentTime >= stopAt.current) {
+              stopAt.current = null;
+              e.currentTarget.pause();
+            }
+          }}
+          onPause={audioStopped}
+          onEnded={audioStopped}
+        />
+      )}
       <p className="hint">
-        {m.audio.deletedAt ? `音声は ${fmtDate(m.audio.deletedAt)} に消去しました。` : m.audio.deletesAt ? `音声は ${fmtDate(m.audio.deletesAt)} ごろ消去します。` : '音声は確定してから決まった日数で消去します。'}
+        {m.audio.deletedAt ? `音声は ${fmtDate(m.audio.deletedAt)} に消去しました。` : m.audio.deletesAt ? `音声は ${fmtDate(m.audio.deletesAt)} ごろ消去します（最初の確定から数えます）。` : '音声は確定してから決まった日数で消去します。'}
         {!m.can.listen && !m.audio.deletedAt ? '（音声を聞けるのは、録音した人と権限管理者だけです）' : ''}
       </p>
+      {m.can.check && toListen > 0 && (
+        <p className="status info minutes-listen-call" data-testid="minutes-listen-call">
+          音声認識の自信が低い所が {toListen} 件あります。
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              setMode('doubt');
+              requestAnimationFrame(() => transcriptSection.current?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
+            }}
+          >
+            聞き直す
+          </button>
+        </p>
+      )}
 
-      {(m.stage === 'draft' || m.stage === 'confirmed') && (
+      {(m.stage === 'draft' || m.stage === 'confirmed' || m.revising) && (
         <div className="minutes-columns">
           <section className="panel minutes-editor" aria-label="議事録">
-            <h3>{m.stage === 'draft' ? '議事録（AI の下書き。直してから確定してください）' : '議事録（確定）'}</h3>
+            <h3>
+              {m.revising
+                ? '議事録（AI が手直し中）'
+                : m.stage === 'confirmed'
+                  ? `議事録（確定${lastVersion ? `・第${lastVersion.no}版` : ''}）`
+                  : m.reopened
+                    ? '議事録（訂正中。直してから訂正を確定してください）'
+                    : '議事録（AI の下書き。直してから確定してください）'}
+            </h3>
             {m.can.edit ? (
               <>
                 <textarea
@@ -810,6 +941,20 @@ function MinutesDetailView({ meetingId, people, onBack }: { meetingId: string; p
                   aria-label="議事録の本文"
                   data-testid="minutes-body"
                 />
+                {m.reopened && (
+                  <div className="minutes-note">
+                    <label htmlFor="minutes-note">訂正した内容（確定の履歴に残ります）</label>
+                    <input
+                      id="minutes-note"
+                      type="text"
+                      value={note}
+                      maxLength={MINUTES_LIMITS.note}
+                      onChange={(e) => setNote(e.target.value)}
+                      placeholder="例: 内務部の ToDo の期限を 11/27 に直した"
+                      data-testid="minutes-note"
+                    />
+                  </div>
+                )}
                 <div className="actions">
                   <button
                     type="button"
@@ -822,34 +967,71 @@ function MinutesDetailView({ meetingId, people, onBack }: { meetingId: string; p
                   </button>
                   <button
                     type="button"
-                    disabled={dirty || busy}
-                    title={dirty ? '先に保存してください' : undefined}
+                    disabled={dirty || busy || (m.reopened && !note.trim())}
+                    title={dirty ? '先に保存してください' : m.reopened && !note.trim() ? '訂正した内容を書いてください' : undefined}
                     onClick={() => {
-                      if (!window.confirm('この内容で確定します。確定すると直せなくなり、音声は決まった日数のあとに消去されます。確定しますか？')) return;
-                      void run(() => api<MinutesDetail>('POST', `/api/minutes/${m.id}/confirm`, { expectedVersion: m.version }), '確定しました。');
+                      const ask = m.reopened
+                        ? `この内容を第${(lastVersion?.no ?? 0) + 1}版として確定します。第${lastVersion?.no ?? 1}版は履歴に残ります。確定しますか？`
+                        : 'この内容で確定します。確定したあとも「訂正する」で直せます（確定した版は履歴に残ります）。音声は確定から決まった日数のあとに消去されます。確定しますか？';
+                      if (!window.confirm(ask)) return;
+                      void run(async () => {
+                        const next = await api<MinutesDetail>('POST', `/api/minutes/${m.id}/confirm`, { expectedVersion: m.version, ...(m.reopened ? { note } : {}) });
+                        setNote('');
+                        return next;
+                      }, m.reopened ? '訂正を確定しました。' : '確定しました。');
                     }}
                     data-testid="minutes-confirm"
                   >
-                    確定する
+                    {m.reopened ? '訂正を確定する' : '確定する'}
                   </button>
                   {dirty && <span className="hint">未保存の変更があります</span>}
+                  {!dirty && m.reopened && !note.trim() && <span className="hint">確定するには、訂正した内容を書いてください</span>}
                 </div>
               </>
             ) : (
-              <pre className="minutes-body" data-testid="minutes-final">
-                {m.body}
-              </pre>
+              <>
+                <pre className="minutes-body" data-testid="minutes-final">
+                  {m.body}
+                </pre>
+                {m.can.reopen && (
+                  <div className="actions minutes-reopen">
+                    <button
+                      type="button"
+                      className="secondary"
+                      disabled={busy}
+                      onClick={() => void run(() => api<MinutesDetail>('POST', `/api/minutes/${m.id}/reopen`, { expectedVersion: m.version }), '訂正を始めました。直したら「訂正を確定する」を押してください。')}
+                      data-testid="minutes-reopen"
+                    >
+                      訂正する
+                    </button>
+                    <span className="hint">確定した版は履歴に残ります。訂正中も AI への差し戻しと聞き直しを使えます。</span>
+                  </div>
+                )}
+              </>
             )}
           </section>
           {d && (
             <section className="panel minutes-ai" aria-label="AI が拾った根拠">
               <h3>AI が拾った項目と根拠</h3>
+              <MinutesSendBack
+                m={m}
+                comment={comment}
+                onComment={setComment}
+                box={commentBox}
+                dirty={dirty}
+                onSent={(next) => {
+                  setLatest(next);
+                  setVersion((v) => v + 1);
+                  setMessage({ tone: 'ok', text: 'AI に差し戻しました。' });
+                }}
+              />
               <p className="hint">時刻を押すと、その発言の位置へ移ります。「要確認」は、AI の挙げた抜粋が文字起こしに見つからなかったものです。</p>
               {d.decisions.length > 0 && <h4>決定事項</h4>}
               <ul className="rows">
                 {d.decisions.map((x, i) => (
                   <li key={`d${i}`}>
                     {x.text} <EvidenceLinks evidence={x.evidence} onJump={jump} />
+                    {commentButton('決定事項', x.text)}
                   </li>
                 ))}
               </ul>
@@ -860,6 +1042,7 @@ function MinutesDetailView({ meetingId, people, onBack }: { meetingId: string; p
                 {d.todos.map((x, i) => (
                   <li key={`t${i}`}>
                     {x.text}（{[x.department, x.assignee].filter(Boolean).join(' ') || '担当未定'}／期限: {x.due || '未定'}） <EvidenceLinks evidence={x.evidence} onJump={jump} />
+                    {commentButton('ToDo', x.text)}
                   </li>
                 ))}
               </ul>
@@ -873,31 +1056,23 @@ function MinutesDetailView({ meetingId, people, onBack }: { meetingId: string; p
                         {fmtOffset(x.at)}
                       </button>
                     )}
+                    {commentButton('要確認', x.text)}
                   </li>
                 ))}
               </ul>
+              <MinutesReviewHistory m={m} />
             </section>
           )}
         </div>
       )}
 
       {m.transcript && (
-        <details className="bot-details minutes-transcript" open={m.stage === 'draft'}>
-          <summary>
-            文字起こし（{m.transcript.segments.length} 文・{fmtOffset(m.transcript.durationSec)}・{m.transcript.model}）
-          </summary>
-          <ol ref={transcriptBox} className="minutes-segments">
-            {m.transcript.segments.map((s, i) => (
-              <li key={i} data-index={i}>
-                <button type="button" className="minutes-at" onClick={() => jump(s.start)}>
-                  {fmtOffset(s.start)}
-                </button>{' '}
-                {s.text}
-              </li>
-            ))}
-          </ol>
-        </details>
+        <div ref={transcriptSection}>
+          <MinutesTranscript m={m} playing={playing} onPlay={playStretch} mode={shownMode} onMode={setMode} target={target} onSaved={(next) => setLatest(next)} />
+        </div>
       )}
+
+      <MinutesVersions m={m} />
 
       {m.can.delete && (
         <div className="actions minutes-danger">
@@ -906,7 +1081,7 @@ function MinutesDetailView({ meetingId, people, onBack }: { meetingId: string; p
             className="danger"
             disabled={busy}
             onClick={() => {
-              if (!window.confirm('この議事録（音声・文字起こし・本文）を消します。元に戻せません。消しますか？')) return;
+              if (!window.confirm('この議事録（音声・文字起こし・本文・確定の履歴）を消します。元に戻せません。消しますか？')) return;
               void run(async () => {
                 await api<null>('DELETE', `/api/minutes/${m.id}?expectedVersion=${m.version}`);
                 onBack();
