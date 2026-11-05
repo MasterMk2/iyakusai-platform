@@ -41,7 +41,9 @@ export function ClaimsSection({ me, year, onYear, onChanged }: { me: BooksMe; ye
   useEffect(() => {
     const el = detailRef.current;
     if (pane.kind === 'none' || !el || !window.matchMedia?.('(max-width: 900px)').matches) return;
-    if (el.getBoundingClientRect().top < 64) el.scrollIntoView?.({ block: 'start' });
+    // On a phone the opened claim is under the head and the tabs: brought up unless its top is already in view.
+    const top = el.getBoundingClientRect().top;
+    if (top < 64 || top > window.innerHeight * 0.4) el.scrollIntoView?.({ block: 'start' });
   }, [pane]);
 
   const tabs: Tab[] = me.canView ? ['submitted', 'approved', 'closed', 'mine'] : ['mine'];
@@ -75,10 +77,7 @@ export function ClaimsSection({ me, year, onYear, onChanged }: { me: BooksMe; ye
       return (
         <div className="list-empty">
           <p>{year}年度の申請はまだありません。</p>
-          <p className="hint">委員会のために立て替えて払ったものは、ここから申請すると返金されます。レシートか領収書の写真を付けてください。</p>
-          <button type="button" onClick={() => open({ kind: 'new' })}>
-            立替精算を申請する
-          </button>
+          <p className="hint">委員会のために立て替えて払ったものは、上の「立替精算を申請する」から申請すると返金されます。レシートか領収書の写真を付けてください。</p>
         </div>
       );
     }

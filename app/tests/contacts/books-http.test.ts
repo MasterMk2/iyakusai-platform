@@ -211,6 +211,39 @@ describe('books: who sees and does what', () => {
     // A stale version is refused.
     expect((await call('POST', `/api/books/journals/${j.id}/restore`, { cookie: accountant.cookie, body: { expectedVersion: j.version } })).status).toBe(409);
   });
+
+  it('reads one account as its own book (出納帳): the opening, each entry’s change and the balance after it', async () => {
+    await build();
+    const { accountant, id } = await setUpBooks();
+    expect((await call('PUT', '/api/books/openings', { cookie: accountant.cookie, body: { fiscalYear: 2026, rows: [{ accountId: id('現金'), amountYen: 20_000 }, { accountId: id('繰越利益'), amountYen: -20_000 }] } })).status).toBe(200);
+    const book = async (body: Record<string, unknown>) => {
+      const res = await call('POST', '/api/books/journals', { cookie: accountant.cookie, body: { clientToken: token(), entry: entry(body) } });
+      expect(res.status).toBe(201);
+      return res.json.journal as { id: string; version: number };
+    };
+    const tape = await book({ date: '2026-07-01', moneyAccountId: id('現金'), accountId: id('消耗品費'), memo: '養生テープ' });
+    const refill = await book({ form: 'transfer', date: '2026-07-15', amountYen: 50_000, moneyAccountId: id('普通預金'), toMoneyAccountId: id('現金'), memo: '小口現金の補充' });
+    const stamps = await book({ date: '2026-08-01', amountYen: 1_000, moneyAccountId: id('現金'), accountId: id('通信費'), memo: '切手' });
+    const twice = await book({ date: '2026-08-02', amountYen: 500, moneyAccountId: id('現金'), accountId: id('雑費'), memo: '二重' });
+    expect((await call('POST', `/api/books/journals/${twice.id}/void`, { cookie: accountant.cookie, body: { expectedVersion: twice.version, note: '二重' } })).status).toBe(200);
+
+    const cash = (await call('GET', `/api/books/journals?fiscalYear=2026&accountId=${id('現金')}&voided=1`, { cookie: accountant.cookie })).json;
+    expect(cash.account).toMatchObject({ title: '現金', money: true, openingYen: 20_000, closingYen: 65_700 });
+    expect(cash.account.byJournal).toEqual({
+      [tape.id]: { changeYen: -3_300, balanceYen: 16_700 },
+      [refill.id]: { changeYen: 50_000, balanceYen: 66_700 },
+      [stamps.id]: { changeYen: -1_000, balanceYen: 65_700 },
+    });
+    // The closing balance is the one the summary shows; the words narrow the list, not the balances.
+    const summary = (await call('GET', '/api/books/summary?fiscalYear=2026', { cookie: accountant.cookie })).json;
+    expect(summary.balances.find((b: { title: string }) => b.title === '現金').balanceYen).toBe(65_700);
+    const narrowed = (await call('GET', `/api/books/journals?fiscalYear=2026&accountId=${id('現金')}&q=${encodeURIComponent('切手')}`, { cookie: accountant.cookie })).json;
+    expect(narrowed.journals.map((j: { id: string }) => j.id)).toEqual([stamps.id]);
+    expect(narrowed.account.byJournal[stamps.id].balanceYen).toBe(65_700);
+    // An account on the credit side (繰越利益) counts its credits up; no account chosen, no book.
+    expect((await call('GET', `/api/books/journals?fiscalYear=2026&accountId=${id('繰越利益')}`, { cookie: accountant.cookie })).json.account).toMatchObject({ openingYen: 20_000, closingYen: 20_000, money: false });
+    expect((await call('GET', '/api/books/journals?fiscalYear=2026', { cookie: accountant.cookie })).json.account).toBeUndefined();
+  });
 });
 
 describe('books: reimbursement claims (立替精算)', () => {
