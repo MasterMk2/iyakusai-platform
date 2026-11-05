@@ -260,6 +260,13 @@ describe('administrators and departments', () => {
     expect(await ctx.service.authenticate(general.sessionToken)).toMatchObject({ admin: true, departments: ['総務部'] });
     expect(await ctx.service.authenticate(planning.sessionToken)).toMatchObject({ admin: false, departments: ['企画部'] });
   });
+
+  it('come in the organisation order, names outside it after (2026-11-05)', async () => {
+    const ctx = setup();
+    const both = await register(ctx, MEMBER, '21123456', [ROLE_PLANNING, ROLE_GENERAL_AFFAIRS]);
+    // 総務部 is in the organisation order; the synthetic 企画部 is not, so it follows (was Unicode order: 企画部・総務部).
+    expect(await ctx.service.authenticate(both.sessionToken)).toMatchObject({ departments: ['総務部', '企画部'] });
+  });
 });
 
 describe('switching from the production minimal runtime', () => {

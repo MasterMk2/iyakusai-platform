@@ -25,6 +25,7 @@ import {
   type UpcomingResponse,
   type UpcomingTasksState,
 } from '../../shared/calendar.js';
+import { compareDepartments } from '../../shared/departments.js';
 import { departmentsOfLabel, TEMPORARY_STAFF_DEPARTMENT } from '../../shared/mailbox.js';
 import { isAssignedTo, type TaskView } from '../../shared/tasks.js';
 import { DomainError, notFound, type User } from '../domain/types.js';
@@ -236,7 +237,7 @@ export function registerCalendarRoutes(app: FastifyInstance, runtime: CalendarRu
     const names = new Set(store.departmentNames());
     for (const u of deps.listUsers()) for (const d of myDepartmentsOf(u)) names.add(d);
     names.delete(TEMPORARY_STAFF_DEPARTMENT);
-    return [...names].sort((a, b) => a.localeCompare(b, 'ja'));
+    return [...names].sort(compareDepartments);
   };
 
   app.get('/api/calendar/events', async (request): Promise<CalendarListResponse> => {

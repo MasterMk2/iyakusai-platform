@@ -22,6 +22,7 @@ import {
   type DayOfSupplies,
 } from '../../shared/dayof.js';
 import { DECISION_DEPARTMENT_KEY, DECISION_LIMITS, DECISION_VENUE_LABELS } from '../../shared/decisions.js';
+import { compareDepartments } from '../../shared/departments.js';
 import { departmentsOfLabel, TEMPORARY_STAFF_DEPARTMENT } from '../../shared/mailbox.js';
 import type { CalendarStore } from '../calendar/store.js';
 import { normalizeDecisionInput } from '../decisions/routes.js';
@@ -205,7 +206,7 @@ export function registerDayOfRoutes(app: FastifyInstance, store: DayOfStore | nu
   function departmentChoices(): string[] {
     const all = new Set(deps.listUsers().filter((u) => !u.disabled && !isStaffUser(u)).flatMap((u) => departmentsOfLabel(u.roleLabel)));
     all.delete(TEMPORARY_STAFF_DEPARTMENT);
-    return [...all].sort((a, b) => a.localeCompare(b, 'ja'));
+    return [...all].sort(compareDepartments);
   }
 
   function todaysDecisions(today: string): DayOfDecisionItem[] | null {

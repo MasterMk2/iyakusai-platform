@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
+import { compareDepartments } from '../../shared/departments.js';
 import { departmentsOfLabel, TEMPORARY_STAFF_DEPARTMENT } from '../../shared/mailbox.js';
 import { ORG_KIND_LABELS, ORG_STAGES, orgNameKey, statusAllowed, type OrgPaymentCause, type OrgPaymentDetail } from '../../shared/organizations.js';
 import {
@@ -708,7 +709,7 @@ export function registerPaymentRoutes(app: FastifyInstance, opened: PaymentsStor
     const people = deps.people.list().filter(isCommitteeAccount).sort((a, b) => a.displayName.localeCompare(b.displayName, 'ja'));
     const stored = new Map<string, AccountingPermission[]>();
     for (const g of store.grants()) stored.set(g.user_id, [...(stored.get(g.user_id) ?? []), g.permission]);
-    const departments = [...new Set(people.flatMap(departmentsOf))].sort((a, b) => a.localeCompare(b, 'ja'));
+    const departments = [...new Set(people.flatMap(departmentsOf))].sort(compareDepartments);
     return {
       revision: store.accessRevision(),
       people: people.map((p) => ({ id: p.id, displayName: p.displayName, roleLabel: p.roleLabel, stored: stored.get(p.id) ?? [], effective: permissions(p) })),
