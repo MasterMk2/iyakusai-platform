@@ -490,6 +490,12 @@ export class BooksStore {
     return raw ? accountRow(raw) : null;
   }
 
+  /** An account of this 科目 name, the one without a 補助科目 first (whose kind a new 補助科目 of it takes). */
+  accountNamed(name: string): AccountRow | null {
+    const raw = this.db.prepare("SELECT * FROM accounts WHERE name=? ORDER BY sub<>'', sort, id LIMIT 1").get(name);
+    return raw ? accountRow(raw) : null;
+  }
+
   usedAccountIds(): Set<string> {
     const rows = this.db.prepare('SELECT DISTINCT account_id FROM lines').all() as { account_id: string }[];
     const out = new Set(rows.map((r) => r.account_id));

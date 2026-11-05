@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { ACCOUNT_KIND_LABELS, yen, type YayoiExportPlan, type YayoiImportResponse } from '../../../shared/books';
+import { ACCOUNT_KIND_LABELS, ACCOUNT_KINDS, yen, type AccountKind, type YayoiExportPlan, type YayoiImportResponse } from '../../../shared/books';
 import { api, apiForm, fmtDate } from '../../api';
 import { useLoader } from '../../useLoader';
 import { LoadStatus } from '../LoadStatus';
@@ -212,6 +212,8 @@ function ImportForm({ onImported }: { onImported: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [inputKey, setInputKey] = useState(0);
+  // The kinds chosen for the 科目 names that nothing tells (by name: a 補助科目 takes its 科目's kind).
+  const [accountKinds, setAccountKinds] = useState<Record<string, AccountKind>>({});
   const choose = (next: { kind?: 'journals' | 'openings'; file?: File | null }) => {
     if (next.kind !== undefined) setKind(next.kind);
     if (next.file !== undefined) setFile(next.file);
@@ -226,12 +228,14 @@ function ImportForm({ onImported }: { onImported: () => void }) {
     setDone(null);
     try {
       const form = new FormData();
+      if (!dryRun) form.append('kinds', JSON.stringify(Object.fromEntries(unknownNames.map((n) => [n, accountKinds[n]]))));
       form.append('file', file, file.name);
       const q = new URLSearchParams({ kind, dryRun: dryRun ? '1' : '0' });
       if (!dryRun && preview) q.set('planToken', preview.planToken);
       const res = await apiForm<YayoiImportResponse>(`/api/books/yayoi/import?${q.toString()}`, form);
       if (dryRun) {
         setPreview(res);
+        setAccountKinds({});
       } else {
         setDone(kind === 'journals' ? `${res.counts.new} 件の仕訳を取り込みました。` : '期首残高を取り込みました。');
         setPreview(null);
@@ -248,10 +252,19 @@ function ImportForm({ onImported }: { onImported: () => void }) {
     }
   };
 
-  const unknownKinds = preview?.newAccounts.filter((a) => a.kind === null) ?? [];
+  const newAccounts = preview?.newAccounts ?? [];
+  const unknownNames = [...new Set(newAccounts.filter((a) => a.kind === null).map((a) => a.name))];
+  const subsOf = (name: string) => newAccounts.filter((a) => a.name === name && a.sub).length;
+  const kindOf = (a: (typeof newAccounts)[number]): AccountKind | undefined => a.kind ?? accountKinds[a.name];
+  const kindOrder = (a: (typeof newAccounts)[number]) => {
+    const k = kindOf(a);
+    return k ? ACCOUNT_KINDS.indexOf(k) : ACCOUNT_KINDS.length;
+  };
+  const listed = [...newAccounts].sort((x, y) => kindOrder(x) - kindOrder(y) || x.name.localeCompare(y.name, 'ja') || x.sub.localeCompare(y.sub, 'ja'));
+  const kindsMissing = unknownNames.filter((n) => !accountKinds[n]).length;
   const problems = preview?.rows.filter((r) => r.action === 'unreadable') ?? [];
   const changes = preview?.rows.filter((r) => r.action === 'new' && r.reason) ?? [];
-  const canImport = preview !== null && unknownKinds.length === 0 && (kind === 'openings' ? preview.counts.new > 0 : preview.counts.new + preview.counts.ours > 0);
+  const canImport = preview !== null && kindsMissing === 0 && (kind === 'openings' ? preview.counts.new > 0 : preview.counts.new + preview.counts.ours > 0);
 
   return (
     <div className="pay-form books-import" data-testid="yayoi-import">
@@ -336,12 +349,47 @@ function ImportForm({ onImported }: { onImported: () => void }) {
               </ul>
             </details>
           )}
-          {preview.newAccounts.length > 0 && (
-            <div className={unknownKinds.length > 0 ? 'status error' : 'status warning'} role="note">
-              帳簿にまだない科目を足します: {preview.newAccounts.map((a) => `${a.name}${a.sub ? `（${a.sub}）` : ''}${a.kind ? `〈${ACCOUNT_KIND_LABELS[a.kind]}〉` : '〈種類が分からない〉'}`).join('、')}
-              {unknownKinds.length > 0 && <p>種類が分からない科目は、先に「科目と設定」で同じ名前の科目を種類を選んで足してください。</p>}
-            </div>
+          {unknownNames.length > 0 && (
+            <fieldset className="books-forms books-kind-pick" data-testid="yayoi-kinds">
+              <legend>名前から種類が分からない科目</legend>
+              <p className="hint">種類を選ぶと取り込めます。補助科目も同じ種類になります。取り込んだあとでも「科目と設定」で直せます。</p>
+              {unknownNames.map((n) => (
+                <label key={n} className="books-kind-line">
+                  <span>
+                    {n}
+                    {subsOf(n) > 0 && <span className="hint">（補助科目 {subsOf(n)} 件も）</span>}
+                  </span>
+                  <select value={accountKinds[n] ?? ''} aria-label={`${n}の種類`} onChange={(e) => setAccountKinds((k) => ({ ...k, [n]: e.target.value as AccountKind }))}>
+                    <option value="" disabled>
+                      選んでください
+                    </option>
+                    {ACCOUNT_KINDS.map((k) => (
+                      <option key={k} value={k}>
+                        {ACCOUNT_KIND_LABELS[k]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ))}
+            </fieldset>
           )}
+          {newAccounts.length > 0 && (
+            <details className="books-more" data-testid="yayoi-new-accounts">
+              <summary>帳簿にまだない科目 {newAccounts.length} 件を足します</summary>
+              <ul className="pay-plan">
+                {listed.map((a) => {
+                  const k = kindOf(a);
+                  return (
+                    <li key={`${a.name}\u001f${a.sub}`}>
+                      {a.name}
+                      {a.sub ? `（${a.sub}）` : ''} · {k ? ACCOUNT_KIND_LABELS[k] : <span className="books-over">種類を選んでください</span>}
+                    </li>
+                  );
+                })}
+              </ul>
+            </details>
+          )}
+          {kindsMissing > 0 && <p className="hint">上で種類をあと {kindsMissing} つ選ぶと取り込めます。</p>}
           <div className="actions">
             <button type="button" disabled={busy || !canImport} onClick={() => void send(false)} data-testid="yayoi-import-run">
               {busy ? '取り込んでいます…' : kind === 'openings' ? '期首残高を取り込む' : preview.counts.new === 0 ? '弥生の伝票番号を控える' : `${preview.counts.new} 件を取り込む`}

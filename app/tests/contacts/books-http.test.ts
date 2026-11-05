@@ -119,9 +119,10 @@ async function call(method: 'GET' | 'POST' | 'PUT', url: string, options: { body
   return { status: res.statusCode, json, body: res.body, raw: res.rawPayload, headers: res.headers };
 }
 
-async function upload(url: string, cookie: string, filename: string, data: Buffer): Promise<Res> {
+async function upload(url: string, cookie: string, filename: string, data: Buffer, fields: Record<string, string> = {}): Promise<Res> {
   const boundary = `----synthetic${randomBytes(8).toString('hex')}`;
   const payload = Buffer.concat([
+    ...Object.entries(fields).map(([name, value]) => Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`)),
     Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: application/octet-stream\r\n\r\n`),
     data,
     Buffer.from(`\r\n--${boundary}--\r\n`),
@@ -331,6 +332,39 @@ async function importYayoi(cookie: string, kind: 'journals' | 'openings', text: 
 }
 
 describe('books: 弥生', () => {
+  it('asks for the kind of a 科目 whose name tells nothing, and gives a new 補助科目 of it the same kind', async () => {
+    await build();
+    const { accountant } = await setUpBooks();
+    const row = (no: string, debit: string, sub: string, amount: number) =>
+      ['2000', no, '', '2026/07/03', debit, sub, '', '対象外', String(amount), '0', '現金', '', '', '対象外', String(amount), '0', `合成の支払 ${no}`, '', '', '0', '', '', '', '', 'no', '', ''].join(',');
+    const file = (...rows: string[]) => Buffer.from(encodeShiftJis(rows.join('\r\n') + '\r\n'));
+    const data = file(row('11', '合成事務費用', '', 1000), row('12', '合成謎科目', '甲', 2000), row('13', '合成謎科目', '乙', 3000));
+    const dry = await upload('/api/books/yayoi/import?kind=journals&dryRun=1', accountant.cookie, 'yayoi.csv', data);
+    expect(dry.json.newAccounts).toEqual([
+      { name: '合成事務費用', sub: '', kind: 'expense' },
+      { name: '合成謎科目', sub: '甲', kind: null },
+      { name: '合成謎科目', sub: '乙', kind: null },
+    ]);
+    const url = `/api/books/yayoi/import?kind=journals&dryRun=0&planToken=${dry.json.planToken}`;
+    const unchosen = await upload(url, accountant.cookie, 'yayoi.csv', data);
+    expect(unchosen.status).toBe(422);
+    expect(unchosen.json.message).toContain('合成謎科目');
+    expect((await upload(url, accountant.cookie, 'yayoi.csv', data, { kinds: '{"合成謎科目":"cash"}' })).status).toBe(422);
+    const done = await upload(url, accountant.cookie, 'yayoi.csv', data, { kinds: JSON.stringify({ 合成謎科目: 'expense' }) });
+    expect([done.status, done.json?.message]).toEqual([200, undefined]);
+    const accounts = (await call('GET', '/api/books/settings', { cookie: accountant.cookie })).json.accounts as { name: string; sub: string; kind: string; group: string }[];
+    expect(accounts.filter((a) => a.name.startsWith('合成')).map((a) => [a.name, a.sub, a.kind, a.group])).toEqual(
+      expect.arrayContaining([
+        ['合成事務費用', '', 'expense', '支出'],
+        ['合成謎科目', '甲', 'expense', '支出'],
+        ['合成謎科目', '乙', 'expense', '支出'],
+      ]),
+    );
+    // A later file with another 補助科目 of it needs no choice: the 科目 is in the books now.
+    const later = await upload('/api/books/yayoi/import?kind=journals&dryRun=1', accountant.cookie, 'yayoi.csv', file(row('14', '合成謎科目', '丙', 4000)));
+    expect(later.json.newAccounts).toEqual([{ name: '合成謎科目', sub: '丙', kind: 'expense' }]);
+  });
+
   it('writes the journals made here as 弥生’s Shift_JIS file once, and reads 弥生’s file back without doubling them', async () => {
     await build();
     const { accountant, id } = await setUpBooks();
