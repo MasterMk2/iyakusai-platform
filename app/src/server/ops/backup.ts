@@ -200,6 +200,37 @@ async function main(): Promise<void> {
     manifest.files['mailbox/payments.sqlite3'] = { bytes: readFileSync(dest).length, sha256: sha256(readFileSync(dest)) };
   }
 
+  // Books (会計の帳簿, 2026-11-05): books.sqlite3 next to payments.sqlite3, and the receipts (books-receipts/) it names,
+  // each checked against its recorded SHA-256. The receipts a person took off are kept too (the history names them).
+  const booksDb = path.join(data, 'mailbox', 'books.sqlite3');
+  if (existsSync(booksDb)) {
+    const dest = path.join(target, 'mailbox', 'books.sqlite3');
+    mkdirSync(path.dirname(dest), { recursive: true, mode: 0o700 });
+    const source = new DatabaseSync(booksDb, { readOnly: true });
+    try {
+      await backup(source, dest);
+    } finally {
+      source.close();
+    }
+    const copy = new DatabaseSync(dest, { readOnly: true });
+    try {
+      const check = copy.prepare('PRAGMA integrity_check').get() as { integrity_check: string };
+      if (check.integrity_check !== 'ok') throw new Error('会計の帳簿の複製の整合性を確認できませんでした。');
+      for (const table of ['accounts', 'journals', 'lines', 'claims', 'receipts', 'history']) {
+        manifest.counts[`books.${table}`] = Number((copy.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n);
+      }
+      for (const row of copy.prepare('SELECT id, sha256 FROM receipts ORDER BY id').all() as { id: string; sha256: string }[]) {
+        const relative = path.posix.join('books-receipts', row.id);
+        const buf = readFileSync(path.join(data, 'mailbox', relative));
+        if (sha256(buf) !== row.sha256) throw new Error(`領収書の内容が帳簿の記録と一致しません: ${relative}`);
+        keep(path.posix.join('mailbox', relative), buf);
+      }
+    } finally {
+      copy.close();
+    }
+    manifest.files['mailbox/books.sqlite3'] = { bytes: readFileSync(dest).length, sha256: sha256(readFileSync(dest)) };
+  }
+
   // Meeting minutes (α 2026-11-02): minutes.sqlite3 next to mail.sqlite3. The recordings (minutes-audio/) are
   // not backed up: they are deleted a fixed number of days after confirmation.
   const minutesDb = path.join(data, 'mailbox', 'minutes.sqlite3');

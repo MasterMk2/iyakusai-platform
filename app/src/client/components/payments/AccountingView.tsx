@@ -10,7 +10,8 @@ import { InvoicePane } from './InvoicePane';
 import { StatementImport } from './StatementImport';
 import './payments.css';
 
-// 会計 (入金確認, 2026-11-03), opened from 連絡先 → 団体 by the people with the accounting permission (no tab of its own).
+// 会計 (入金確認, 2026-11-03), opened from 連絡先 → 団体 by the people with the accounting permission, and since 2026-11-05
+// also from the 会計 tab (入金確認, without the way back to the organizations).
 // The four lists the accounting checks — 未入金 (overdue first), 入金済み, 照合できていない入金, 過不足 — with their
 // counts, the opened invoice or deposit next to them (in their place on a phone), and the two screens that add
 // something: 請求を作る and 明細を取り込む (only with 請求と入金の確定). Opening and reading never changes anything.
@@ -27,7 +28,7 @@ const TABS: { key: Tab; label: string }[] = [
 
 const THIS_YEAR = new Date().getFullYear();
 
-export function AccountingView({ me, onBack }: { me: PaymentsMe; onBack: () => void }) {
+export function AccountingView({ me, onBack }: { me: PaymentsMe; onBack?: () => void }) {
   const [year, setYear] = useState<number | null>(null);
   const [tab, setTab] = useState<Tab>('unpaid');
   const [pane, setPane] = useState<Pane>({ kind: 'none' });
@@ -242,9 +243,11 @@ export function AccountingView({ me, onBack }: { me: PaymentsMe; onBack: () => v
 
   return (
     <div className="pay-view" data-testid="accounting">
-      <button type="button" className="back-link" onClick={onBack}>
-        ← 団体の一覧に戻る
-      </button>
+      {onBack && (
+        <button type="button" className="back-link" onClick={onBack}>
+          ← 団体の一覧に戻る
+        </button>
+      )}
       <div className="pay-head">
         <div className="pane-title">
           <h2>会計（入金の確認）</h2>

@@ -106,6 +106,8 @@ services:
 | `student-ids.json` | Discord の ID → 学籍番号の名簿（任意）。はじめから学籍番号でログインできるようにする |
 | `mailbox.json` | 委員会のメールの設定（例は [`app/deploy/unified/mailbox.example.json`](../app/deploy/unified/mailbox.example.json)、説明は [mail.md](mail.md)） |
 | `line.json` | LINE 公式アカウント（`mailbox.json` と同じフォルダ）。あれば LINE をメールの画面に出す。`send` とチャネルのアクセストークンが無ければ読むだけ。Bot からの返信（`discord`）は `"auth": "signed"`（svc-auth/v1、鍵 32 バイト以上）にする |
+| `books-sheets.json` | 会計のマスターシート（`mailbox.json` と同じフォルダ。任意）。あれば帳簿の写しをスプレッドシートに書く。下の「会計のマスターシート」 |
+| `books-sheets-key.json` | 上のサービスアカウントの JSON 鍵（名前は例。所有者だけが読める権限 600） |
 | `*.key` | 経路ごとの鍵。32 バイト以上の乱数 |
 | `bot-host-ca.crt` | Bot ホストの CA 証明書 |
 
@@ -133,6 +135,25 @@ services:
 - `bootstrapDiscordUserId` は最初のアカウント（いつも権限の管理者）。`excludedSharedDiscordUserIds` は共用の PC などの個人でない Discord アカウントで、登録させない。
 - 知らない項目があると起動を断ります。ほかに `sessionDays`・`memberGraceHours`・`memberCacheMinutes` で、ログインの期間・Bot ホストに届かないときの猶予・参加の確認を使い回す時間を変えられます。
 
+会計のマスターシート（[app/docs/books.md](../app/docs/books.md) §3）を使うとき：
+
+1. Google Cloud でプロジェクトを作り、Google Sheets API を有効にする。サービスアカウントを作り、JSON の鍵を作って `config/` に置く（権限 600）。サービスアカウントにほかの権限は付けない。
+2. 共有ドライブに空のスプレッドシートを作り、サービスアカウントのアドレス（`…@….iam.gserviceaccount.com`）を**編集者**として共有する。委員は閲覧者のままにする（基盤が書くタブは保護されるので、編集者の委員がいても書けない）。Workspace の設定で外部への共有を止めていると、サービスアカウントを足せないことがある。
+3. `books-sheets.json` を置いてアプリを再起動する。起動すると最初の書き込みをし、以後は帳簿が変わるたびに書く。会計 →「科目と設定」で、最後に書けた時刻と失敗の種類を確かめられる。
+
+```json
+{
+  "version": 1,
+  "spreadsheetId": "スプレッドシートの URL の /d/ と /edit の間",
+  "serviceAccountKeyFile": "/config/books-sheets-key.json",
+  "tabPrefix": "",
+  "debounceSeconds": 30
+}
+```
+
+- 知らない項目があると、会計のスプレッドシートだけを無効にして起動する（帳簿は使える）。`tabPrefix` は基盤が作るタブの名前の前に付ける文字（既定はなし）、`debounceSeconds` は帳簿が変わってから書くまでの秒数（5〜3600）。
+- 鍵の中身は `client_email` と `private_key` だけを読む。鍵をログ・画面・スプレッドシートに出さない。
+
 鍵の決まり：
 
 - 経路ごとに別の鍵にする（ペッパー・Bot ホストの登録・タスク連携・メールの取り込み・物品の複製・Bot のデータソース）。同じ値があると起動を断ります。
@@ -147,7 +168,7 @@ services:
 docker exec <コンテナ名> node dist/server/ops/backup.js
 ```
 
-`/backups/iyakusai-app-<UTC の時刻>/` に、状態の JSON・物品の台帳・メール・連絡先・決定事項・団体の台帳・予定・入金確認・当日の画面・年度の切り替え（SQLite のオンラインバックアップ）・それらが指す写真と添付（記録の SHA-256 と照合したもの）・`manifest.json` を書きます。何も消しません。毎日など定期的に動かしてください。
+`/backups/iyakusai-app-<UTC の時刻>/` に、状態の JSON・物品の台帳・メール・連絡先・決定事項・団体の台帳・予定・入金確認・当日の画面・年度の切り替え・会計の帳簿（SQLite のオンラインバックアップ）・それらが指す写真と添付と領収書（記録の SHA-256 と照合したもの）・`manifest.json` を書きます。何も消しません。毎日など定期的に動かしてください。
 
 戻すとき：コンテナを止め、バックアップのフォルダの中身を `/data` に当たるフォルダへ写し戻してから起動します。
 

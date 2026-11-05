@@ -3,6 +3,9 @@ import type { z } from 'zod';
 import { orgNameKey, type OrgInput } from '../../shared/organizations.js';
 import { depositKey, normalizePayerName, tokyoDate } from '../../shared/payments.js';
 import type { ContactInput } from '../../shared/contacts.js';
+import { seedDemoLedger } from '../books/demo.js';
+import { registerBooksRoutes } from '../books/routes.js';
+import { BooksStore } from '../books/store.js';
 import { registerContactRoutes, type ContactRouteDeps } from '../contacts/routes.js';
 import { ContactsStore } from '../contacts/store.js';
 import { DomainError, type User } from '../domain/types.js';
@@ -21,6 +24,8 @@ export interface DemoBooks {
   contacts: ContactsStore;
   organizations: OrganizationsStore;
   payments: PaymentsStore;
+  /** The books (会計の帳簿, 2026-11-05). */
+  ledger: BooksStore;
 }
 
 export interface DemoBooksDeps {
@@ -31,7 +36,7 @@ export interface DemoBooksDeps {
   parse: <T>(schema: z.ZodType<T>, value: unknown) => T;
 }
 
-/** Opens the three files in `dir` and adds the synthetic rows to empty ones. Null when a file cannot be opened. */
+/** Opens the four files in `dir` and adds the synthetic rows to empty ones. Null when a file cannot be opened. */
 export function openDemoBooks(dir: string, users: User[], now: string): DemoBooks | null {
   const opened: { close(): void }[] = [];
   try {
@@ -41,8 +46,11 @@ export function openDemoBooks(dir: string, users: User[], now: string): DemoBook
     opened.push(organizations);
     const payments = new PaymentsStore(dir);
     opened.push(payments);
-    const books = { contacts, organizations, payments };
+    const ledger = new BooksStore(dir);
+    opened.push(ledger);
+    const books = { contacts, organizations, payments, ledger };
     seedDemoBooks(books, users, now);
+    seedDemoLedger(ledger, users, now);
     return books;
   } catch {
     for (const store of opened) store.close();
@@ -82,7 +90,7 @@ export function registerDemoBooks(app: FastifyInstance, books: DemoBooks, deps: 
     now,
     paymentsVisible: (user) => accountingPermissionsOf(books.payments, whole(user)).includes('accounting.view'),
   });
-  registerPaymentRoutes(app, books.payments, {
+  const accounting: ContactRouteDeps = {
     ...base,
     requireUser: (request) => whole(deps.requireUser(request)),
     people: {
@@ -92,11 +100,11 @@ export function registerDemoBooks(app: FastifyInstance, books: DemoBooks, deps: 
       },
       list: () => deps.listUsers().map(whole),
     },
-    organizations: books.organizations,
-    contacts: books.contacts,
-    now,
-  });
+  };
+  registerPaymentRoutes(app, books.payments, { ...accounting, organizations: books.organizations, contacts: books.contacts, now });
+  registerBooksRoutes(app, books.ledger, { ...accounting, payments: books.payments, organizations: books.organizations, now, sheets: null, permissionsOf: (user) => accountingPermissionsOf(books.payments, whole(user)) });
   app.addHook('onClose', async () => {
+    books.ledger.close();
     books.payments.close();
     books.organizations.close();
     books.contacts.close();

@@ -1,0 +1,105 @@
+/* 会計 (2026-11-05). Built on payments.css (the list and the opened item side by side, the sticky sum bar, the forms)
+   and the shared classes of styles.css; this file adds the tables, the receipts and the screen switch. On a phone the
+   list and the opened item are one column, tables keep their numbers on one line and scroll inside their box, and
+   every tapped control is at least 44px high. */
+
+.books-layout { grid-template-columns: minmax(0, 1fr); }
+.books-layout .main { grid-column: 1 / -1; padding: 16px 20px 48px; }
+.books-sections { margin: 0 0 12px; }
+.books-sections .filter-chip { min-height: 44px; padding: 4px 14px; }
+.books-sections .filter-chip[aria-pressed='true'] .option-count { color: var(--on-fill-muted); }
+
+.books-totals { display: flex; flex-wrap: wrap; gap: 4px 20px; margin: 0 0 8px; font-size: 14px; color: var(--muted); }
+.books-totals strong { color: var(--ink); }
+.books-tools { grid-template-columns: minmax(0, 1fr) auto auto; align-items: end; }
+.books-tools .checkbox { display: inline-flex; gap: 8px; align-items: center; min-height: 44px; font-size: 14px; white-space: nowrap; }
+.books-inline-field { display: inline-grid; gap: 4px; font-size: 14px; font-weight: 700; }
+.books-inline-field select, .books-inline-field input { font-weight: 400; }
+.books-in { color: var(--green); }
+.books-out { color: var(--ink); }
+.books-over { color: var(--red); font-weight: 700; }
+
+.books-pane { display: grid; gap: 8px; min-width: 0; }
+.books-pane h2 { margin: 0; font-size: 1.15rem; }
+.books-lines, .books-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.books-lines th, .books-lines td, .books-table th, .books-table td { padding: 6px 8px; border-bottom: 1px solid var(--line-soft); text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+.books-lines thead th, .books-table thead th { color: var(--muted); font-weight: 700; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.books-table tbody th { font-weight: 400; }
+.books-table tfoot th, .books-table tfoot td { border-top: 1px solid var(--line); border-bottom: 0; font-weight: 700; }
+.books-lines .num, .books-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.books-table caption { text-align: left; font-weight: 700; padding: 12px 0 4px; }
+.books-table .pay-badge { margin-left: 6px; }
+.books-inactive th, .books-inactive td { color: var(--muted); }
+/* The account tables of each kind line up with each other: the same columns in every table. */
+.books-accounts { table-layout: fixed; }
+.books-accounts th:nth-child(1) { width: 44%; }
+.books-accounts th:nth-child(2) { width: 24%; }
+.books-accounts th:nth-child(3) { width: 18%; }
+.books-accounts td:last-child { text-align: right; }
+.books-accounts td, .books-accounts th { vertical-align: middle; }
+
+.books-report { margin: 12px 0 28px; display: grid; gap: 8px; min-width: 0; overflow-x: auto; }
+.books-report h3 { margin: 0; font-size: 16px; }
+.books-report-head { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: flex-end; justify-content: space-between; }
+.books-report > .pay-facts { margin: 0; }
+.books-report > .books-inline-field { justify-self: start; }
+.books-export { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.books-export p { margin: 0; }
+.books-fact-pair { display: contents; }
+.books-more { border-top: 1px solid var(--line); padding-top: 4px; }
+.books-more summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; font-weight: 700; }
+.books-changed { display: grid; gap: 6px; }
+.books-changed h4, .books-preview h4, .books-account-form h4 { margin: 0; font-size: 15px; }
+
+.books-history { margin-top: 20px; border-top: 1px solid var(--line); padding-top: 4px; }
+.books-history summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; font-weight: 700; }
+.books-receipts { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+.books-receipts li { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; min-height: 44px; padding: 4px 0; border-bottom: 1px solid var(--line-soft); overflow-wrap: anywhere; }
+.books-receipts a { display: inline-flex; align-items: center; min-height: 44px; }
+.books-upload { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; }
+.books-upload label.button { cursor: pointer; display: inline-flex; align-items: center; }
+.books-upload label.button:focus-within { outline: 3px solid var(--focus-ring); outline-offset: 2px; box-shadow: 0 0 0 2px var(--focus); }
+.books-upload label.button.disabled { opacity: 0.55; cursor: not-allowed; }
+
+.books-forms { border: 0; margin: 0; padding: 0; display: grid; gap: 6px; min-width: 0; }
+.books-forms legend { font-size: 14px; font-weight: 700; padding: 0; margin-bottom: 4px; }
+.books-form-choice, .pay-form .books-form-choice { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 2px 10px; align-items: start; min-height: 44px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; font-weight: 400; }
+.books-form-choice:has(input:checked) { border-color: var(--blue); background: var(--hover); }
+.books-form-choice input, .pay-form .books-form-choice input { width: 20px; height: 20px; margin: 2px 0 0; }
+.books-form-choice > span { display: grid; gap: 0; }
+.books-form-choice .hint { margin: 0; }
+@media (min-width: 681px) {
+  .pay-form .books-forms:has(.books-form-choice) { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+  .pay-form .books-forms:has(.books-form-choice) legend { grid-column: 1 / -1; }
+}
+
+.books-owed { margin: 0 0 12px; }
+.books-owed-head { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 2px 12px; align-items: center; min-height: 44px; padding: 8px 4px; font-weight: 700; cursor: pointer; }
+.books-owed-head input { width: 22px; height: 22px; margin: 0; }
+.books-owed-head .hint { grid-column: 2 / -1; margin: 0; }
+.books-pick { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 0 8px; padding-left: 24px; }
+.books-sum-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px 12px; }
+.books-sum-fields input, .books-sum-fields select { width: 100%; }
+
+.books-deposit { display: grid; gap: 0; }
+.books-deposit-fields { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: end; padding: 0 4px 10px 40px; }
+
+.books-budget-group { border: 0; margin: 0; padding: 0; display: grid; gap: 4px; }
+.books-budget-group legend { font-size: 15px; font-weight: 700; padding: 0; margin-bottom: 4px; }
+.pay-form .books-budget-line { display: grid; grid-template-columns: minmax(0, 1fr) 160px auto; gap: 8px; align-items: center; font-weight: 400; }
+.books-budget-line input { text-align: right; font-variant-numeric: tabular-nums; }
+
+.books-import { max-width: 720px; }
+.books-preview { display: grid; gap: 8px; }
+.books-counts { margin: 0; padding-left: 20px; display: grid; gap: 2px; font-size: 14px; }
+
+@media (max-width: 900px) {
+  .books-tools { grid-template-columns: minmax(0, 1fr) auto; }
+  .books-tools .list-search { grid-column: 1 / -1; }
+}
+@media (max-width: 680px) {
+  .books-layout .main { padding: 12px 12px 40px; }
+  .books-deposit-fields { padding-left: 4px; }
+  .pay-form .books-budget-line { grid-template-columns: minmax(0, 1fr) 128px auto; }
+  .books-lines th, .books-lines td, .books-table th, .books-table td { padding: 6px 4px; }
+}
