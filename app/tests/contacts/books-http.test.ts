@@ -405,8 +405,13 @@ describe('books: 弥生', () => {
     const { accountant } = await setUpBooks();
     const unbalanced = await importYayoi(accountant.cookie, 'openings', '2026/01/01,普通預金,借方,,,800000\r\n2026/01/01,繰越利益,貸方,,,700000\r\n');
     expect(unbalanced.done.status).toBe(422);
-    const good = await importYayoi(accountant.cookie, 'openings', '2026/01/01,普通預金,借方,,,800000\r\n2026/01/01,現金,借方,,,20000\r\n2026/01/01,繰越利益,貸方,,,820000\r\n');
+    // 弥生 lists its whole template; the 科目 at 0 (whose kind nothing tells) neither ask for a kind nor become accounts.
+    const good = await importYayoi(accountant.cookie, 'openings', '2026/01/01,普通預金,借方,,,800000\r\n2026/01/01,現金,借方,,,20000\r\n2026/01/01,土地,借方,,,0\r\n2026/01/01,自己株式,貸方,,,0\r\n2026/01/01,繰越利益,貸方,,,820000\r\n');
+    expect(good.dry.newAccounts).toEqual([]);
     expect(good.done.status).toBe(200);
+    const names = ((await call('GET', '/api/books/settings', { cookie: accountant.cookie })).json.accounts as { name: string }[]).map((a) => a.name);
+    expect(names).not.toContain('土地');
+    expect(names).not.toContain('自己株式');
     const openings = (await call('GET', '/api/books/openings?fiscalYear=2026', { cookie: accountant.cookie })).json.rows as { accountId: string; title: string; amountYen: number }[];
     expect(Object.fromEntries(openings.map((o) => [o.title, o.amountYen]))).toEqual({ 普通預金: 800_000, 現金: 20_000, 繰越利益: -820_000 });
     // Entered by hand, too, the two sides have to agree.

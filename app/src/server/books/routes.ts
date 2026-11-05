@@ -1143,7 +1143,8 @@ export function registerBooksRoutes(app: FastifyInstance, opened: BooksStore | n
     const newAccounts = new Map<string, { name: string; sub: string; kind: ReturnType<typeof guessAccount> }>();
     for (const r of parsed.rows) {
       rows.push({ line: r.line, action: 'new', date: r.date, amountYen: r.amountYen, memo: `${r.account}${r.sub ? `（${r.sub}）` : ''}`, reason: r.amountYen === 0 ? '残高 0（入れません）' : '' });
-      if (!store.accountByName(r.account, r.sub)) newAccounts.set(`${r.account}\u001f${r.sub}`, { name: r.account, sub: r.sub, kind: kindOfNew(r.account) });
+      // 弥生 lists every 科目 of its template, most of them at 0 (土地, 自己株式…): those add no account here.
+      if (r.amountYen !== 0 && !store.accountByName(r.account, r.sub)) newAccounts.set(`${r.account}\u001f${r.sub}`, { name: r.account, sub: r.sub, kind: kindOfNew(r.account) });
     }
     rows.sort((a, b) => a.line - b.line);
     const counts = { new: 0, duplicate: 0, ours: 0, unreadable: 0 } as YayoiImportResponse['counts'];
@@ -1163,6 +1164,7 @@ export function registerBooksRoutes(app: FastifyInstance, opened: BooksStore | n
       const out: { accountId: string; amountYen: number }[] = [];
       const sums = new Map<string, number>();
       for (const r of parsed.rows) {
+        if (r.amountYen === 0) continue;
         let a = store.accountByName(r.account, r.sub);
         if (!a) {
           const g = settled.get(r.account)!;
