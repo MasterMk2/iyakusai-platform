@@ -118,6 +118,33 @@ class Windows(unittest.TestCase):
         self.assertEqual(sum(x.shape[0] for _, x in got), s.shape[0])
         self.assertEqual(got[0][1].dtype, np.float32)
 
+    @unittest.skipIf(av is None, "av が無い")
+    def test_a_broken_first_aac_frame_does_not_drop_the_rest(self):
+        # 2026-11-05 の実例：先頭に中身 2 バイトの ADTS フレーム（9 バイト）がある録音が 0 秒になった。
+        import io
+        import tempfile
+        from pathlib import Path
+
+        buf = io.BytesIO()
+        with av.open(buf, "w", format="adts") as out:
+            st = out.add_stream("aac", rate=48000, layout="stereo")
+            t = np.arange(48000 * 12) / 48000
+            x = (0.2 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+            for i in range(0, len(x), 1024):
+                fr = av.AudioFrame.from_ndarray(np.stack([x[i:i + 1024]] * 2), format="fltp", layout="stereo")
+                fr.sample_rate = 48000
+                fr.pts = i
+                for p in st.encode(fr):
+                    out.mux(p)
+            for p in st.encode(None):
+                out.mux(p)
+        broken_head = bytes.fromhex("fff94c80013ffc1190")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "a.aac"
+            path.write_bytes(broken_head + buf.getvalue())
+            got = list(w.audio_windows(path, window_sec=5, search_sec=2))
+        self.assertGreater(sum(x.shape[0] for _, x in got) / w.SAMPLE_RATE, 11.5)
+
     def test_transcribe_adds_the_window_start(self):
         class Seg:
             def __init__(self, start, end, text):
@@ -165,6 +192,17 @@ class Loop(unittest.TestCase):
         d = w.clean_draft({"decisions": [{"text": "A", "evidence": [{"at": "inf", "quote": "q"}, {"at": 1e9, "quote": "r"}]}], "unclear": [{"text": "u", "at": "nan"}]})
         self.assertEqual(d["decisions"][0]["evidence"], [{"at": 86400.0, "quote": "r"}])
         self.assertIsNone(d["unclear"][0]["at"])
+
+    def test_unreadable_audio_is_a_failure_not_an_empty_draft(self):
+        app = mock.Mock()
+        job = {"id": "mt_0000000000000001", "stage": "transcribe", "leaseToken": "t" * 24, "audio": {"ext": "aac"}}
+        app.post.side_effect = [{"job": job}, {"ok": True}]
+        with mock.patch.object(w, "whisper_model", return_value=(mock.Mock(), "large-v3")), mock.patch.object(w, "audio_windows", return_value=iter([])):
+            self.assertTrue(w.run_once(app, ["transcribe"]))
+        sent = app.post.call_args_list[1].args[1]
+        self.assertIn("文字起こしに失敗しました", sent["error"])
+        self.assertIn("読み取れませんでした", sent["error"])
+        self.assertNotIn("transcript", sent)
 
     def test_no_job(self):
         app = mock.Mock()
