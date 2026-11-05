@@ -117,8 +117,9 @@ export async function requestToken(config: BankConfig, fetchImpl: BankFetch, par
   return { accessToken: parsed.data.access_token, refreshToken: parsed.data.refresh_token ?? null, expiresIn: expiresIn !== null && Number.isFinite(expiresIn) && expiresIn > 0 ? expiresIn : null, scopes: granted };
 }
 
-async function readApi(config: BankConfig, fetchImpl: BankFetch, accessToken: string, path: '/accounts' | '/accounts/balances'): Promise<unknown> {
-  const res = await send(fetchImpl, `${config.endpoints.api}${path}`, { method: 'GET', headers: { Accept: 'application/json;charset=UTF-8', 'x-access-token': accessToken } });
+async function readApi(config: BankConfig, fetchImpl: BankFetch, accessToken: string, path: '/accounts' | '/accounts/balances' | '/accounts/transactions', query?: Record<string, string>): Promise<unknown> {
+  const qs = query ? `?${new URLSearchParams(query).toString()}` : '';
+  const res = await send(fetchImpl, `${config.endpoints.api}${path}${qs}`, { method: 'GET', headers: { Accept: 'application/json;charset=UTF-8', 'x-access-token': accessToken } });
   const answer = await readAnswer(res);
   if (res.status === 401) throw new BankApiError('unauthorized', '銀行がトークンを受け付けませんでした。');
   if (res.status >= 500) throw new BankApiError('unavailable', '銀行が一時的に応答できませんでした。時間をおいてもう一度試してください。');
@@ -129,7 +130,7 @@ async function readApi(config: BankConfig, fetchImpl: BankFetch, accessToken: st
 
 const text = z.string().max(200).optional().nullable();
 const accountsAnswer = z.object({
-  accounts: z.array(z.object({ accountId: z.string().max(40), branchName: text, accountTypeName: text, accountNumber: text }).passthrough()).max(200),
+  accounts: z.array(z.object({ accountId: z.string().max(40), branchName: text, accountTypeCode: text, accountTypeName: text, accountNumber: text }).passthrough()).max(200),
 }).passthrough();
 const balancesAnswer = z.object({
   balances: z.array(z.object({ accountId: z.string().max(40), balance: z.union([z.string().max(30), z.number()]).optional().nullable() }).passthrough()).max(200),
@@ -138,6 +139,8 @@ const balancesAnswer = z.object({
 export interface BankAccountRow {
   accountId: string;
   branchName: string | null;
+  /** 01=普通預金（有利息）、02=普通預金（決済用）など。入出金明細は 01・02 だけ。 */
+  accountTypeCode: string | null;
   accountTypeName: string | null;
   accountNumber: string | null;
 }
@@ -146,7 +149,7 @@ export interface BankAccountRow {
 export async function listAccounts(config: BankConfig, fetchImpl: BankFetch, accessToken: string): Promise<BankAccountRow[]> {
   const parsed = accountsAnswer.safeParse(await readApi(config, fetchImpl, accessToken, '/accounts'));
   if (!parsed.success) throw new BankApiError('unexpected', '銀行の口座一覧の応答を読めませんでした。');
-  return parsed.data.accounts.map((a) => ({ accountId: a.accountId, branchName: a.branchName ?? null, accountTypeName: a.accountTypeName ?? null, accountNumber: a.accountNumber ?? null }));
+  return parsed.data.accounts.map((a) => ({ accountId: a.accountId, branchName: a.branchName ?? null, accountTypeCode: a.accountTypeCode ?? null, accountTypeName: a.accountTypeName ?? null, accountNumber: a.accountNumber ?? null }));
 }
 
 /** 残高照会 (private:account): balance in yen per account id, null when the bank gave none. */
@@ -159,4 +162,47 @@ export async function listBalances(config: BankConfig, fetchImpl: BankFetch, acc
     out.set(b.accountId, Number.isFinite(n) ? n : null);
   }
   return out;
+}
+
+const amountText = z.union([z.string().max(30), z.number()]);
+const transactionsAnswer = z.object({
+  hasNext: z.union([z.boolean(), z.enum(['true', 'false'])]).optional(),
+  nextItemKey: z.string().max(40).optional().nullable(),
+  transactions: z.array(z.object({
+    transactionDate: z.string().max(20),
+    transactionType: z.string().max(4),
+    amount: amountText,
+    remarks: z.string().max(400).optional().nullable(),
+    balance: amountText.optional().nullable(),
+    itemKey: z.string().max(40).optional().nullable(),
+  }).passthrough()).max(5000),
+}).passthrough();
+
+export interface BankTransaction {
+  /** YYYY-MM-DD */
+  date: string;
+  /** 1=入金、2=出金 */
+  type: string;
+  amount: string;
+  remarks: string;
+  balance: string;
+}
+
+/** 入出金明細照会 (private:account): every page of one period, up to `limit` rows (more is refused, not cut). */
+export async function listTransactions(config: BankConfig, fetchImpl: BankFetch, accessToken: string, q: { accountId: string; dateFrom: string; dateTo: string }, limit: number): Promise<BankTransaction[]> {
+  const out: BankTransaction[] = [];
+  let next: string | null = null;
+  for (let page = 0; page < 50; page += 1) {
+    const query: Record<string, string> = { accountId: q.accountId, dateFrom: q.dateFrom, dateTo: q.dateTo, ...(next ? { nextItemKey: next } : {}) };
+    const parsed = transactionsAnswer.safeParse(await readApi(config, fetchImpl, accessToken, '/accounts/transactions', query));
+    if (!parsed.success) throw new BankApiError('unexpected', '銀行の入出金明細の応答を読めませんでした。');
+    for (const t of parsed.data.transactions) {
+      out.push({ date: t.transactionDate, type: t.transactionType, amount: String(t.amount), remarks: t.remarks ?? '', balance: t.balance === undefined || t.balance === null ? '' : String(t.balance) });
+    }
+    if (out.length > limit) throw new BankApiError('unexpected', `明細が ${limit} 件を超えました。期間を短くしてください。`);
+    const more = parsed.data.hasNext === true || parsed.data.hasNext === 'true';
+    if (!more || !parsed.data.nextItemKey || parsed.data.nextItemKey === next) return out;
+    next = parsed.data.nextItemKey;
+  }
+  throw new BankApiError('unexpected', '明細のページが多すぎます。期間を短くしてください。');
 }
