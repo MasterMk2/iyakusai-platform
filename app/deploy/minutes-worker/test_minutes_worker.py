@@ -333,6 +333,7 @@ class Confidence(unittest.TestCase):
         c = w.confidence_of(self.Seg(0, 1, "x", words=None, lp=-200.0, ns=1.5, cr=5000.0), 0.0)
         self.assertEqual(c, {"logprob": -100.0, "noSpeech": 1.0, "compression": 1000.0})
 
+    @unittest.skipIf(np is None, "numpy が無い")
     def test_transcribe_takes_word_timings_unless_turned_off(self):
         Seg = self.Seg
 
