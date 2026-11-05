@@ -597,6 +597,22 @@ export interface JournalList {
   fiscalYear: number;
   journals: JournalView[];
   total: number;
+  /** With one account chosen: its own book (現金出納帳・預金出納帳), to check it against the cash box or the passbook. */
+  account?: AccountBook;
+}
+
+/**
+ * One account through the year, on its own side (an asset or a spending goes up with its debits, the others with their
+ * credits): the opening balance, the balance after the last journal, and for each journal its change and the balance
+ * after it. A voided journal has none.
+ */
+export interface AccountBook {
+  accountId: string;
+  title: string;
+  money: boolean;
+  openingYen: number;
+  closingYen: number;
+  byJournal: Record<string, { changeYen: number; balanceYen: number }>;
 }
 
 export interface OpeningRow {

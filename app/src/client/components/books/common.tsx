@@ -12,6 +12,11 @@ export function signedYen(direction: 'in' | 'out' | 'move' | 'none', amountYen: 
   return direction === 'in' ? `＋${yen(amountYen)}` : direction === 'out' ? `−${yen(amountYen)}` : yen(amountYen);
 }
 
+/** A change of one account's balance (出納帳): ＋ up, − down. */
+export function changeYen(amountYen: number): string {
+  return amountYen > 0 ? `＋${yen(amountYen)}` : amountYen < 0 ? `−${yen(-amountYen)}` : yen(0);
+}
+
 const CLAIM_TONE: Record<ClaimView['state'], string> = { submitted: 'partial', approved: 'partial', paid: 'paid', rejected: 'short', withdrawn: '' };
 
 export function ClaimBadge({ claim }: { claim: ClaimView }) {

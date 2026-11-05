@@ -74,6 +74,8 @@ export function BooksView({ section, onSection }: { section: BooksSection | null
   const counts: Partial<Record<BooksSection, number>> = summary
     ? { claims: summary.claimsWaiting, ledger: summary.depositsToBook, yayoi: summary.yayoi.unexported + summary.yayoi.changedAfterExport }
     : {};
+  // What each count is, for the reader that hears it (the number alone is shown).
+  const countMeaning: Partial<Record<BooksSection, string>> = { claims: '確認待ち', ledger: '帳簿に入れる入金', yayoi: '弥生へ書き出す・直す仕訳' };
 
   return (
     <main className="main books-view" data-testid="books">
@@ -82,7 +84,13 @@ export function BooksView({ section, onSection }: { section: BooksSection | null
           {available.map((s) => (
             <button key={s} type="button" className="filter-chip" aria-pressed={current === s} onClick={() => onSection(s)} data-testid={`books-section-${s}`}>
               {LABELS[s]}
-              {counts[s] ? <span className="option-count"> {counts[s]}</span> : null}
+              {counts[s] ? (
+                <span className="option-count" title={`${countMeaning[s]} ${counts[s]} 件`}>
+                  {' '}
+                  <span aria-hidden="true">{counts[s]}</span>
+                  <span className="sr-only">（{countMeaning[s]} {counts[s]} 件）</span>
+                </span>
+              ) : null}
             </button>
           ))}
         </nav>

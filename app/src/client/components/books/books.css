@@ -18,6 +18,11 @@
 .books-in { color: var(--green); }
 .books-out { color: var(--ink); }
 .books-over { color: var(--red); font-weight: 700; }
+/* One account's book (出納帳): its opening and balance above the list, the balance after each entry at the row's end. */
+.books-account-sum { display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: baseline; margin: 0 0 4px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+.books-account-sum .hint { margin: 0; }
+.row-meta > .books-balance { margin-left: auto; color: var(--ink); font-variant-numeric: tabular-nums; }
+.books-pane-actions { margin: 0; }
 
 .books-pane { display: grid; gap: 8px; min-width: 0; }
 .books-pane h2 { margin: 0; font-size: 1.15rem; }
@@ -28,6 +33,10 @@
 .books-table tfoot th, .books-table tfoot td { border-top: 1px solid var(--line); border-bottom: 0; font-weight: 700; }
 .books-lines .num, .books-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .books-table caption { text-align: left; font-weight: 700; padding: 12px 0 4px; }
+/* Tables of a few columns stay narrow on a wide screen: a figure or 直す within reach of its name. */
+.books-table { max-width: 880px; }
+.books-accounts { max-width: 760px; }
+.books-accounts tr.books-edit-row > td { padding: 4px 0 16px; text-align: left; }
 .books-table .pay-badge { margin-left: 6px; }
 .books-inactive th, .books-inactive td { color: var(--muted); }
 /* The account tables of each kind line up with each other: the same columns in every table. */
@@ -96,6 +105,8 @@
 @media (max-width: 900px) {
   .books-tools { grid-template-columns: minmax(0, 1fr) auto; }
   .books-tools .list-search { grid-column: 1 / -1; }
+  /* An opened item fills the screen, so the page can bring it up under the head even while it is still loading. */
+  .books-view .pay-body.has-detail .pay-detail { min-height: 100vh; min-height: 100dvh; }
 }
 @media (max-width: 680px) {
   .books-layout .main { padding: 12px 12px 40px; }

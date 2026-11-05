@@ -3,13 +3,15 @@ import { BOOKS_LIMITS, yen, type AccountView, type BooksHistoryView, type BooksM
 import { api, fmtDate } from '../../api';
 import { useLoader } from '../../useLoader';
 import { LoadStatus } from '../LoadStatus';
-import { Facts, failureOf, History, Receipts, signedYen, YearSelect } from './common';
+import { changeYen, Facts, failureOf, History, Receipts, signedYen, YearSelect } from './common';
 import { DepositsPane } from './DepositsPane';
 import { EntryForm } from './EntryForm';
 
 // 帳簿 (2026-11-05): every entry of the year, newest first, as members read them (口座, 科目, 入金・出金), with a
-// search and an account to narrow them. 記帳する opens the form next to the list; an entry opens with its lines, its
-// receipts and its history. 入金から記帳 books the deposits the payments screen confirmed.
+// search and an account to narrow them. With an account chosen the list is that account's own book (出納帳): each
+// entry's change of it and the balance after, to check against the cash box or the passbook. 記帳する opens the form
+// next to the list; an entry opens with its lines, its receipts and its history. 入金から記帳 books the deposits the
+// payments screen confirmed.
 
 type Pane = { kind: 'none' } | { kind: 'journal'; id: string } | { kind: 'new' } | { kind: 'edit'; journal: JournalView } | { kind: 'deposits' };
 
@@ -57,31 +59,44 @@ export function LedgerSection({ me, year, onYear, summary, onChanged }: { me: Bo
   useEffect(() => {
     const el = detailRef.current;
     if (pane.kind === 'none' || !el || !window.matchMedia?.('(max-width: 900px)').matches) return;
-    if (el.getBoundingClientRect().top < 64) el.scrollIntoView?.({ block: 'start' });
+    // On a phone the opened entry is under the head and the filters: brought up unless its top is already in view.
+    const top = el.getBoundingClientRect().top;
+    if (top < 64 || top > window.innerHeight * 0.4) el.scrollIntoView?.({ block: 'start' });
   }, [pane]);
   const data = list.data;
+  const book = data?.account ?? null;
   const filtered = q !== '' || accountId !== '' || voided;
+  const moneyAccounts = accounts.filter((a) => a.money);
+  const otherAccounts = accounts.filter((a) => !a.money);
 
-  const row = (j: JournalView) => (
-    <li key={j.id}>
-      <button type="button" className="row-open" aria-current={pane.kind === 'journal' && pane.id === j.id ? 'true' : undefined} onClick={() => open({ kind: 'journal', id: j.id })}>
-        <span className="pay-row-top">
-          <span className="row-main">{j.memo || j.counterparty || j.accountTitle || j.number}</span>
-          <span className={`pay-amount books-${j.direction}`}>{signedYen(j.direction, j.amountYen)}</span>
-        </span>
-        <span className="row-meta">
-          <span>{j.date}</span>
-          <span>{j.moneyAccountTitle ? `${j.moneyAccountTitle} ${j.direction === 'in' ? '←' : j.direction === 'out' ? '→' : '⇄'} ${j.accountTitle ?? ''}` : (j.accountTitle ?? '複合仕訳')}</span>
-          {j.counterparty && j.memo && <span>{j.counterparty}</span>}
-          <span>{j.number}</span>
-          {j.source !== 'manual' && <span className="pay-badge">{j.sourceLabel}</span>}
-          {j.voided && <span className="pay-badge short">取り消し</span>}
-          {j.yayoiChangedAfterExport && !j.voided && <span className="pay-badge over">弥生で直す</span>}
-          {j.receipts.length > 0 && <span>領収書 {j.receipts.length}</span>}
-        </span>
-      </button>
-    </li>
-  );
+  const row = (j: JournalView) => {
+    const change = book?.byJournal[j.id];
+    return (
+      <li key={j.id}>
+        <button type="button" className="row-open" aria-current={pane.kind === 'journal' && pane.id === j.id ? 'true' : undefined} onClick={() => open({ kind: 'journal', id: j.id })}>
+          <span className="pay-row-top">
+            <span className="row-main">{j.memo || j.counterparty || j.accountTitle || j.number}</span>
+            {change ? (
+              <span className={`pay-amount ${change.changeYen > 0 ? 'books-in' : 'books-out'}`}>{changeYen(change.changeYen)}</span>
+            ) : (
+              <span className={`pay-amount books-${j.direction}`}>{signedYen(j.direction, j.amountYen)}</span>
+            )}
+          </span>
+          <span className="row-meta">
+            <span>{j.date}</span>
+            <span>{j.moneyAccountTitle ? `${j.moneyAccountTitle} ${j.direction === 'in' ? '←' : j.direction === 'out' ? '→' : '⇄'} ${j.accountTitle ?? ''}` : (j.accountTitle ?? '複合仕訳')}</span>
+            {j.counterparty && j.memo && <span>{j.counterparty}</span>}
+            <span>{j.number}</span>
+            {j.source !== 'manual' && <span className="pay-badge">{j.sourceLabel}</span>}
+            {j.voided && <span className="pay-badge short">取り消し</span>}
+            {j.yayoiChangedAfterExport && !j.voided && <span className="pay-badge over">弥生で直す</span>}
+            {j.receipts.length > 0 && <span>領収書 {j.receipts.length}</span>}
+            {change && <span className="books-balance">残高 {yen(change.balanceYen)}</span>}
+          </span>
+        </button>
+      </li>
+    );
+  };
 
   const detail = () => {
     const back = (
@@ -200,14 +215,25 @@ export function LedgerSection({ me, year, onYear, summary, onChanged }: { me: Bo
         </label>
         <input id="ledger-search" className="list-search" type="search" value={typed} placeholder="摘要・取引先・科目・金額・番号" maxLength={100} onChange={(e) => setTyped(e.target.value)} data-testid="ledger-search" />
         <label className="books-inline-field">
-          科目
-          <select value={accountId} onChange={(e) => setAccountId(e.target.value)}>
+          口座・科目
+          <select value={accountId} onChange={(e) => setAccountId(e.target.value)} data-testid="ledger-account">
             <option value="">すべて</option>
-            {accounts.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.title}
-              </option>
-            ))}
+            {moneyAccounts.length > 0 && (
+              <optgroup label="口座（出納帳と残高）">
+                {moneyAccounts.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.title}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            <optgroup label="科目">
+              {otherAccounts.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.title}
+                </option>
+              ))}
+            </optgroup>
           </select>
         </label>
         <label className="checkbox">
@@ -221,6 +247,18 @@ export function LedgerSection({ me, year, onYear, summary, onChanged }: { me: Bo
       {data && (
         <div className={`pay-body ${pane.kind !== 'none' ? 'has-detail' : ''}`}>
           <div className="pay-list">
+            {book && (
+              <p className="books-account-sum" data-testid="ledger-book">
+                <strong>{book.title}</strong>
+                <span>
+                  期首 <span className="pay-amount">{yen(book.openingYen)}</span>
+                </span>
+                <span>
+                  残高 <strong className="pay-amount">{yen(book.closingYen)}</strong>
+                </span>
+                {book.money && <span className="hint">手元の現金や通帳の残高と見比べてください</span>}
+              </p>
+            )}
             <p className="hint">{data.total} 件</p>
             {data.journals.length > 0 ? (
               <ul className="rows-list pay-rows" aria-label="仕訳">
@@ -307,53 +345,14 @@ function JournalPane({ id, canEdit, onChanged, onEdit }: { id: string; canEdit: 
           )}
         </div>
       )}
-      <Facts
-        items={[
-          ['番号', j.number],
-          ['日付', j.date],
-          ['金額', <span className="pay-amount">{yen(j.amountYen)}</span>],
-          ['口座', j.moneyAccountTitle],
-          ['科目', j.accountTitle],
-          ['取引先', j.counterparty],
-          ['部局', j.department],
-          ['記帳元', j.sourceLabel],
-          ['弥生', yayoi],
-          ['最後に変えた人', `${j.updatedByName}（${fmtDate(j.updatedAt)}）`],
-        ]}
-      />
-      <table className="books-lines">
-        <caption className="sr-only">借方と貸方</caption>
-        <thead>
-          <tr>
-            <th scope="col">借方</th>
-            <th scope="col" className="num">
-              金額
-            </th>
-            <th scope="col">貸方</th>
-            <th scope="col" className="num">
-              金額
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {Array.from({ length: Math.max(debits.length, credits.length) }, (_, i) => (
-            <tr key={i}>
-              <td>{debits[i]?.accountTitle ?? ''}</td>
-              <td className="num">{debits[i] ? yen(debits[i].amountYen) : ''}</td>
-              <td>{credits[i]?.accountTitle ?? ''}</td>
-              <td className="num">{credits[i] ? yen(credits[i].amountYen) : ''}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <Receipts receipts={j.receipts} uploadUrl={`/api/books/journals/${encodeURIComponent(j.id)}/receipts`} canChange={canEdit && !j.voided} onChanged={() => { loader.retry(); onChanged(null); }} />
       {error && (
         <p className="status error" role="alert">
           {error}
         </p>
       )}
+      {/* 直す・取り消す at the head: the facts, the lines and the receipts run longer than a screen. */}
       {canEdit && (
-        <section className="pay-section" aria-label="仕訳の操作">
+        <section className="pay-section books-pane-actions" aria-label="仕訳の操作">
           {j.source === 'claim' && <p className="hint">立替精算から入った仕訳です。直すときは立替精算の画面で承認や返金を取り消してください。</p>}
           {!j.voided && j.entry === null && j.source !== 'claim' && <p className="hint">この仕訳はここでは直せません（複合仕訳・弥生や入金確認から来た仕訳）。取り消して記帳し直すか、弥生で直して取り込み直してください。</p>}
           {j.voided ? (
@@ -395,6 +394,46 @@ function JournalPane({ id, canEdit, onChanged, onEdit }: { id: string; canEdit: 
           )}
         </section>
       )}
+      <Facts
+        items={[
+          ['番号', j.number],
+          ['日付', j.date],
+          ['金額', <span className="pay-amount">{yen(j.amountYen)}</span>],
+          ['口座', j.moneyAccountTitle],
+          ['科目', j.accountTitle],
+          ['取引先', j.counterparty],
+          ['部局', j.department],
+          ['記帳元', j.sourceLabel],
+          ['弥生', yayoi],
+          ['最後に変えた人', `${j.updatedByName}（${fmtDate(j.updatedAt)}）`],
+        ]}
+      />
+      <table className="books-lines">
+        <caption className="sr-only">借方と貸方</caption>
+        <thead>
+          <tr>
+            <th scope="col">借方</th>
+            <th scope="col" className="num">
+              金額
+            </th>
+            <th scope="col">貸方</th>
+            <th scope="col" className="num">
+              金額
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {Array.from({ length: Math.max(debits.length, credits.length) }, (_, i) => (
+            <tr key={i}>
+              <td>{debits[i]?.accountTitle ?? ''}</td>
+              <td className="num">{debits[i] ? yen(debits[i].amountYen) : ''}</td>
+              <td>{credits[i]?.accountTitle ?? ''}</td>
+              <td className="num">{credits[i] ? yen(credits[i].amountYen) : ''}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <Receipts receipts={j.receipts} uploadUrl={`/api/books/journals/${encodeURIComponent(j.id)}/receipts`} canChange={canEdit && !j.voided} onChanged={() => { loader.retry(); onChanged(null); }} />
       <History items={data.history} />
     </div>
   );

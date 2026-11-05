@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type FormEvent } from 'react';
+import { Fragment, useCallback, useMemo, useState, type FormEvent } from 'react';
 import { ACCOUNT_KIND_LABELS, ACCOUNT_KINDS, BOOKS_LIMITS, DEFAULT_TAX_CLASS, normalSide, yen, type AccountInput, type AccountKind, type AccountView, type BooksMe, type BooksSettings, type BooksSummary, type OpeningRow, type SheetsStatus } from '../../../shared/books';
 import { api, fmtDate } from '../../api';
 import { useLoader } from '../../useLoader';
@@ -112,6 +112,20 @@ export function BooksSettingsSection({ me, year, onYear, summary, onChanged }: {
               </dl>
             )}
           </section>
+          <section className="books-report" aria-labelledby="openings-head">
+            <div className="books-report-head">
+              <h3 id="openings-head">期首残高</h3>
+              <div className="actions">
+                <YearSelect year={year} onChange={onYear} />
+                {me.canEdit && pane !== 'openings' && (
+                  <button type="button" className="secondary" onClick={() => open('openings')} data-testid="openings-edit">
+                    直す
+                  </button>
+                )}
+              </div>
+            </div>
+            <Openings key={`${year}:${refresh}`} year={year} accounts={data.accounts} editing={pane === 'openings'} onCancel={() => setPane('none')} onSaved={() => reload(`${year}年度の期首残高を保存しました。`)} />
+          </section>
           <section className="books-report" aria-labelledby="accounts-head">
             <div className="books-report-head">
               <h3 id="accounts-head">科目（{data.accounts.length}）</h3>
@@ -128,7 +142,6 @@ export function BooksSettingsSection({ me, year, onYear, summary, onChanged }: {
             </div>
             <p className="hint">名前は弥生会計の勘定科目・補助科目と一字一句同じにしてください（弥生へ書き出すときに、この名前で合わせます）。</p>
             {pane === 'new-account' && <AccountForm editing={null} onCancel={() => setPane('none')} onSaved={(title) => reload(`科目「${title}」を足しました。`)} />}
-            {typeof pane === 'object' && <AccountForm key={pane.account.id} editing={pane.account} onCancel={() => setPane('none')} onSaved={(title) => reload(`科目「${title}」を直しました。`)} />}
             {data.accounts.length === 0 ? (
               <div className="list-empty">
                 <p>科目がまだありません。</p>
@@ -152,44 +165,43 @@ export function BooksSettingsSection({ me, year, onYear, summary, onChanged }: {
                       </tr>
                     </thead>
                     <tbody>
-                      {items.map((a) => (
-                        <tr key={a.id} className={a.active ? '' : 'books-inactive'}>
-                          <th scope="row">
-                            {a.title}
-                            {a.label && <span className="hint">（弥生: {a.name}{a.sub ? ` / ${a.sub}` : ''}）</span>}
-                            {a.money && <span className="pay-badge">口座</span>}
-                            {!a.active && <span className="pay-badge">使っていない</span>}
-                          </th>
-                          <td>{a.group}</td>
-                          <td>{a.taxClass}</td>
-                          <td>
-                            {me.canEdit && (
-                              <button type="button" className="link-button pay-link" onClick={() => open({ account: a })} aria-label={`${a.title}を直す`}>
-                                直す
-                              </button>
+                      {items.map((a) => {
+                        const editing = typeof pane === 'object' && pane.account.id === a.id;
+                        return (
+                          <Fragment key={a.id}>
+                            <tr className={a.active ? '' : 'books-inactive'}>
+                              <th scope="row">
+                                {a.title}
+                                {a.label && <span className="hint">（弥生: {a.name}{a.sub ? ` / ${a.sub}` : ''}）</span>}
+                                {a.money && <span className="pay-badge">口座</span>}
+                                {!a.active && <span className="pay-badge">使っていない</span>}
+                              </th>
+                              <td>{a.group}</td>
+                              <td>{a.taxClass}</td>
+                              <td>
+                                {me.canEdit && !editing && (
+                                  <button type="button" className="link-button pay-link" onClick={() => open({ account: a })} aria-label={`${a.title}を直す`}>
+                                    直す
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                            {/* The form opens under its own row: the list is long, a form at its top would be out of sight. */}
+                            {editing && (
+                              <tr className="books-edit-row">
+                                <td colSpan={4}>
+                                  <AccountForm key={a.id} editing={a} onCancel={() => setPane('none')} onSaved={(title) => reload(`科目「${title}」を直しました。`)} />
+                                </td>
+                              </tr>
                             )}
-                          </td>
-                        </tr>
-                      ))}
+                          </Fragment>
+                        );
+                      })}
                     </tbody>
                   </table>
                 );
               })
             )}
-          </section>
-          <section className="books-report" aria-labelledby="openings-head">
-            <div className="books-report-head">
-              <h3 id="openings-head">期首残高</h3>
-              <div className="actions">
-                <YearSelect year={year} onChange={onYear} />
-                {me.canEdit && pane !== 'openings' && (
-                  <button type="button" className="secondary" onClick={() => open('openings')} data-testid="openings-edit">
-                    直す
-                  </button>
-                )}
-              </div>
-            </div>
-            <Openings key={`${year}:${refresh}`} year={year} accounts={data.accounts} editing={pane === 'openings'} onCancel={() => setPane('none')} onSaved={() => reload(`${year}年度の期首残高を保存しました。`)} />
           </section>
         </>
       )}

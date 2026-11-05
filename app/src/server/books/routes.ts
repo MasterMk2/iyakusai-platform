@@ -4,6 +4,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
   ACCOUNT_ID,
+  accountTitle,
   BOOKS_LIMITS,
   BooksValidationError,
   CLAIM_ID,
@@ -12,6 +13,7 @@ import {
   fiscalYearOf,
   guessAccount,
   JOURNAL_ID,
+  normalSide,
   PREAPPROVAL_ABOVE_YEN,
   RECEIPT_ID,
   receiptName,
@@ -24,6 +26,7 @@ import {
   validateNote,
   validateSettings,
   yen,
+  type AccountBook,
   type AccountView,
   type BooksHistoryView,
   type BooksMe,
@@ -374,14 +377,31 @@ export function registerBooksRoutes(app: FastifyInstance, opened: BooksStore | n
     const fiscalYear = q.fiscalYear ?? thisYear();
     let rows = store.journalsOfYear(fiscalYear);
     if (q.voided !== '1') rows = rows.filter((r) => r.voided === 0);
+    let book: AccountBook | undefined;
     if (q.accountId) {
       const lines = store.linesOf(rows.map((r) => r.id));
       rows = rows.filter((r) => (lines.get(r.id) ?? []).some((l) => l.account_id === q.accountId));
+      const a = store.account(q.accountId);
+      if (a) {
+        // Its balance journal by journal, before the words narrow the list: the balance after a journal is the same
+        // whatever else is shown.
+        const sign = normalSide(a.kind) === 'debit' ? 1 : -1;
+        const openingYen = sign * store.openings(fiscalYear).reduce((s, o) => s + (o.account_id === a.id ? o.amount_yen : 0), 0);
+        let balanceYen = openingYen;
+        const byJournal: AccountBook['byJournal'] = {};
+        for (const r of rows) {
+          if (r.voided) continue;
+          const changeYen = sign * (lines.get(r.id) ?? []).reduce((s, l) => s + (l.account_id !== a.id ? 0 : l.side === 'debit' ? l.amount_yen : -l.amount_yen), 0);
+          balanceYen += changeYen;
+          byJournal[r.id] = { changeYen, balanceYen };
+        }
+        book = { accountId: a.id, title: accountTitle(a), money: a.money === 1, openingYen, closingYen: balanceYen, byJournal };
+      }
     }
     let views = journalViews(store, books(), rows);
     const text = q.q?.normalize('NFKC').trim().toLowerCase();
     if (text) views = views.filter((v) => [v.number, v.memo, v.counterparty, v.department, v.accountTitle ?? '', v.moneyAccountTitle ?? '', String(v.amountYen)].some((s) => s.normalize('NFKC').toLowerCase().includes(text)));
-    return { fiscalYear, journals: views.reverse(), total: views.length };
+    return { fiscalYear, journals: views.reverse(), total: views.length, ...(book ? { account: book } : {}) };
   });
 
   app.get('/api/books/journals/:journalId', async (request) => {
