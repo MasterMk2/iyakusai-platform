@@ -37,6 +37,20 @@ const bankFetch = (async (input: string | URL | Request, init?: RequestInit) => 
   if (url.endsWith('/ganb/api/auth/v1/token')) return new Response(JSON.stringify({ access_token: 'synthetic-access-token-0001', expires_in: 2_592_000, refresh_token: 'synthetic-refresh-token-0001', scope: 'private:account private:virtual-account' }), { status: 200 });
   if (url.endsWith('/corporation/v1/accounts')) return new Response(JSON.stringify({ accounts: [{ accountId: '101011234567', branchName: '合成支店', accountTypeName: '普通預金', accountNumber: '7654321' }] }), { status: 200 });
   if (url.endsWith('/corporation/v1/accounts/balances')) return new Response(JSON.stringify({ balances: [{ accountId: '101011234567', balance: '2000' }] }), { status: 200 });
+  if (url.includes('/corporation/v1/accounts/transactions?')) {
+    // Two pages, as the bank sends them: hasNext / nextItemKey (the second page as strings, as sunabar does).
+    const q = new URL(url).searchParams;
+    if (q.get('accountId') !== '101011234567') return new Response('{}', { status: 400 });
+    if (!q.get('nextItemKey')) {
+      return new Response(JSON.stringify({ hasNext: true, nextItemKey: '20261102000000000001', transactions: [
+        { transactionDate: '2026-11-01', transactionType: '1', amount: '30000', remarks: '振込 ゴウセイ（カ', balance: '30000', itemKey: '1' },
+        { transactionDate: '2026-11-02', transactionType: '2', amount: '1000', remarks: '振込手数料', balance: '29000', itemKey: '2' },
+      ] }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ hasNext: 'false', transactions: [
+      { transactionDate: '2026-11-03', transactionType: '1', amount: '50000', remarks: '振込 ゴウセイイリョウホウジン', balance: '79000', itemKey: '3' },
+    ] }), { status: 200 });
+  }
   return new Response('{}', { status: 404 });
 }) as typeof fetch;
 
@@ -209,5 +223,56 @@ describe('bank: connecting through the return screen', () => {
     expect(bankCalls).toHaveLength(0);
     expect((await call('POST', '/api/bank/oauth/complete', { cookie: chair.cookie, body: { state, code: 'x', error: 'y' } })).status).toBe(400);
     expect((await call('GET', '/api/bank/status', { cookie: chair.cookie })).json.state).toBe('disconnected');
+  });
+});
+
+describe('bank: the statement into 入金確認', () => {
+  async function connected() {
+    await build();
+    const chair = await signIn(CHAIR, '21000001');
+    const accountant = await signIn(ACCOUNTANT, '21000004');
+    const member = await signIn(MEMBER, '21000002');
+    const { revision } = (await call('GET', '/api/payments/admin/access', { cookie: chair.cookie })).json as { revision: number };
+    expect((await call('PUT', '/api/payments/admin/access', { cookie: chair.cookie, body: { expectedRevision: revision, userId: accountant.id, permission: 'accounting.confirm', on: true } })).status).toBe(200);
+    return { chair, accountant, member };
+  }
+
+  it('reads every page, keeps the deposits only, imports them once and refuses others', async () => {
+    const { chair, accountant, member } = await connected();
+    expect((await call('GET', '/api/payments/statements/bank', { cookie: accountant.cookie })).json).toMatchObject({ available: false });
+    const started = await call('POST', '/api/bank/oauth/start', { cookie: chair.cookie, body: {} });
+    const state = new URL(started.json.authorizeUrl as string).searchParams.get('state')!;
+    expect((await call('POST', '/api/bank/oauth/complete', { cookie: chair.cookie, body: { state, code: 'synthetic-code' } })).status).toBe(200);
+    expect((await call('GET', '/api/payments/statements/bank', { cookie: accountant.cookie })).json).toMatchObject({ available: true, message: null });
+    expect((await call('GET', '/api/payments/statements/bank', { cookie: member.cookie })).status).toBe(403);
+    expect((await call('POST', '/api/payments/statements/bank', { cookie: chair.cookie, body: { dryRun: true, dateFrom: '2026-11-01', dateTo: '2026-11-05' } })).status).toBe(403);
+
+    const day = (ms: number) => new Date(ms).toLocaleDateString('sv-SE', { timeZone: 'Asia/Tokyo' });
+    const period = { dateFrom: day(ctx.clock.now - 30 * 86_400_000), dateTo: day(ctx.clock.now) };
+    const preview = await call('POST', '/api/payments/statements/bank', { cookie: accountant.cookie, body: { dryRun: true, ...period } });
+    expect(preview.status).toBe(200);
+    expect(preview.json.counts).toEqual({ new: 2, duplicate: 0, withdrawal: 1, unreadable: 0 });
+    expect(preview.json.account).toEqual({ branchName: '合成支店', accountTypeName: '普通預金', accountNumberLast4: '4321' });
+    expect(preview.body).not.toContain('7654321');
+    const reads = bankCalls.filter((c) => c.url.includes('/accounts/transactions?'));
+    expect(reads.map((c) => new URL(c.url).searchParams.get('nextItemKey'))).toEqual([null, '20261102000000000001']);
+    expect(new URL(reads[0]!.url).searchParams.get('dateFrom')).toBe(period.dateFrom);
+    expect((await call('POST', '/api/payments/statements/bank', { cookie: accountant.cookie, body: { dryRun: true, dateFrom: period.dateFrom, dateTo: day(ctx.clock.now + 2 * 86_400_000) } })).status).toBe(422);
+
+    expect((await call('POST', '/api/payments/statements/bank', { cookie: accountant.cookie, body: { dryRun: false, ...period, planToken: '0'.repeat(64) } })).status).toBe(409);
+    const done = await call('POST', '/api/payments/statements/bank', { cookie: accountant.cookie, body: { dryRun: false, ...period, planToken: preview.json.planToken } });
+    expect(done.status).toBe(200);
+    expect(done.json.counts.new).toBe(2);
+    const again = await call('POST', '/api/payments/statements/bank', { cookie: accountant.cookie, body: { dryRun: true, ...period } });
+    expect(again.json.counts).toEqual({ new: 0, duplicate: 2, withdrawal: 1, unreadable: 0 });
+    const overview = await call('GET', '/api/payments/overview', { cookie: accountant.cookie });
+    expect(overview.body).toContain('ゴウセイイリョウホウジン');
+    expect(overview.body).not.toContain('振込手数料');
+  });
+
+  it('checks the period and says why the bank cannot be read', async () => {
+    const { accountant } = await connected();
+    expect((await call('POST', '/api/payments/statements/bank', { cookie: accountant.cookie, body: { dryRun: true, dateFrom: '2026-11-01', dateTo: '2026-11-05' } })).json).toMatchObject({ error: 'bank_unavailable' });
+    expect((await call('POST', '/api/payments/statements/bank', { cookie: accountant.cookie, body: { dryRun: true, dateFrom: '2026-11-05', dateTo: '2026-11-01' } })).status).toBe(409);
   });
 });

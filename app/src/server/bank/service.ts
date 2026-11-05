@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { z } from 'zod';
 import type { BankCheckResponse, BankConnectionState } from '../../shared/bank.js';
 import { writeFileDurable } from '../durable-file.js';
-import { authorizeUrl, BankApiError, listAccounts, listBalances, requestToken, type BankFetch, type TokenGrant } from './client.js';
+import { authorizeUrl, BankApiError, listAccounts, listBalances, listTransactions, requestToken, type BankFetch, type BankTransaction, type TokenGrant } from './client.js';
 import type { BankConfig } from './config.js';
 import { BankVault, VaultUnreadable, type BankTokens } from './vault.js';
 
@@ -178,6 +178,33 @@ export class BankService {
       throw err;
     } finally {
       this.#checking = false;
+    }
+  }
+
+  /**
+   * 入出金明細 of one period for the payments' import: the first ordinary deposit account (科目 01・02, else the
+   * first account). The account number is cut to its last four digits.
+   */
+  async statement(userId: string, dateFrom: string, dateTo: string, limit: number): Promise<{ account: { branchName: string | null; accountTypeName: string | null; accountNumberLast4: string | null }; transactions: BankTransaction[] }> {
+    try {
+      const result = await this.#withToken(async (token) => {
+        const accounts = await listAccounts(this.config, this.#deps.fetch, token);
+        const account = accounts.find((a) => a.accountTypeCode === '01' || a.accountTypeCode === '02') ?? accounts[0];
+        if (!account) throw new BankApiError('unexpected', '銀行に口座が見つかりませんでした。');
+        const transactions = await listTransactions(this.config, this.#deps.fetch, token, { accountId: account.accountId, dateFrom, dateTo }, limit);
+        return { account, transactions };
+      });
+      this.#audit('statement_read', userId, 'ok');
+      if (this.#meta.lastError) this.#writeMeta({ ...this.#meta, lastError: null });
+      const a = result.account;
+      return { account: { branchName: a.branchName, accountTypeName: a.accountTypeName, accountNumberLast4: a.accountNumber ? a.accountNumber.replace(/\D/g, '').slice(-4) || null : null }, transactions: result.transactions };
+    } catch (err) {
+      this.#audit('statement_failed', userId, err instanceof BankApiError ? err.kind : err instanceof BankFlowError ? err.reason : 'error');
+      if (err instanceof BankApiError) {
+        this.#setError(err.message);
+        throw new BankFlowError('bank', err.message, err.kind);
+      }
+      throw err;
     }
   }
 

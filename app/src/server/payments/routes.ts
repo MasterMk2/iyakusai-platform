@@ -13,6 +13,7 @@ import {
   PaymentValidationError,
   rankDepositsFor,
   rankInvoicesFor,
+  parseStatementDate,
   readStatementRow,
   tokyoDate,
   validateInvoice,
@@ -35,6 +36,8 @@ import {
   type StatementImportResponse,
   type StatementPlanRow,
 } from '../../shared/payments.js';
+import { BANK_ENVIRONMENT_LABELS, type BankStatementAvailability, type BankStatementImportResponse } from '../../shared/bank.js';
+import { BankFlowError, type BankService } from '../bank/service.js';
 import { committeeMember, type ContactRouteDeps } from '../contacts/routes.js';
 import type { ContactsStore } from '../contacts/store.js';
 import { isTemporaryStaffLoginId } from '../discord-auth/temporary-staff.js';
@@ -58,6 +61,8 @@ export interface PaymentRouteDeps extends ContactRouteDeps {
   organizations: OrganizationsStore | null;
   contacts: ContactsStore | null;
   now: () => number;
+  /** The bank connection (bank.json), when there is one: 入金確認 can then read the statement from the bank. */
+  bank?: BankService | null;
 }
 
 const PAID_STAGE = '入金済み';
@@ -81,6 +86,14 @@ const confirmBody = z.strictObject({
 const unconfirmBody = z.strictObject({ expectedVersion: z.number().int().min(1), depositIds });
 const excludeBody = z.strictObject({ excluded: z.boolean(), note: z.string().max(PAYMENT_LIMITS.note * 2).optional() });
 const cell = z.string().max(PAYMENT_LIMITS.statementCell * 2);
+const isoDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const bankImportBody = z.strictObject({
+  dryRun: z.boolean(),
+  dateFrom: isoDay,
+  dateTo: isoDay,
+  planToken: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+});
+const BANK_FLOW_STATUS: Record<BankFlowError['reason'], number> = { state: 400, busy: 409, not_connected: 409, expired: 409, reconnect: 409, bank: 502 };
 const importBody = z.strictObject({
   dryRun: z.boolean(),
   label: z.string().max(200).optional(),
@@ -614,6 +627,60 @@ export function registerPaymentRoutes(app: FastifyInstance, opened: PaymentsStor
     const counts = { new: 0, duplicate: 0, withdrawal: 0, unreadable: 0 };
     for (const r of plan.rows) counts[r.action] += 1;
     return { dryRun: body.dryRun, counts, rows: plan.rows, planToken };
+  });
+
+  // ---- the statement from the bank's API (2026-11-06): the same 下見 and 取り込み as a CSV, the rows read from the bank.
+  // 会計の確定 only, like the CSV. The bank is read again on 取り込む; a statement that changed since the 下見 (a new
+  // deposit arrived) stops it with the plan token, as for a CSV.
+
+  const bankAvailability = (): BankStatementAvailability => {
+    const bank = deps.bank;
+    if (!bank) return { available: false, environmentLabel: null, message: '銀行の連携が設定されていません（設定 →「銀行の連携」）。' };
+    const label = BANK_ENVIRONMENT_LABELS[bank.config.environment];
+    const state = bank.status().state;
+    if (state === 'connected') return { available: true, environmentLabel: label, message: null };
+    return { available: false, environmentLabel: label, message: state === 'disconnected' ? '銀行とまだ接続していません。権限管理者が 設定 →「銀行の連携」からつなぎます。' : '銀行との接続が切れています。権限管理者が 設定 →「銀行の連携」からつなぎ直します。' };
+  };
+
+  app.get('/api/payments/statements/bank', async (request): Promise<BankStatementAvailability> => {
+    confirmer(request);
+    return bankAvailability();
+  });
+
+  app.post('/api/payments/statements/bank', async (request): Promise<BankStatementImportResponse> => {
+    const user = confirmer(request);
+    const body = deps.parse(bankImportBody, request.body);
+    const bank = deps.bank;
+    const availability = bankAvailability();
+    if (!bank || !availability.available) throw new HttpError(409, { error: 'bank_unavailable', message: availability.message ?? '銀行から読めません。' });
+    const todayIso = today();
+    if (!parseStatementDate(body.dateFrom) || !parseStatementDate(body.dateTo) || body.dateFrom > body.dateTo) throw new DomainError('validation', '期間は「から」が「まで」より前の日付になるように選んでください。');
+    if (body.dateTo > todayIso) throw new DomainError('validation', '「まで」は今日より後にできません。');
+    if (Date.parse(body.dateTo) - Date.parse(body.dateFrom) > 366 * 86_400_000) throw new DomainError('validation', '一度に読める期間は 1 年までです。');
+    let read: Awaited<ReturnType<BankService['statement']>>;
+    try {
+      read = await bank.statement(user.id, body.dateFrom, body.dateTo, PAYMENT_LIMITS.statementRows);
+    } catch (err) {
+      if (err instanceof BankFlowError) throw new HttpError(BANK_FLOW_STATUS[err.reason], { error: `bank_${err.reason}`, message: err.message });
+      throw err;
+    }
+    const rows = read.transactions.map((t, i) => ({
+      line: i + 1,
+      date: t.date,
+      description: t.remarks,
+      deposit: t.type === '1' ? t.amount : '',
+      withdrawal: t.type === '1' ? '' : t.amount,
+      balance: t.balance,
+    }));
+    const plan = planStatement(rows);
+    const planToken = createHash('sha256').update(JSON.stringify(plan.rows.map((r) => [r.line, r.action, r.reason, r.bookedOn, r.amountYen, r.description]))).digest('hex');
+    if (!body.dryRun) {
+      if (body.planToken !== planToken) throw new DomainError('conflict', '下見のあとに銀行の明細か取り込みが変わりました。下見をやり直してから、もう一度取り込んでください。');
+      if (plan.deposits.length > 0) store.addImport(`銀行 API ${body.dateFrom}〜${body.dateTo}`, plan.deposits, user.id, deps.clock());
+    }
+    const counts = { new: 0, duplicate: 0, withdrawal: 0, unreadable: 0 };
+    for (const r of plan.rows) counts[r.action] += 1;
+    return { dryRun: body.dryRun, counts, rows: plan.rows, planToken, account: read.account, dateFrom: body.dateFrom, dateTo: body.dateTo };
   });
 
   /** Each row: a new deposit, one already imported (the same date, description, amount and balance), a withdrawal, or unreadable. */
