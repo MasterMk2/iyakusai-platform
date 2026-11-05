@@ -1,0 +1,7 @@
+/* 銀行の連携 (2026-11-06): the accounts read by 接続を確かめる, and the disconnect kept apart from the main action. */
+.bank-accounts { border-collapse: collapse; margin: 4px 0 12px; font-size: 15px; }
+.bank-accounts th, .bank-accounts td { text-align: left; padding: 4px 16px 4px 0; vertical-align: top; }
+.bank-accounts th { color: var(--muted); font-weight: 400; border-bottom: 1px solid var(--line); }
+.bank-accounts td:not(:first-child), .bank-accounts th:not(:first-child) { white-space: nowrap; }
+.bank-accounts .num { text-align: right; padding-right: 0; font-variant-numeric: tabular-nums; }
+.bank-panel .bank-disconnect { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }

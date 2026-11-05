@@ -6,6 +6,8 @@ import type { InboxResponse } from '../../shared/line.js';
 import { MAIL_ATTACHMENTS_MAX, MAIL_BODY_MAX, MAIL_SUBJECT_MAX, REAUTH_REQUIRED, type MailSendOptions, type MailStatusResponse } from '../../shared/mailbox.js';
 import { DUE_DATE_PATTERN } from '../../shared/mailDue.js';
 import { fiscalYearOf, tokyoDate } from '../../shared/books.js';
+import { registerBankRoutes } from '../bank/routes.js';
+import { BankService } from '../bank/service.js';
 import { registerBooksRoutes } from '../books/routes.js';
 import { sheetTabs } from '../books/sheet-tabs.js';
 import { SheetsSync, SheetsWriter } from '../books/sheets.js';
@@ -64,6 +66,8 @@ export interface MailboxRuntime {
   /** Replaces the books file next to payments.sqlite3, and the spreadsheet's HTTP (tests). */
   books?: BooksStore;
   sheetsFetch?: typeof fetch;
+  /** Replaces the bank's HTTP (tests). */
+  bankFetch?: typeof fetch;
   /** Replace LINE's HTTP (the receiver and the Messaging API) or its push connector (tests). */
   lineFetch?: Fetch;
   lineConnector?: LinePushConnector;
@@ -288,6 +292,20 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
     now,
     sheets: booksSheets,
     sheetsUrl: rt.config.booksSheets ? `https://docs.google.com/spreadsheets/d/${rt.config.booksSheets.spreadsheetId}/edit` : null,
+    permissionsOf: (user) => (paymentsStore ? accountingPermissionsOf(paymentsStore, user) : []),
+  });
+
+  // The bank connection (GMO あおぞらネット銀行 API, 2026-11-06), when bank.json is next to the mail configuration:
+  // the tokens encrypted in the mail folder, with the payments' accounting permissions (bank/routes.ts). Without
+  // bank.json the status says "not configured" to those who may see it, and nothing else exists.
+  const bank = rt.config.bank ? new BankService(rt.config.bank, { fetch: rt.bankFetch ?? fetch, now, clock: deps.clock }) : null;
+  registerBankRoutes(app, bank, {
+    requireUser: deps.requireUser,
+    session: deps.session,
+    people: deps.people,
+    discordUserIdOf: deps.discordUserIdOf,
+    clock: deps.clock,
+    parse: deps.parse,
     permissionsOf: (user) => (paymentsStore ? accountingPermissionsOf(paymentsStore, user) : []),
   });
 

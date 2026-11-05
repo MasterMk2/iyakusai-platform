@@ -4,6 +4,7 @@ import cookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import { z } from 'zod';
 import { HANDLING_STATUSES, LIMITS, type ApiError, type FaultState, type SessionResponse, type SessionUser } from '../../shared/api.js';
+import { BANK_CALLBACK_PATH } from '../../shared/bank.js';
 import { departmentsOfLabel, TEMPORARY_STAFF_DEPARTMENT } from '../../shared/mailbox.js';
 import { installAccount, type AccountRuntime } from '../account/http.js';
 import { installDiscordAuth, type DiscordAuthRuntime } from '../discord-auth/http.js';
@@ -307,7 +308,8 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     if (!reply.hasHeader('Content-Security-Policy')) reply.header('Content-Security-Policy', APP_CSP);
     reply.header('X-Content-Type-Options', 'nosniff');
     reply.header('Referrer-Policy', 'no-referrer');
-    if (request.url.split('?')[0] === '/card') reply.header('Cache-Control', 'no-store');
+    const pagePath = request.url.split('?')[0];
+    if (pagePath === '/card' || pagePath === BANK_CALLBACK_PATH) reply.header('Cache-Control', 'no-store');
     reply.header('X-Frame-Options', 'DENY');
     reply.header('Cross-Origin-Opener-Policy', 'same-origin');
     reply.header('Cross-Origin-Resource-Policy', 'same-origin');
@@ -722,9 +724,10 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
 
   if (options.staticDir && existsSync(options.staticDir)) {
     await app.register(fastifyStatic, { root: options.staticDir, index: 'index.html' });
-    // Sign-in and first registration (the link in the registration DM) open the same screen.
-    for (const path of ['/register', '/login', '/card']) app.get(path, async (_request, reply) => {
-      if (path === '/card') reply.header('Cache-Control', 'no-store');
+    // Sign-in and first registration (the link in the registration DM) open the same screen. The bank sends the browser
+    // back to /bank/callback with the one-time code in the query: the same screen, never stored (bank/routes.ts).
+    for (const path of ['/register', '/login', '/card', BANK_CALLBACK_PATH]) app.get(path, async (_request, reply) => {
+      if (path === '/card' || path === BANK_CALLBACK_PATH) reply.header('Cache-Control', 'no-store');
       return reply.sendFile('index.html');
     });
   }

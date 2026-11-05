@@ -13,6 +13,7 @@ import { RentalAccessPanel } from './RentalAccessPanel';
 import { RolloverPanel } from './rollover/RolloverPanel';
 import { CardSettingsPanel } from './CardSettingsPanel';
 import { AccountingAccessPanel } from './payments/AccountingAccessPanel';
+import { BankPanel } from './bank/BankPanel';
 import { DayOfSettingsPanel } from './dayof/DayOfSettingsPanel';
 import { storeTheme, THEME_LABELS, useTheme, type ThemeChoice } from '../theme';
 
@@ -92,6 +93,8 @@ export function SettingsView({
       {user.canManageAccess && <DayOfSettingsPanel />}
       {user.canManageAccess && <RentalAccessPanel onChanged={onChanged} />}
       {user.canManageAccess && <AccountingAccessPanel />}
+      {/* 権限管理者 and 会計を見る: the panel hides itself for everyone else (its status answers 403). */}
+      {discord && committeeMail && <BankPanel />}
       {user.canManageAccess && (committeeMail ? <MailAccessPanel /> : <AdminPanel user={user} onChanged={onChanged} demoControls={session.demoAuthentication === true} />)}
       {user.canManageAccess && committeeMail && committeeLine && <MailAccessPanel variant="line" />}
       {user.canManageAccess && discord && <LoginActivityPanel />}
