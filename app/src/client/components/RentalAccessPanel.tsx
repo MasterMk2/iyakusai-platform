@@ -33,7 +33,7 @@ async function rentalApi<T>(method: 'GET' | 'PUT', body?: unknown, signal?: Abor
  * whole list was locked until a reload, and every row was rebuilt, losing choices made in other rows). Saves go
  * one after another, since each needs the revision the previous one made.
  */
-export function RentalAccessPanel({ onChanged }: { onChanged: () => void }) {
+export function RentalAccessPanel({ onChanged, onAvailable }: { onChanged: () => void; onAvailable?: (available: boolean) => void }) {
   const [refresh, setRefresh] = useState(0);
   const load = useCallback(async (signal: AbortSignal) => {
     void refresh;
@@ -81,7 +81,12 @@ export function RentalAccessPanel({ onChanged }: { onChanged: () => void }) {
     return run;
   }
 
-  if (!access.loading && !access.error && !data) return null;
+  // A server without rental (404) leaves the part out of the settings.
+  const absent = !access.loading && !access.error && !data;
+  useEffect(() => {
+    if (!access.loading) onAvailable?.(!absent);
+  }, [access.loading, absent, onAvailable]);
+  if (absent) return null;
   return (
     <section className="admin rental-access" aria-labelledby="rental-access-title" data-testid="rental-access">
       <h3 id="rental-access-title">物品の権限</h3>

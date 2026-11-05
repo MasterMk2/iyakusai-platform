@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { storeBankReturnResult, type BankReturnResult } from './return-flow';
 
-const SETTINGS = '/#/settings';
+const SETTINGS = '/#/settings/bank';
 
 /**
  * The screen the bank sends the browser back to. The code was already posted by main.tsx; this shows that it is

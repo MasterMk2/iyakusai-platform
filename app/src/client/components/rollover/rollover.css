@@ -2,18 +2,6 @@
  * Year rollover (components/rollover, settings). Colours are the app's own tokens (styles.css), so the dark theme
  * follows. One column at every width: the lists wrap instead of scrolling sideways (checked at 320 px).
  */
-.rollover-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.rollover-head h3 {
-  margin: 0;
-}
-
 .rollover-body {
   display: grid;
   gap: 12px;

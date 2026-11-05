@@ -342,6 +342,49 @@ html { scroll-padding-top: 64px; }
 .mock-outbox { margin-top: 16px; border: 2px dashed var(--warn-line); border-radius: 6px; padding: 8px 12px; background: var(--amber-bg); }
 .mock-outbox h2 { font-size: 15px; margin: 0 0 4px; }
 .settings section { margin-bottom: 16px; }
+/* 設定 (2026-11-06): the list of parts beside the one part shown; on a phone the list, then the part alone
+   (../docs/ui-guidelines.md §6). The current part: bold, a bar on its left and a ground (not by colour alone). */
+.main.settings { width: 100%; max-width: 1200px; margin: 0 auto; }
+.settings > h2 { margin: 0 0 16px; }
+.settings-body { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 32px; align-items: start; }
+.settings-nav { position: sticky; top: 69px; }
+.settings-nav-group + .settings-nav-group { margin-top: 18px; }
+.settings-nav-heading { margin: 0 0 4px; padding: 0 12px; font-size: 14px; font-weight: 700; color: var(--muted); }
+.settings-nav ul { list-style: none; margin: 0; padding: 0; }
+.settings-nav a { display: flex; align-items: center; min-height: 40px; padding: 6px 12px; border-radius: 6px; color: var(--ink); text-decoration: none; }
+.settings-nav a:hover { background: var(--hover-strong); }
+.settings-nav a[aria-current='page'] { background: var(--selected); font-weight: 700; box-shadow: inset 4px 0 0 var(--blue-fill); }
+.settings-pane { min-width: 0; max-width: 900px; }
+.settings-back { display: none; }
+.settings-part:focus { outline: none; }
+.settings-part > section { margin: 0; }
+.settings-part > section > h3:first-child { font-size: 1.25rem; margin: 0 0 8px; }
+.settings-part > section > .hint:nth-child(2) { margin-bottom: 16px; }
+.settings .account-form > button { align-self: flex-start; justify-self: start; min-width: 9em; }
+/* The blocks of the account and card parts: a heading under a thin rule, the form under it. */
+.discord-account h4, .card-settings h4 { margin: 24px 0 4px; padding-top: 16px; border-top: 1px solid var(--line-soft); font-size: 16px; }
+.card-settings .card-issuance h4 { margin-top: 0; padding-top: 0; border-top: 0; }
+.card-settings .card-list-row + h4, .card-settings .card-list-row + .account-form > h4:first-child { border-top: 0; padding-top: 0; }
+.card-settings .account-form p { margin: 0; }
+/* Rows with their buttons and ticks near the name: the part is wide on a PC, the rows need not be. */
+.settings-part .grant-list, .settings-part .pay-access-grid, .settings-part .rental-access-people { max-width: 680px; }
+.settings-part .discord-account, .settings-part .card-settings { max-width: 560px; }
+.settings-part .filters { display: flex; flex-wrap: wrap; align-items: end; gap: 8px 16px; margin: 8px 0 12px; }
+.settings-part .filters label { display: grid; gap: 4px; font-size: 14px; min-width: 0; max-width: 100%; }
+/* The mailbox choice names the address and the counts: on a phone it takes the width and cuts its text. */
+.settings-part .filters select { width: 100%; text-overflow: ellipsis; }
+@media (max-width: 900px) {
+  .settings-body { display: block; }
+  .settings-nav { position: static; }
+  .settings.has-section .settings-nav, .settings.no-section .settings-pane { display: none; }
+  .settings.has-section > h2 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .settings-nav-group + .settings-nav-group { margin-top: 20px; }
+  .settings-nav-heading { padding: 0 4px; }
+  .settings-nav ul { border-top: 1px solid var(--line); }
+  .settings-nav a { min-height: 52px; padding: 8px 4px; border-radius: 0; border-bottom: 1px solid var(--line); justify-content: space-between; gap: 12px; }
+  .settings-nav a::after { content: '›'; color: var(--muted); font-size: 22px; line-height: 1; }
+  .settings-back { display: inline-flex; align-items: center; min-height: 44px; margin: 0 0 4px; font-weight: 700; text-decoration: none; }
+}
 .theme-choice { display: flex; flex-wrap: wrap; gap: 8px; border: 0; margin: 0; padding: 0; min-width: 0; }
 .theme-choice .status-option input[type='radio'] { width: 18px; height: 18px; margin: 0; }
 

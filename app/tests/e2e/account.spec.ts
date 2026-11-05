@@ -115,6 +115,7 @@ test('membership loss in the mock directory ends every session of that person', 
 
   // Membership removed through the (mock-only) directory controls in Settings.
   await page.getByTestId('nav-settings').click();
+  await page.getByTestId('settings-section-directory').click();
   const row = page.getByTestId('mock-directory').locator('[data-mock-person="u-noaccess-d"]');
   await row.getByRole('button', { name: '会員資格を外す' }).click();
   await second.reload();

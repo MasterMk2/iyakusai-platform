@@ -21,7 +21,7 @@ const keyOf = (t: Target, mailboxId: string, kind: Kind) => `${'userId' in t ? `
 const TEXT = {
   mail: {
     endpoint: '/api/mail/admin/access',
-    title: '受信箱の編集権限・送信権限',
+    title: 'メールの権限',
     intro: 'メールの閲覧・ラベル付け・担当者変更・対応状況の変更は委員全員ができます。ここで受信箱ごとに付けるのは、内部メモを追加する「編集」と、その受信箱のアドレスを差出人にしてアプリからメールを送る「送信」です。部局に付けると、その部局の委員全員（あとから入った人も）が持ちます。',
     what: '受信箱の権限',
     pick: '受信箱',
@@ -32,7 +32,7 @@ const TEXT = {
   },
   line: {
     endpoint: '/api/line/admin/access',
-    title: '公式LINE の編集権限・送信権限',
+    title: '公式LINE の権限',
     intro: '公式LINE の閲覧・ラベル付け・担当者変更・対応状況の変更は委員全員ができます（臨時スタッフを除く）。ここで付けるのは、内部メモを追加する「編集」と、アプリから公式LINE で送る「送信」です。部局に付けると、その部局の委員全員（あとから入った人も）が持ちます。',
     what: '公式LINE の権限',
     pick: 'アカウント',

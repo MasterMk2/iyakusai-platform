@@ -53,7 +53,7 @@ async function settings(page: Page, o: { delayMs?: number; failFor?: string } = 
     }
     return respond({ error: 'not_found' }, 404);
   });
-  await page.goto('/#/settings');
+  await page.goto('/#/settings/mail');
   const panel = page.getByTestId('mail-access');
   await expect(panel).toBeVisible();
   return { panel, puts };

@@ -20,7 +20,7 @@ type Busy = 'connect' | 'check' | 'disconnect' | null;
  * (the browser goes to the bank and comes back to /bank/callback) and disconnect; 会計を見る check the connection.
  * Nobody else sees the panel (the status answers 403). No token is ever on this screen.
  */
-export function BankPanel() {
+export function BankPanel({ onAvailable }: { onAvailable?: (available: boolean) => void } = {}) {
   const [refresh, setRefresh] = useState(0);
   const load = useCallback(
     (signal: AbortSignal) => {
@@ -44,9 +44,14 @@ export function BankPanel() {
     }
   }, [status.data]);
 
-  if (status.error?.status === 403) return null;
   const s = status.data;
-  if (s && !s.configured && !s.canConnect) return null;
+  // Not for this person (403), not on this server (404), or not set up and not theirs to set up: no part at all.
+  const absent = status.error?.status === 403 || (status.error?.status === 404 && !s) || (!!s && !s.configured && !s.canConnect);
+  const known = !status.loading || s !== null;
+  useEffect(() => {
+    if (known) onAvailable?.(!absent);
+  }, [known, absent, onAvailable]);
+  if (absent) return null;
 
   const connect = async () => {
     setBusy('connect');
