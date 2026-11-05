@@ -3,7 +3,7 @@
 # 本番ホストには python3-venv も pip も無いので、ホストには何も入れず、python:3.12-slim の使い捨てコンテナで動かす。
 # faster-whisper は ~/iyakusai-minutes-worker/pylib に、モデルは models/ に置く（README の手順 2）。
 # CPU を長く使うので、コンテナの CPU を 10 コア分・メモリを 6GB に抑え、優先度を最も低くし、同時に 1 件だけ処理する。
-# 測定では large-v3 の最大メモリが約 4.3GB（11 分の音声）。音声は全体を読み込むので、長い会議ほど少し増える。
+# 測定では large-v3 の最大メモリが約 4.3GB（11 分の音声）。音声は 10 分ずつ区切って処理するので、長い会議でも増えない。
 [Unit]
 Description=iyakusai minutes worker (transcription)
 After=network-online.target

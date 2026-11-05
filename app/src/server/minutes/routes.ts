@@ -14,6 +14,7 @@ import {
   MINUTES_CONSENT_TEXT,
   MINUTES_LIMITS,
   MINUTES_VISIBILITIES,
+  sizeLabel,
   type MinutesAudioExtension,
   type MinutesDetail,
   type MinutesListResponse,
@@ -40,8 +41,9 @@ import { checkedDraft, draftSchema, transcriptSchema } from './validate.js';
 // app never calls out, and the audio is only ever handed to the worker.
 //
 // Who sees what (設計書 §4-7): a meeting is read by its recorder, the people chosen for it (or every member), and
-// the access administrators; its audio is played only by the recorder, the person who confirmed it and the
-// access administrators; it is deleted by the recorder or an access administrator.
+// the access administrators; its audio is played only by the recorder and the access administrators (2026-11-02
+// review); its title, date and readers are changed (2026-11-05), and it is deleted, by the recorder or an access
+// administrator.
 
 export const WORKER_CLIENT = 'iyakusai-minutes-worker';
 export const WORKER_PATHS = { claim: '/v1/minutes/worker/claim', audio: '/v1/minutes/worker/audio', result: '/v1/minutes/worker/result' } as const;
@@ -90,13 +92,14 @@ const oneLine = (s: string) => s.replace(/[\u0000-\u001f\u007f\s]+/g, ' ').trim(
 const uploadParams = z.strictObject({ uploadId: z.string().regex(/^mt_[0-9a-f]{16}$/) });
 const uploadOpen = z.strictObject({ filename: z.string().max(255), type: z.string().max(100), bytes: z.number().int().min(1) });
 const chunkQuery = z.strictObject({ offset: z.coerce.number().int().min(0) });
-const createBody = z.strictObject({
-  uploadId: z.string().regex(/^mt_[0-9a-f]{16}$/),
+const settingsFields = {
   title: z.string().max(MINUTES_LIMITS.title * 2).transform(oneLine).pipe(z.string().min(1, '会議名を入力してください。').max(MINUTES_LIMITS.title)),
   heldOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日付を選んでください。'),
   visibility: z.enum(MINUTES_VISIBILITIES),
   viewers: z.array(z.string().min(1).max(100)).max(MINUTES_LIMITS.viewers),
-});
+};
+const createBody = z.strictObject({ uploadId: z.string().regex(/^mt_[0-9a-f]{16}$/), ...settingsFields });
+const settingsBody = z.strictObject(settingsFields);
 
 interface Upload {
   id: string;
@@ -177,7 +180,23 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
   const canView = (row: MeetingRow, user: User) => user.canManageAccess || row.createdBy === user.id || row.visibility === 'members' || row.viewers.includes(user.id);
   // Not the person who confirmed: anyone who reads a meeting may confirm it, and that must not open the audio to them.
   const canListen = (row: MeetingRow, user: User) => !row.audioDeletedAt && (user.canManageAccess || row.createdBy === user.id);
-  const canDelete = (row: MeetingRow, user: User) => user.canManageAccess || row.createdBy === user.id;
+  const canManage = (row: MeetingRow, user: User) => user.canManageAccess || row.createdBy === user.id;
+  const canDelete = canManage;
+
+  /** The people a meeting may be shown to: committee members, and those already chosen (kept if they left since). */
+  function checkedViewers(given: string[], recorder: string, kept: string[] = []): string[] {
+    const allowed = new Set([...committee().map((p) => p.id), ...kept]);
+    const viewers = [...new Set(given)].filter((v) => v !== recorder);
+    if (viewers.some((v) => !allowed.has(v))) throw new DomainError('validation', '見られる人に、委員でない人が含まれています。', { field: 'viewers' });
+    return viewers;
+  }
+
+  /** Items of the meeting already in the decision register (their tokens name the meeting and the item). */
+  const registeredDecisions = (row: MeetingRow) => {
+    const decisions = deps.decisions ?? null;
+    if (!decisions || !row.draft) return 0;
+    return row.draft.decisions.filter((_, i) => decisions.byToken(minutesItemToken(row.id, i)) !== null).length;
+  };
 
   function visible(request: FastifyRequest): { user: User; row: MeetingRow } {
     const user = member(request);
@@ -208,12 +227,14 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
       draft: row.draft,
       body: row.body,
       version: row.version,
+      registeredDecisions: canManage(row, user) ? registeredDecisions(row) : 0,
       can: {
         edit: row.stage === 'draft',
         confirm: row.stage === 'draft',
         listen: canListen(row, user),
         delete: canDelete(row, user),
         retry: row.stage === 'failed' && !(row.failedStage !== 'summarize' && row.audioDeletedAt),
+        manage: canManage(row, user),
       },
     };
   };
@@ -258,7 +279,7 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
     const body = deps.parse(uploadOpen, request.body);
     const ext = audioExtension(body.filename, body.type);
     if (!ext) throw new DomainError('validation', `録音ファイルは ${MINUTES_AUDIO_EXTENSIONS.join('・')} のどれかにしてください。`, { field: 'audio' });
-    if (body.bytes > MINUTES_LIMITS.audioBytes) throw new DomainError('validation', `録音ファイルは ${Math.floor(MINUTES_LIMITS.audioBytes / 1024 / 1024)} MB までです。`, { field: 'audio' });
+    if (body.bytes > MINUTES_LIMITS.audioBytes) throw new DomainError('validation', `録音ファイルは ${sizeLabel(MINUTES_LIMITS.audioBytes)} までです。`, { field: 'audio' });
     const unconfirmed = store.all().filter((m) => m.createdBy === user.id && m.stage !== 'confirmed' && !m.audioDeletedAt).length;
     if (unconfirmed >= UNCONFIRMED_PER_PERSON) throw new DomainError('conflict', `確定していない議事録が ${UNCONFIRMED_PER_PERSON} 件あります。確定するか、要らないものを消してから取り込んでください。`);
     const pending = [...uploads.values()].reduce((sum, u) => sum + (u.bytes - u.received), 0);
@@ -315,9 +336,7 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
     const fields = deps.parse(createBody, request.body);
     const u = ownUpload(fields.uploadId, user);
     if (u.received !== u.bytes) throw new DomainError('validation', '録音ファイルがまだ全部届いていません。');
-    const known = new Set(committee().map((p) => p.id));
-    const viewers = [...new Set(fields.viewers)].filter((v) => v !== user.id);
-    if (viewers.some((v) => !known.has(v))) throw new DomainError('validation', '見られる人に、委員でない人が含まれています。', { field: 'viewers' });
+    const viewers = checkedViewers(fields.viewers, user.id);
     if (u.finalizing) throw new DomainError('conflict', 'この録音はもう取り込み中です。');
     u.finalizing = true;
     const hash = createHash('sha256');
@@ -397,6 +416,19 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
     }
     reply.header('Content-Length', String(size));
     return reply.send(createReadStream(file));
+  });
+
+  // The title, the date and who may read it, changed afterwards (2026-11-05), at any stage: by the recorder or an
+  // access administrator. The last change wins (the history keeps the settings before it). Someone taken off the
+  // readers loses the meeting at once; items already registered stay in the decision register.
+  app.put('/api/minutes/:meetingId/settings', async (request): Promise<MinutesDetail> => {
+    const { user, row } = visible(request);
+    if (!canManage(row, user)) throw new DomainError('forbidden', '会議名・日付・見られる人を変えられるのは、録音した人と権限管理者だけです。');
+    const body = deps.parse(settingsBody, request.body);
+    const viewers = checkedViewers(body.viewers, row.createdBy, row.viewers);
+    const result = store.updateSettings(row.id, { title: body.title, heldOn: body.heldOn, visibility: body.visibility, viewers }, user.id, deps.clock());
+    if (result === null) throw notFound();
+    return detail(result, user);
   });
 
   app.put('/api/minutes/:meetingId/body', async (request): Promise<MinutesDetail> => {

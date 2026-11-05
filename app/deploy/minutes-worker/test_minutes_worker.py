@@ -70,6 +70,77 @@ class Summary(unittest.TestCase):
         self.assertIn("第1部分", m["summary"])
 
 
+try:
+    import numpy as np
+except ImportError:  # 要約だけの本番ホストの python3 には無い
+    np = None
+try:
+    import av  # noqa: F401
+except ImportError:
+    av = None
+
+
+@unittest.skipIf(np is None, "numpy が無い")
+class Windows(unittest.TestCase):
+    def test_quiet_cut_finds_the_silent_frame(self):
+        s = np.full(16000, 3000, dtype=np.int16)
+        s[9000:9400] = 0
+        cut = w.quiet_cut(s, 8000, 400)
+        self.assertGreaterEqual(cut, 9000)
+        self.assertLess(cut, 9400)
+        self.assertEqual(w.quiet_cut(s, 16000, 400), 16000)
+
+    @unittest.skipIf(av is None, "av が無い")
+    def test_windows_cut_at_silence_and_keep_every_sample(self):
+        import tempfile
+        import wave
+        from pathlib import Path
+
+        rate = w.SAMPLE_RATE
+        t = np.arange(rate * 25) / rate
+        s = (np.sin(2 * np.pi * 440 * t) * 8000).astype(np.int16)
+        s[int(rate * 7.5):int(rate * 8.0)] = 0  # 1 つ目の窓（10 秒）の終わり 4 秒の中の無音
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "a.wav"
+            with wave.open(str(path), "wb") as f:
+                f.setnchannels(1)
+                f.setsampwidth(2)
+                f.setframerate(rate)
+                f.writeframes(s.tobytes())
+            got = list(w.audio_windows(path, window_sec=10, search_sec=4))
+        self.assertGreaterEqual(len(got), 3)
+        self.assertEqual(got[0][0], 0)
+        self.assertGreaterEqual(got[1][0], 7.5)
+        self.assertLess(got[1][0], 8.0)
+        for (a, x), (b, _) in zip(got, got[1:]):
+            self.assertAlmostEqual(a + x.shape[0] / rate, b)
+            self.assertLessEqual(x.shape[0], 10 * rate)
+        self.assertEqual(sum(x.shape[0] for _, x in got), s.shape[0])
+        self.assertEqual(got[0][1].dtype, np.float32)
+
+    def test_transcribe_adds_the_window_start(self):
+        class Seg:
+            def __init__(self, start, end, text):
+                self.start, self.end, self.text = start, end, text
+
+        class Model:
+            def transcribe(self, samples, **kw):
+                self.kw = kw
+                return iter([Seg(1.0, 2.5, " はい "), Seg(3.0, float("inf"), "壊れ"), Seg(4.0, 4.0, " ")]), None
+
+        model = Model()
+        windows = [(0.0, np.zeros(16000 * 10, dtype=np.float32)), (9.6, np.zeros(16000 * 5, dtype=np.float32))]
+        app = mock.Mock()
+        job = {"id": "mt_1", "audio": {"ext": "wav"}, "glossary": ["協賛"]}
+        with mock.patch.object(w, "whisper_model", return_value=(model, "large-v3")), mock.patch.object(w, "audio_windows", return_value=iter(windows)):
+            r = w.transcribe(app, job)
+        self.assertEqual([x["start"] for x in r["segments"]], [1.0, 10.6])
+        self.assertEqual(r["segments"][1]["end"], 12.1)
+        self.assertEqual(r["durationSec"], 14.6)
+        self.assertFalse(model.kw["condition_on_previous_text"])
+        self.assertIn("協賛", model.kw["initial_prompt"])
+
+
 class Loop(unittest.TestCase):
     def test_a_failure_is_reported_to_the_app(self):
         app = mock.Mock()

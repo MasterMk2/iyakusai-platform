@@ -24,14 +24,23 @@ export const MINUTES_LIMITS = {
   title: 100,
   body: 100_000,
   viewers: 100,
-  /** One upload: about 3 hours of 128 kbps audio. */
-  audioBytes: 300 * 1024 * 1024,
+  /**
+   * One upload: about 3 hours of an uncompressed recording (16-bit stereo WAV at 48 kHz, as IC recorders write).
+   * Raised from 300 MB on 2026-11-05; the worker transcribes in 10-minute pieces, so the length does not raise its memory.
+   */
+  audioBytes: 2 * 1024 * 1024 * 1024,
   segments: 20_000,
   segmentText: 2_000,
   item: 1_000,
   items: 100,
   quote: 200,
 } as const;
+
+/** A size limit as people read it: "2 GB", "300 MB". */
+export function sizeLabel(bytes: number): string {
+  const gb = bytes / 1024 ** 3;
+  return gb >= 1 ? `${Number(gb.toFixed(1))} GB` : `${Math.floor(bytes / 1024 ** 2)} MB`;
+}
 
 /** Accepted recordings: the browser's own (webm/ogg) and what phones and IC recorders write. */
 export const MINUTES_AUDIO_EXTENSIONS = ['webm', 'ogg', 'm4a', 'mp4', 'mp3', 'wav', 'aac', 'flac'] as const;
@@ -143,7 +152,21 @@ export interface MinutesDetail {
   /** The minutes as people corrected them (Markdown); starts as the AI draft written out. */
   body: string;
   version: number;
-  can: { edit: boolean; confirm: boolean; listen: boolean; delete: boolean; retry: boolean };
+  /**
+   * Items of this meeting already in the decision register (counted for those who may change the meeting's settings:
+   * the register shows them to every member, whoever may read the meeting later).
+   */
+  registeredDecisions: number;
+  /** `manage`: change the title, the date and who may read it (the recorder and the access administrators). */
+  can: { edit: boolean; confirm: boolean; listen: boolean; delete: boolean; retry: boolean; manage: boolean };
+}
+
+/** The title, the date and who may read a meeting, changed after it was made (2026-11-05). */
+export interface MinutesSettingsUpdate {
+  title: string;
+  heldOn: string;
+  visibility: MinutesVisibility;
+  viewers: string[];
 }
 
 export interface MinutesBodyUpdate {
