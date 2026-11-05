@@ -448,6 +448,9 @@ html { scroll-padding-top: 64px; }
 button.minutes-at { min-height: 28px; padding: 0 6px; font-size: 13px; font-weight: 700; background: var(--info-bg); color: var(--navy); border: 1px solid var(--info-line); font-variant-numeric: tabular-nums; }
 button.minutes-at:hover:not(:disabled) { background: var(--hover-strong); border-color: var(--info-line); }
 button.minutes-at.minutes-unverified { background: var(--amber-bg); color: var(--amber); border-color: var(--amber-line); }
+.minutes-progress { display: grid; gap: 4px; max-width: 640px; }
+.minutes-progress progress { width: 100%; height: 12px; accent-color: var(--navy); }
+.minutes-progress p { margin: 0; font-size: 14px; font-variant-numeric: tabular-nums; }
 .minutes-segments { list-style: none; margin: 8px 0 0; padding: 0; max-height: 480px; overflow: auto; display: grid; gap: 4px; line-height: 1.6; }
 .minutes-danger { margin-top: 12px; }
 .minutes-settings:focus { outline: none; }

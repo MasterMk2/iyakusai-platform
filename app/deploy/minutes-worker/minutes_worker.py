@@ -43,7 +43,13 @@ log = logging.getLogger("minutes-worker")
 
 CLIENT = "iyakusai-minutes-worker"
 SIGNATURE_VERSION = "svc-auth/v1"
-PATHS = {"claim": "/v1/minutes/worker/claim", "audio": "/v1/minutes/worker/audio", "result": "/v1/minutes/worker/result"}
+PATHS = {"claim": "/v1/minutes/worker/claim", "audio": "/v1/minutes/worker/audio", "result": "/v1/minutes/worker/result",
+         "progress": "/v1/minutes/worker/progress"}
+# 進み具合（画面の進捗バー）を知らせる間隔と、その待ち時間。知らせは届かなくても処理を止めない。
+PROGRESS_EVERY_SEC = 20
+PROGRESS_TIMEOUT_SEC = 10
+# 録音の長さを測るのに使う時間の上限（超えたら入れ物に書かれた長さで代える）。
+PROBE_LIMIT_SEC = 30
 # 純テキスト生成なのでツールは全部止める（タスク候補のスクリーニングと同じ）。
 # 文字起こしの中の言葉で AI が何かを実行しないよう、道具は書き出せるものを全部止め、利用者の MCP サーバーも読まない。
 DENIED_TOOLS = ("Bash,Edit,MultiEdit,Write,NotebookEdit,Read,Glob,Grep,LS,WebFetch,WebSearch,Task,Agent,Skill,"
@@ -99,12 +105,23 @@ class App:
         self.key = key
         self.timeout = timeout
 
-    def _open(self, path: str, payload: dict):
+    def _open(self, path: str, payload: dict, timeout: float | None = None):
         # allow_nan=False: Infinity や NaN はアプリが JSON として読めないので、送る前に止める。
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
         headers = {"Content-Type": "application/json", "User-Agent": "iyakusai-minutes-worker/1", **signed_headers(self.key, "POST", path, body)}
         req = urllib.request.Request(self.base + path, data=body, method="POST", headers=headers)
-        return urllib.request.urlopen(req, timeout=self.timeout)
+        return urllib.request.urlopen(req, timeout=timeout or self.timeout)
+
+    def notify(self, path: str, payload: dict, timeout: float) -> int:
+        """届かなくてもよい知らせ。HTTP の状態コードを返し、アプリに届かなければ 0（例外は出さない）。"""
+        try:
+            with self._open(path, payload, timeout) as res:
+                res.read()
+                return res.status
+        except urllib.error.HTTPError as e:
+            return e.code
+        except Exception:
+            return 0
 
     def post(self, path: str, payload: dict) -> dict:
         try:
@@ -128,6 +145,65 @@ class App:
         audio = job["audio"]
         if n != audio["bytes"] or h.hexdigest() != audio["sha256"]:
             raise RuntimeError("受け取った音声が記録と一致しません（大きさか SHA-256）")
+
+
+class Progress:
+    """進み具合をアプリに知らせる（画面の進捗バー用）。文字起こしは音声の秒、要約は部分の数で数える。
+    知らせは PROGRESS_EVERY_SEC に 1 回まで。届かなくても処理は続ける。進み具合を受け取らない古い版のアプリ（404）や、
+    借りが切れた（409）ときは、それ以降知らせない。"""
+
+    def __init__(self, app: App, job: dict, every: float | None = None, clock=time.monotonic):
+        self.app, self.job, self.clock = app, job, clock
+        self.every = PROGRESS_EVERY_SEC if every is None else every
+        self.last: float | None = None
+        self.off = False
+        self.warned = False
+
+    def report(self, done: float, total: float | None, force: bool = False) -> None:
+        if self.off:
+            return
+        t = self.clock()
+        if not force and self.last is not None and t - self.last < self.every:
+            return
+        self.last = t
+        try:
+            if not math.isfinite(done):
+                return
+            payload = {"id": self.job.get("id"), "leaseToken": self.job.get("leaseToken"), "stage": self.job.get("stage"), "done": round(max(0.0, float(done)), 2),
+                       "total": None if total is None or not math.isfinite(total) or total <= 0 else round(float(total), 2)}
+            status = self.app.notify(PATHS["progress"], payload, PROGRESS_TIMEOUT_SEC)
+        except Exception:  # 知らせのために文字起こし・要約を失敗させない
+            status = 0
+        if status in (404, 409):
+            self.off = True
+            log.info("進み具合は知らせません（アプリの答え %s）: %s", status, self.job["id"])
+        elif status != 200 and not self.warned:
+            self.warned = True
+            log.warning("進み具合をアプリに知らせられませんでした（%s）。処理は続けます", status or "届かない")
+
+
+def audio_duration(path: Path, limit_sec: float = PROBE_LIMIT_SEC) -> float | None:
+    """録音の長さ（秒）。分からなければ None（進捗バーが割合を出さないだけ）。
+    デコードせずにパケットを最後までたどって測る（ADTS の AAC は入れ物に長さが無く、ffmpeg の値はビットレートからの推定。
+    ブラウザの webm にも長さが書かれていないことがある）。手元で 3 時間の AAC が数秒。limit_sec を超えたら入れ物の値で代える。"""
+    try:
+        import av
+
+        with av.open(str(path), mode="r", metadata_errors="ignore") as container:
+            stream = container.streams.audio[0]
+            declared = container.duration / av.time_base if container.duration else None
+            started = time.monotonic()
+            end = 0.0
+            for packet in container.demux(stream):
+                if packet.size == 0 or packet.pts is None or packet.time_base is None:
+                    continue
+                end = max(end, float((packet.pts + (packet.duration or 0)) * packet.time_base))
+                if time.monotonic() - started > limit_sec:
+                    return declared
+            return end if end > 0 else declared
+    except Exception:
+        log.warning("録音の長さを測れませんでした（進み具合は割合なしで知らせます）")
+        return None
 
 
 # ---- 文字起こし
@@ -248,17 +324,23 @@ def transcribe(app: App, job: dict) -> dict:
     with tempfile.TemporaryDirectory(prefix="iyk-minutes-") as tmp:
         audio = Path(tmp) / f"audio.{job['audio']['ext']}"
         app.download(job, audio)
+        progress = Progress(app, job)
+        total = audio_duration(audio)
+        progress.report(0, total, force=True)
         started = time.monotonic()
         windows = 0
         # 区切りごとに独立して文字起こしする（もともと前の文脈を使わない設定なので、つなぎ目で失うものは少ない）。
         for offset, samples in audio_windows(audio):
             windows += 1
+            # segments は文字起こしを進めながら返す（取り出すまで処理されない）ので、取り出した所までを知らせる。
             segments, _ = model.transcribe(samples, language="ja", vad_filter=True, beam_size=5,
                                            initial_prompt=prompt, condition_on_previous_text=False)
             for s in segments:
                 if s.text.strip() and math.isfinite(s.start) and math.isfinite(s.end):
                     out.append({"start": round(offset + s.start, 2), "end": round(offset + max(s.start, s.end), 2), "text": s.text.strip()[:1000]})
+                    progress.report(offset + max(s.start, s.end), total)
             duration = offset + samples.shape[0] / SAMPLE_RATE
+            progress.report(duration, total, force=True)
         if windows == 0:
             # 空の下書きにすると、録った人には何が起きたか分からない。失敗にして画面に理由を出す。
             raise RuntimeError("音声を 1 秒も読み取れませんでした（録音の形式が読めないか、ファイルが壊れています）")
@@ -411,13 +493,15 @@ def merge_drafts(drafts: list[dict]) -> dict:
     return out
 
 
-def summarize(job: dict) -> dict:
+def summarize(job: dict, progress: Progress | None = None) -> dict:
     segments = (job.get("transcript") or {}).get("segments") or []
     if not segments:
         return {"summary": "文字起こしに発言がありませんでした（無音か、録音できていない可能性）。", "topics": [], "decisions": [], "todos": [], "carryOver": [], "unclear": []}
     parts = split_parts(transcript_lines(segments))
     drafts = []
     for i, lines in enumerate(parts, 1):
+        if progress:
+            progress.report(i - 1, len(parts), force=True)
         started = time.monotonic()
         drafts.append(clean_draft(extract_json(ask_claude(build_prompt(job, lines, i, len(parts))))))
         log.info("要約 %s: 第 %d/%d 部分を %.0f 秒で", job["id"], i, len(parts), time.monotonic() - started)
@@ -438,7 +522,7 @@ def run_once(app: App, stages: list[str]) -> bool:
         if stage == "transcribe":
             payload["transcript"] = transcribe(app, job)
         else:
-            payload["draft"] = summarize(job)
+            payload["draft"] = summarize(job, Progress(app, job))
     except Exception as e:  # 失敗はアプリに伝え、画面から「やり直す」できるようにする
         log.exception("処理に失敗しました: %s", job["id"])
         payload = failure(job, f"{'文字起こし' if stage == 'transcribe' else '要約'}に失敗しました: {str(e)[:300]}")

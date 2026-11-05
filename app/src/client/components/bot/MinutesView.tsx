@@ -3,12 +3,14 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type Fo
 import {
   fmtOffset,
   MINUTES_LIMITS,
+  MINUTES_PROGRESS_STALE_SEC,
   MINUTES_STAGE_LABELS,
   type MinutesDetail,
   type MinutesEvidence,
   type MinutesListResponse,
   type MinutesMeta,
   type MinutesPerson,
+  type MinutesProgress,
   type MinutesSettingsUpdate,
   type MinutesStage,
   type MinutesVisibility,
@@ -31,6 +33,43 @@ const today = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Tok
 
 function StageTag({ stage }: { stage: MinutesStage }) {
   return <span className={`bot-tag bot-tag-${stageTone(stage)}`}>{MINUTES_STAGE_LABELS[stage]}</span>;
+}
+
+/** A length of time as people say it: "45秒", "38分", "3時間13分". */
+function spoken(sec: number): string {
+  const s = Math.max(0, Math.round(sec));
+  if (s === 0) return '0分';
+  if (s < 60) return `${s}秒`;
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return h ? `${h}時間${m}分` : `${m}分`;
+}
+
+/** How far the running stage has got, as the worker last reported (refreshed with the page every 15 seconds). */
+function ProgressLine({ p }: { p: MinutesProgress }) {
+  // One part to summarize says nothing a bar could add.
+  if (p.stage === 'summarize' && (p.total === null || p.total <= 1)) return null;
+  const stale = p.ageSec >= MINUTES_PROGRESS_STALE_SEC;
+  // The time left goes by the pace so far; with no word from the worker for long, it says nothing.
+  const left = p.remainingSec === null || stale ? '' : p.remainingSec < 60 ? '・残りわずか（目安）' : `・残り約${spoken(Math.ceil(p.remainingSec / 60) * 60)}（目安）`;
+  const label = p.stage === 'transcribe' ? '文字起こしの進み具合' : '要約の進み具合';
+  const text =
+    p.stage === 'transcribe'
+      ? p.total === null
+        ? `録音の ${spoken(p.done)} まで文字起こししました（全体の長さは分かりません）`
+        : `${spoken(p.done)} / ${spoken(p.total)}（${p.percent ?? 0}%）${left}`
+      : `全 ${p.total} 部分のうち ${p.done} 部分を要約しました（${p.percent ?? 0}%）${left}`;
+  return (
+    <div className="minutes-progress" data-testid="minutes-progress">
+      {p.total === null ? <progress aria-label={label} /> : <progress aria-label={label} max={100} value={p.percent ?? 0} />}
+      <p>{text}</p>
+      {stale && (
+        <p className="status warning" data-testid="minutes-progress-stale">
+          最後の知らせから {spoken(p.ageSec)} たっています。処理が止まっているかもしれません。長く続くときはシステム課に連絡してください。
+        </p>
+      )}
+    </div>
+  );
 }
 
 export interface MinutesViewProps {
@@ -137,7 +176,8 @@ function MinutesList({ version, onOpen, onNew }: { version: number; onOpen: (id:
                   {m.heldOn} {m.title}
                 </span>
                 <span className="row-sub">
-                  <StageTag stage={m.stage} /> 録音: {m.createdByName}
+                  <StageTag stage={m.stage} />
+                  {m.progressPercent !== null ? ` ${m.progressPercent}%` : ''} 録音: {m.createdByName}
                   {m.durationSec !== null ? `・${fmtOffset(m.durationSec)}` : ''}
                   {m.confirmedAt ? `・確定 ${fmtDate(m.confirmedAt)}` : ''}
                 </span>
@@ -733,6 +773,7 @@ function MinutesDetailView({ meetingId, people, onBack }: { meetingId: string; p
           {MINUTES_STAGE_LABELS[m.stage]}です。終わるとこの画面が自動で変わります（1 時間の会議で数十分かかることがあります）。
         </p>
       )}
+      {processing && m.progress && <ProgressLine p={m.progress} />}
       {m.stage === 'failed' && (
         <p className="status error" role="alert">
           {m.error ?? '処理に失敗しました。'}

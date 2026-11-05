@@ -117,6 +117,27 @@ export interface MinutesMeta {
   consentText: string;
 }
 
+/**
+ * How far the worker has got with the stage it is running (2026-11-05), as it last reported. Kept in the app's
+ * memory only: it is gone after a restart of the app until the worker reports again (about every 20 seconds).
+ */
+export interface MinutesProgress {
+  stage: 'transcribe' | 'summarize';
+  /** transcribe: seconds of the recording done; summarize: parts of the transcript done. */
+  done: number;
+  /** The whole (seconds or parts); null when the worker could not tell how long the recording is. */
+  total: number | null;
+  /** Percent done (0–99 while the stage runs; the total of a recording is sometimes an estimate); null without a total. */
+  percent: number | null;
+  /** Seconds the stage still needs at its pace so far; null until there is a pace to go by. */
+  remainingSec: number | null;
+  /** Seconds since the last report (counted on the server, so the viewer's clock does not matter). */
+  ageSec: number;
+}
+
+/** No report for this long while the stage runs: the screen says the worker may have stopped. */
+export const MINUTES_PROGRESS_STALE_SEC = 10 * 60;
+
 export interface MinutesListItem {
   id: string;
   title: string;
@@ -126,6 +147,8 @@ export interface MinutesListItem {
   createdAt: string;
   confirmedAt: string | null;
   durationSec: number | null;
+  /** Percent done of the running stage, when the worker has reported one. */
+  progressPercent: number | null;
 }
 
 export interface MinutesListResponse {
@@ -140,6 +163,8 @@ export interface MinutesDetail {
   /** The stage that failed, while stage is "failed". */
   failedStage: 'transcribe' | 'summarize' | null;
   error: string | null;
+  /** While a stage runs and the worker has reported; null otherwise. */
+  progress: MinutesProgress | null;
   visibility: MinutesVisibility;
   viewers: MinutesPerson[];
   createdByName: string;
