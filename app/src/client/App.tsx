@@ -31,12 +31,13 @@ import { ThreadDetail } from './components/ThreadDetail';
 import { ThreadList, type InboxFilter } from './components/ThreadList';
 import type { BotReplyRequest, DraftToSend } from '../shared/mailHandoff';
 import { useLoader } from './useLoader';
+import { BooksView, parseBooksSection, type BooksSection } from './components/books/BooksView';
 
 const PROXY_ERRORS = new Set(['untrusted_proxy', 'unauthenticated', 'invalid_identity', 'unknown_identity']);
 
 export interface Route {
   /** `line` is the official LINE tab (2026-11-03), apart from the mail tab. */
-  view: 'home' | 'mail' | 'line' | 'admin' | 'tasks' | 'bot' | 'settings' | 'contacts' | 'decisions';
+  view: 'home' | 'mail' | 'line' | 'admin' | 'tasks' | 'bot' | 'settings' | 'contacts' | 'decisions' | 'books';
   mailboxId: string | null;
   lineAccountId: string | null;
   /** Selected email thread (`thread=`) or LINE conversation (`conv=`); at most one is set. */
@@ -68,6 +69,8 @@ export interface Route {
   decisionId: string | null;
   decisionNew: boolean;
   decisionPrefill: DecisionPrefill | null;
+  /** 会計 (2026-11-05): the part of the books shown (`#/books/<section>`). */
+  booksSection: BooksSection | null;
 }
 
 const EMPTY_ROUTE: Route = {
@@ -93,6 +96,7 @@ const EMPTY_ROUTE: Route = {
   decisionId: null,
   decisionNew: false,
   decisionPrefill: null,
+  booksSection: null,
 };
 
 function parseFocus(value: string | null): TaskFocus | null {
@@ -118,6 +122,7 @@ export function parseHash(hash: string): Route {
     const decisionId = params.get('d');
     return { ...EMPTY_ROUTE, view: 'decisions', decisionId: decisionId && /^dc_[0-9a-f]{16}$/.test(decisionId) ? decisionId : null, decisionNew: params.get('new') === '1', decisionPrefill: parseDecisionPrefill(params) };
   }
+  if (parts[0] === 'books') return { ...EMPTY_ROUTE, view: 'books', booksSection: parseBooksSection(parts[1]) };
   if (parts[0] === 'bot') return { ...EMPTY_ROUTE, view: 'bot', botSection: parseBotSection(parts[1]), botJobId: params.get('job') };
   if (parts[0] === 'tasks') {
     return { ...EMPTY_ROUTE, view: 'tasks', taskWorkspaceId: params.get('ws'), taskId: params.get('task'), taskNew: params.get('new') === '1', taskRemaining: params.get('remaining') === '1', taskFocus: parseFocus(params.get('focus')), taskCalendarDate: calendarDateParam(params.get('cal')) };
@@ -153,6 +158,7 @@ export function toHash(route: Route): string {
     if (route.decisionNew) return decisionNewHref(route.decisionPrefill);
     return route.decisionId ? decisionHref(route.decisionId) : '#/decisions';
   }
+  if (route.view === 'books') return route.booksSection ? `#/books/${route.booksSection}` : '#/books';
   if (route.view === 'bot') {
     const base = `#/bot/${route.botSection ?? 'ask'}`;
     return route.botJobId ? `${base}?job=${encodeURIComponent(route.botJobId)}` : base;
@@ -407,7 +413,7 @@ export function App() {
           : null;
 
   useEffect(() => {
-    const names: Record<Route['view'], string> = { home: 'ホーム', tasks: 'タスク', bot: 'Bot', mail: 'メール', line: '公式LINE', admin: '設定', settings: '設定', contacts: '連絡先', decisions: '決定事項' };
+    const names: Record<Route['view'], string> = { home: 'ホーム', tasks: 'タスク', bot: 'Bot', mail: 'メール', line: '公式LINE', admin: '設定', settings: '設定', contacts: '連絡先', decisions: '決定事項', books: '会計' };
     document.title = user ? `${names[route.view]}｜医薬祭 委員会アプリ` : '医薬祭 委員会アプリ';
   }, [route.view, user]);
 
@@ -448,11 +454,13 @@ export function App() {
     { key: 'line', label: '公式LINE', labelBreaks: ['公式', 'LINE'], href: '#/line', onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'line' }) },
     // Contacts have their own tab, next to メール.
     { key: 'contacts', label: '連絡先', href: '#/contacts', onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'contacts' }) },
+    // 会計 (2026-11-05): every member's reimbursement claims, and the books for the accounting section.
+    { key: 'books', label: '会計', href: '#/books', onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'books' }) },
     { key: 'bot', label: 'Bot', href: '#/bot', onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'bot', botSection: 'ask' }) },
     { key: 'settings', label: '設定', href: '#/settings', onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'settings' }) },
   ];
   // The decision register has no tab of its own (the tabs stay as they are): it is reached from home, so home stays marked.
-  const currentNav: NavKey = route.view === 'home' || route.view === 'decisions' ? 'home' : route.view === 'tasks' ? 'tasks' : route.view === 'bot' ? 'bot' : route.view === 'contacts' ? 'contacts' : route.view === 'line' ? 'line' : route.view === 'mail' ? 'inbox' : 'settings';
+  const currentNav: NavKey = route.view === 'home' || route.view === 'decisions' ? 'home' : route.view === 'tasks' ? 'tasks' : route.view === 'bot' ? 'bot' : route.view === 'contacts' ? 'contacts' : route.view === 'books' ? 'books' : route.view === 'line' ? 'line' : route.view === 'mail' ? 'inbox' : 'settings';
   // Contacts exist with the committee mailbox (Discord login), for every committee member.
   const contactsEnabled = !!committeeMail;
   const topNav = <GlobalNav items={navItems} current={currentNav} />;
@@ -566,6 +574,32 @@ export function App() {
             onNavigate={(r) => navigate({ ...EMPTY_ROUTE, view: 'contacts', contactId: r.contactId, contactNew: r.creating, contactImport: r.importing })}
             refresh={refresh}
           />
+        </div>
+      </div>
+    );
+  }
+
+  // 会計 exists with the committee mailbox (Discord login), like the contacts; the demo has synthetic books.
+  if (route.view === 'books') {
+    return (
+      <div className="app">
+        {bar}
+        {topNav}
+        <div className="layout books-layout">
+          {contactsEnabled || demoMode ? (
+            <BooksView section={route.booksSection} onSection={(booksSection) => navigate({ ...EMPTY_ROUTE, view: 'books', booksSection })} />
+          ) : (
+            <main className="main" aria-labelledby="books-unavailable-title">
+              <h2 id="books-unavailable-title">会計</h2>
+              {mailStatusSettled ? (
+                <p className="status error" role="alert">
+                  このサーバーでは会計を使えません。
+                </p>
+              ) : (
+                <LoadStatus loader={mailStatus} what="会計" />
+              )}
+            </main>
+          )}
         </div>
       </div>
     );

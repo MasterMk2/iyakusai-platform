@@ -518,6 +518,24 @@ export class PaymentsStore {
       .map(depositRow);
   }
 
+  /**
+   * For the books (会計の帳簿, 2026-11-05): the deposits put on an invoice now (a live allocation), with the invoice's
+   * number and organization, oldest first. Read only.
+   */
+  confirmedDeposits(): { deposit_id: string; booked_on: string; description: string; amount_yen: number; invoice_id: string; number: string; org_id: string; org_name: string }[] {
+    const rows = this.db
+      .prepare(
+        `SELECT d.id AS deposit_id, d.booked_on, d.description, d.amount_yen, i.id AS invoice_id, i.number, i.org_id, i.org_name
+         FROM allocations a JOIN deposits d ON d.id=a.deposit_id JOIN invoices i ON i.id=a.invoice_id
+         WHERE a.undone_at IS NULL AND d.removed_at IS NULL ORDER BY d.booked_on, d.id`,
+      )
+      .all() as Record<string, unknown>[];
+    return rows.map((r) => {
+      num(r, 'amount_yen');
+      return r as unknown as { deposit_id: string; booked_on: string; description: string; amount_yen: number; invoice_id: string; number: string; org_id: string; org_name: string };
+    });
+  }
+
   /** How many live deposits each key has (the import's duplicate check). */
   keyCounts(keys: string[]): Map<string, number> {
     const out = new Map<string, number>();

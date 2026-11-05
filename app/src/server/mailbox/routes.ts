@@ -5,6 +5,12 @@ import { HANDLING_STATUSES, LIMITS } from '../../shared/api.js';
 import type { InboxResponse } from '../../shared/line.js';
 import { MAIL_ATTACHMENTS_MAX, MAIL_BODY_MAX, MAIL_SUBJECT_MAX, REAUTH_REQUIRED, type MailSendOptions, type MailStatusResponse } from '../../shared/mailbox.js';
 import { DUE_DATE_PATTERN } from '../../shared/mailDue.js';
+import { fiscalYearOf, tokyoDate } from '../../shared/books.js';
+import { registerBooksRoutes } from '../books/routes.js';
+import { sheetTabs } from '../books/sheet-tabs.js';
+import { SheetsSync, SheetsWriter } from '../books/sheets.js';
+import { BooksStore } from '../books/store.js';
+import { booksOf } from '../books/views.js';
 import { registerContactRoutes } from '../contacts/routes.js';
 import { ContactsStore } from '../contacts/store.js';
 import type { DecisionsStore } from '../decisions/store.js';
@@ -55,6 +61,9 @@ export interface MailboxRuntime {
   organizations?: OrganizationsStore;
   /** Replaces the payments file next to organizations.sqlite3 (tests). */
   payments?: PaymentsStore;
+  /** Replaces the books file next to payments.sqlite3, and the spreadsheet's HTTP (tests). */
+  books?: BooksStore;
+  sheetsFetch?: typeof fetch;
   /** Replace LINE's HTTP (the receiver and the Messaging API) or its push connector (tests). */
   lineFetch?: Fetch;
   lineConnector?: LinePushConnector;
@@ -235,6 +244,52 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
   registerOrganizationRoutes(app, organizations, { requireUser: deps.requireUser, session: deps.session, people: deps.people, discordUserIdOf: deps.discordUserIdOf, clock: deps.clock, parse: deps.parse, contacts, sender, mailGate: (request) => reader(request, true), mailPeek: (request) => reader(request, false), mail: service, attachmentBytes: sendConfig?.maxAttachmentBytes ?? 0, now: deps.now ?? Date.now, paymentsVisible });
 
   registerPaymentRoutes(app, payments, { requireUser: deps.requireUser, session: deps.session, people: deps.people, discordUserIdOf: deps.discordUserIdOf, clock: deps.clock, parse: deps.parse, organizations, contacts, now: deps.now ?? Date.now });
+
+  // Books (会計の帳簿, 2026-11-05): their own file next to payments.sqlite3, with the payments' accounting permissions,
+  // and the master spreadsheet when books-sheets.json is set up. A file that cannot be opened turns off the books only
+  // (503); a spreadsheet that cannot be written leaves the books working (its status shows why).
+  let books: BooksStore | null = rt.books ?? null;
+  if (!books) {
+    try {
+      const opened = new BooksStore(rt.config.dataDir);
+      books = opened;
+      app.addHook('onClose', async () => opened.close());
+    } catch {
+      books = null;
+    }
+  }
+  let booksSheets: SheetsSync | null = null;
+  if (books && rt.config.booksSheets) {
+    const store = books;
+    const sheetsConfig = rt.config.booksSheets;
+    const nameOf = (userId: string) => deps.people.lookup(userId)?.displayName ?? '（不明な利用者）';
+    const sync = new SheetsSync(
+      new SheetsWriter(sheetsConfig, rt.sheetsFetch ?? fetch, now),
+      () => sheetTabs(store, booksOf(store, nameOf), sheetsConfig.tabPrefix, fiscalYearOf(tokyoDate(now()), store.fiscalStartMonth()), deps.clock()),
+      () => store.revision(),
+      { get: () => store.sheetsState(), set: (s) => store.setSheetsState(s) },
+      deps.clock,
+      sheetsConfig.debounceSeconds * 1000,
+    );
+    booksSheets = sync;
+    app.addHook('onClose', async () => sync.close());
+    // After a restart: catch up with what changed while the app was down (or write the sheet the first time).
+    if (store.sheetsState().lastOkAt === null || sync.pending()) sync.request();
+  }
+  registerBooksRoutes(app, books, {
+    requireUser: deps.requireUser,
+    session: deps.session,
+    people: deps.people,
+    discordUserIdOf: deps.discordUserIdOf,
+    clock: deps.clock,
+    parse: deps.parse,
+    payments,
+    organizations,
+    now,
+    sheets: booksSheets,
+    sheetsUrl: rt.config.booksSheets ? `https://docs.google.com/spreadsheets/d/${rt.config.booksSheets.spreadsheetId}/edit` : null,
+    permissionsOf: (user) => (paymentsStore ? accountingPermissionsOf(paymentsStore, user) : []),
+  });
 
   // Meeting minutes (α, 2026-11-02), when minutes.json is next to the mail configuration: their own file in the
   // mail folder, with the same people and sign-in as the contacts. A file that cannot be opened turns off the
