@@ -149,8 +149,9 @@ class App:
 
 class Progress:
     """進み具合をアプリに知らせる（画面の進捗バー用）。文字起こしは音声の秒、要約は部分の数で数える。
-    知らせは PROGRESS_EVERY_SEC に 1 回まで。届かなくても処理は続ける。進み具合を受け取らない古い版のアプリ（404）や、
-    借りが切れた（409）ときは、それ以降知らせない。"""
+    知らせは PROGRESS_EVERY_SEC に 1 回まで。届かなくても処理は続ける。進み具合を受け取らない古い版のアプリや、
+    借りが切れた（409）ときは、それ以降知らせない。古い版は知らない口に、Discord ログインの版では入口の検査で 403、
+    それ以外では 404 と答える（新しい版は処理役の口に 403 を返さない）。"""
 
     def __init__(self, app: App, job: dict, every: float | None = None, clock=time.monotonic):
         self.app, self.job, self.clock = app, job, clock
@@ -174,9 +175,9 @@ class Progress:
             status = self.app.notify(PATHS["progress"], payload, PROGRESS_TIMEOUT_SEC)
         except Exception:  # 知らせのために文字起こし・要約を失敗させない
             status = 0
-        if status in (404, 409):
+        if status in (403, 404, 409):
             self.off = True
-            log.info("進み具合は知らせません（アプリの答え %s）: %s", status, self.job["id"])
+            log.info("進み具合は知らせません（アプリの答え %s）: %s", status, self.job.get("id"))
         elif status != 200 and not self.warned:
             self.warned = True
             log.warning("進み具合をアプリに知らせられませんでした（%s）。処理は続けます", status or "届かない")

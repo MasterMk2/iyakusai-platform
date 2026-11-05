@@ -189,7 +189,7 @@ class ProgressReports(unittest.TestCase):
         self.assertEqual(app.notify.call_args.args[0], w.PATHS["progress"])
 
     def test_an_old_app_or_a_lost_lease_stops_the_reports_and_errors_never_escape(self):
-        for status in (404, 409):
+        for status in (403, 404, 409):
             app = mock.Mock()
             app.notify.return_value = status
             p = w.Progress(app, self.JOB, every=0)
