@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { DECISION_DEPARTMENT_KEY, DECISION_LIMITS, isDecisionDate, type MinutesRegisterResponse } from '../../shared/decisions.js';
 import { departmentsOfLabel, TEMPORARY_STAFF_DEPARTMENT } from '../../shared/mailbox.js';
 import {
+  carryOverAttendees,
   draftToMarkdown,
   MINUTES_AUDIO_EXTENSIONS,
   MINUTES_AUDIO_TYPES,
@@ -21,11 +22,14 @@ import {
   type MinutesMeta,
   type MinutesPerson,
   type MinutesProgress,
+  type MinutesReviewBodyResponse,
+  type MinutesVersionResponse,
+  type TranscriptSegment,
 } from '../../shared/minutes.js';
 import { SESSION_COOKIE } from '../discord-auth/http.js';
 import { isTemporaryStaffLoginId } from '../discord-auth/temporary-staff.js';
 import { DomainError, notFound, type User } from '../domain/types.js';
-import { decisionInputOfMinutesItem, minutesItemToken } from '../decisions/from-minutes.js';
+import { decisionInputOfMinutesItem, minutesItemToken, minutesTokenPrefix } from '../decisions/from-minutes.js';
 import type { DecisionsStore } from '../decisions/store.js';
 import { attachmentDisposition } from '../http/content-disposition.js';
 import { HttpError } from '../http/http-error.js';
@@ -33,7 +37,7 @@ import type { MailSession } from '../mailbox/routes.js';
 import type { People } from '../mailbox/service.js';
 import { MAX_SKEW_MS, verifySignature } from '../tasks/signing.js';
 import type { MinutesConfig } from './config.js';
-import { MinutesStore, newMeetingId, type MeetingRow, type WorkerStage } from './store.js';
+import { MinutesStore, newMeetingId, type MeetingRow, type StoredTranscript, type WorkerStage } from './store.js';
 import { checkedDraft, draftSchema, transcriptSchema } from './validate.js';
 
 // Meeting minutes (α, 2026-11-02). Browser routes under /api/minutes (Discord login, committee members only, like
@@ -44,7 +48,9 @@ import { checkedDraft, draftSchema, transcriptSchema } from './validate.js';
 // Who sees what (設計書 §4-7): a meeting is read by its recorder, the people chosen for it (or every member), and
 // the access administrators; its audio is played only by the recorder and the access administrators (2026-11-02
 // review); its title, date and readers are changed (2026-11-05), and it is deleted, by the recorder or an access
-// administrator.
+// administrator. Whoever reads it may correct the draft, send it back to the AI with a comment, correct the
+// transcript, confirm it, and start a correction of the confirmed minutes (2026-11-06): every confirmed version is
+// kept, so a correction never loses what was confirmed before.
 
 export const WORKER_CLIENT = 'iyakusai-minutes-worker';
 export const WORKER_PATHS = {
@@ -93,7 +99,17 @@ const decisionsRegisterBody = z.strictObject({
   departments: z.array(z.string().regex(DECISION_DEPARTMENT_KEY)).min(1).max(DECISION_LIMITS.departments),
   venue: z.enum(['board', 'regular', 'subcommittee', 'mail']),
 });
-const confirmBody = z.strictObject({ expectedVersion: z.number().int().min(1) });
+const versionOnly = z.strictObject({ expectedVersion: z.number().int().min(1) });
+const confirmBody = z.strictObject({ expectedVersion: z.number().int().min(1), note: z.string().max(MINUTES_LIMITS.note * 2).optional() });
+const reviewBody = z.strictObject({
+  expectedVersion: z.number().int().min(1),
+  comment: z.string().max(MINUTES_LIMITS.comment * 2).transform((s) => s.trim()).pipe(z.string().min(1, 'コメントを書いてください。').max(MINUTES_LIMITS.comment)),
+});
+const segmentParams = z.strictObject({ meetingId: z.string().regex(/^mt_[0-9a-f]{16}$/), index: z.coerce.number().int().min(0).max(MINUTES_LIMITS.segments) });
+const segmentBody = z.strictObject({ expectedText: z.string().max(MINUTES_LIMITS.segmentText), text: z.string().max(MINUTES_LIMITS.segmentText * 2) });
+const versionParams = z.strictObject({ meetingId: z.string().regex(/^mt_[0-9a-f]{16}$/), no: z.coerce.number().int().min(1).max(100_000) });
+const reviewParams = z.strictObject({ meetingId: z.string().regex(/^mt_[0-9a-f]{16}$/), reviewId: z.coerce.number().int().min(1) });
+const exportQuery = z.strictObject({ version: z.coerce.number().int().min(1).max(100_000).optional() });
 const deleteQuery = z.strictObject({ expectedVersion: z.coerce.number().int().min(1) });
 /** One line of plain text: control characters and runs of spaces become one space. */
 // eslint-disable-next-line no-control-regex
@@ -132,6 +148,10 @@ const resultBody = z.strictObject({
   transcript: transcriptSchema.optional(),
   draft: draftSchema.optional(),
   error: z.string().max(500).optional(),
+  /** The comment the draft was reworked after (2026-11-06; a worker of before never sends it). */
+  reviewId: z.number().int().min(1).optional(),
+  /** What the AI says it changed for the comment. */
+  reply: z.string().max(MINUTES_LIMITS.reply * 4).optional(),
 });
 /** transcribe: seconds of the recording; summarize: parts of the transcript. */
 const progressBody = z.strictObject({
@@ -220,12 +240,18 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
     return viewers;
   }
 
-  /** Items of the meeting already in the decision register (their tokens name the meeting and the item). */
-  const registeredDecisions = (row: MeetingRow) => {
-    const decisions = deps.decisions ?? null;
-    if (!decisions || !row.draft) return 0;
-    return row.draft.decisions.filter((_, i) => decisions.byToken(minutesItemToken(row.id, i)) !== null).length;
-  };
+  /**
+   * Items of the meeting already in the decision register, from any round of the AI's draft (their tokens name the
+   * meeting, the round and the item).
+   */
+  const registeredDecisions = (row: MeetingRow) => deps.decisions?.countByTokenPrefix(minutesTokenPrefix(row.id)) ?? 0;
+
+  /** The transcript as the screen gets it: who checked a segment by name, not by ID. */
+  const shownTranscript = (t: StoredTranscript | null) =>
+    t && {
+      ...t,
+      segments: t.segments.map(({ checked, ...s }): TranscriptSegment => (checked ? { ...s, checked: { original: checked.original, at: checked.at, byName: nameOf(checked.by) } } : s)),
+    };
 
   function visible(request: FastifyRequest): { user: User; row: MeetingRow } {
     const user = member(request);
@@ -255,7 +281,14 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
   };
 
   const detail = (row: MeetingRow, user: User): MinutesDetail => {
-    const keeps = row.confirmedAt && !row.audioDeletedAt ? dayAfter(row.confirmedAt, config.audioRetentionDays) : null;
+    // A correction after the confirmation does not keep the audio longer: the days count from the first confirmation.
+    const keeps = row.firstConfirmedAt && !row.audioDeletedAt ? dayAfter(row.firstConfirmedAt, config.audioRetentionDays) : null;
+    const reviews = store.reviews(row.id);
+    const versions = store.versions(row.id);
+    const revising = reviews.some((r) => r.status === 'pending');
+    const reopened = row.stage === 'draft' && versions.length > 0;
+    const draftStage = row.stage === 'draft';
+    const used = reviews.filter((r) => r.status !== 'failed').length;
     return {
       id: row.id,
       title: row.title,
@@ -271,18 +304,27 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
       confirmedByName: row.confirmedBy ? nameOf(row.confirmedBy) : null,
       confirmedAt: row.confirmedAt,
       audio: { present: !row.audioDeletedAt, bytes: row.audioBytes, deletesAt: keeps, deletedAt: row.audioDeletedAt },
-      transcript: row.transcript,
+      transcript: shownTranscript(row.transcript),
       draft: row.draft,
       body: row.body,
       version: row.version,
-      registeredDecisions: canManage(row, user) ? registeredDecisions(row) : 0,
+      registeredDecisions: registeredDecisions(row),
+      revising,
+      reopened,
+      bodyEdited: row.aiBody === null ? row.body.trim() !== '' : row.body !== row.aiBody,
+      reviews: reviews.map((r) => ({ id: r.id, at: r.at, byName: nameOf(r.actorId), comment: r.comment, status: r.status, reply: r.reply, error: r.error, doneAt: r.doneAt })),
+      versions: versions.map((v) => ({ no: v.no, confirmedByName: nameOf(v.confirmedBy), confirmedAt: v.confirmedAt, note: v.note })),
       can: {
-        edit: row.stage === 'draft',
-        confirm: row.stage === 'draft',
+        edit: draftStage,
+        confirm: draftStage,
         listen: canListen(row, user),
         delete: canDelete(row, user),
         retry: row.stage === 'failed' && !(row.failedStage !== 'summarize' && row.audioDeletedAt),
         manage: canManage(row, user),
+        review: draftStage && !!row.transcript && !!row.draft && used < MINUTES_LIMITS.reviews,
+        check: draftStage && !!row.transcript,
+        reopen: row.stage === 'confirmed',
+        discard: reopened,
       },
     };
   };
@@ -294,6 +336,7 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
 
   app.get('/api/minutes', async (request): Promise<MinutesListResponse> => {
     const user = member(request);
+    const flags = store.flags();
     return {
       items: store
         .all()
@@ -308,6 +351,8 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
           confirmedAt: row.confirmedAt,
           durationSec: row.transcript?.durationSec ?? null,
           progressPercent: progressOf(row)?.percent ?? null,
+          revising: flags.revising.has(row.id),
+          reopened: row.stage === 'draft' && flags.versioned.has(row.id),
         })),
     };
   });
@@ -441,7 +486,7 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
     const results = picked.map((index) => {
       const input = decisionInputOfMinutesItem(row, items[index]!.text, departments, body.venue);
       if (!input.title) throw new DomainError('validation', '空の項目は登録できません。', { field: 'items' });
-      const made = decisions.create(input, user.id, deps.clock(), minutesItemToken(row.id, index), 'first');
+      const made = decisions.create(input, user.id, deps.clock(), minutesItemToken(row.id, index, row.draftRound), 'first');
       return { index, decisionId: made.row.id, replayed: made.replayed };
     });
     return { results };
@@ -499,14 +544,97 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
     return detail(result, user);
   });
 
+  // Confirming makes the next version (2026-11-06): the first confirmation is version 1, and a correction of confirmed
+  // minutes needs a note of what it changed (kept in the history of versions).
   app.post('/api/minutes/:meetingId/confirm', async (request): Promise<MinutesDetail> => {
     const { user, row } = visible(request);
     const body = deps.parse(confirmBody, request.body);
-    const result = store.confirm(row.id, body.expectedVersion, user.id, deps.clock());
+    const note = oneLine(body.note ?? '').slice(0, MINUTES_LIMITS.note);
+    const result = store.confirm(row.id, body.expectedVersion, note, user.id, deps.clock());
     if (result === null) throw notFound();
     if (result === 'locked') throw new DomainError('conflict', '確定できるのは下書きの議事録だけです。');
     if (result === 'conflict') throw new DomainError('conflict', 'ほかの人が先にこの議事録を直しました。読み込み直して内容を確かめてから確定してください。');
+    if (result === 'note') throw new DomainError('validation', '訂正した内容を書いてください（確定の履歴に残ります）。', { field: 'note' });
     return detail(result, user);
+  });
+
+  // Sends the draft back to the AI with a comment (2026-11-06): the worker reworks the draft with the transcript (as
+  // people corrected it), the body (as people corrected it) and the comment, and writes the body anew. The body
+  // before is kept with the comment. Unsaved changes on someone's screen are refused by the version, as for an edit.
+  app.post('/api/minutes/:meetingId/review', async (request): Promise<MinutesDetail> => {
+    const { user, row } = visible(request);
+    const body = deps.parse(reviewBody, request.body);
+    const result = store.sendBack(row.id, body.expectedVersion, body.comment, MINUTES_LIMITS.reviews, user.id, deps.clock());
+    if (result === null) throw notFound();
+    if (result === 'locked') {
+      throw new DomainError('conflict', store.pendingReview(row.id) ? 'AI が手直し中です。終わってから差し戻してください。' : '差し戻せるのは下書きの議事録だけです（確定した議事録は、先に「訂正する」を押してください）。');
+    }
+    if (result === 'conflict') throw new DomainError('conflict', 'ほかの人が先にこの議事録を直しました。読み込み直して内容を確かめてから差し戻してください。');
+    if (result === 'no-draft') throw new DomainError('conflict', 'AI の下書きが無いので差し戻せません。');
+    if (result === 'limit') throw new DomainError('conflict', `差し戻しは 1 件の議事録につき ${MINUTES_LIMITS.reviews} 回までです。ここからは本文を直接直してください。`);
+    return detail(result, user);
+  });
+
+  /** The body as it was when a comment was sent back (the AI then wrote it anew). */
+  app.get('/api/minutes/:meetingId/reviews/:reviewId/body', async (request): Promise<MinutesReviewBodyResponse> => {
+    const user = member(request);
+    const { meetingId, reviewId } = deps.parse(reviewParams, request.params);
+    const row = store.get(meetingId);
+    if (!row || !canView(row, user)) throw notFound();
+    const review = store.reviews(row.id).find((r) => r.id === reviewId);
+    if (!review) throw notFound();
+    return { id: review.id, body: review.beforeBody };
+  });
+
+  // A segment of the transcript corrected after listening again, or confirmed as it was (2026-11-06). The text as the
+  // speech model heard it is kept with the segment.
+  app.put('/api/minutes/:meetingId/segments/:index', async (request): Promise<MinutesDetail> => {
+    const user = member(request);
+    const { meetingId, index } = deps.parse(segmentParams, request.params);
+    const row = store.get(meetingId);
+    if (!row || !canView(row, user)) throw notFound();
+    const body = deps.parse(segmentBody, request.body);
+    const text = oneLine(body.text).slice(0, MINUTES_LIMITS.segmentText);
+    const result = store.checkSegment(row.id, index, body.expectedText, text, user.id, deps.clock());
+    if (result === null) throw notFound();
+    if (result === 'locked') throw new DomainError('conflict', '文字起こしを直せるのは、下書き（訂正中を含む）の間だけです。');
+    if (result === 'no-segment') throw new DomainError('not_found', 'その発言は文字起こしにありません。画面を読み込み直してください。');
+    if (result === 'conflict') throw new DomainError('conflict', 'ほかの人が先にこの発言を直しました。読み込み直して確かめてください。');
+    return detail(result, user);
+  });
+
+  // A correction of confirmed minutes (2026-11-06): the minutes are a draft again while the last confirmed version
+  // still stands; confirming makes the next version, and dropping the correction goes back to the last version.
+  app.post('/api/minutes/:meetingId/reopen', async (request): Promise<MinutesDetail> => {
+    const { user, row } = visible(request);
+    const body = deps.parse(versionOnly, request.body);
+    const result = store.reopen(row.id, body.expectedVersion, user.id, deps.clock());
+    if (result === null) throw notFound();
+    if (result === 'locked') throw new DomainError('conflict', '訂正できるのは確定した議事録だけです。');
+    if (result === 'conflict') throw new DomainError('conflict', 'ほかの人が先にこの議事録を変更しました。読み込み直してください。');
+    return detail(result, user);
+  });
+
+  app.post('/api/minutes/:meetingId/discard', async (request): Promise<MinutesDetail> => {
+    const { user, row } = visible(request);
+    const body = deps.parse(versionOnly, request.body);
+    const result = store.discard(row.id, body.expectedVersion, user.id, deps.clock());
+    if (result === null) throw notFound();
+    if (result === 'locked') throw new DomainError('conflict', 'やめられるのは、確定した議事録の訂正中だけです。');
+    if (result === 'conflict') throw new DomainError('conflict', 'ほかの人が先にこの議事録を直しました。読み込み直してください。');
+    return detail(result, user);
+  });
+
+  app.get('/api/minutes/:meetingId/versions/:no', async (request): Promise<MinutesVersionResponse> => {
+    const user = member(request);
+    const { meetingId, no } = deps.parse(versionParams, request.params);
+    const row = store.get(meetingId);
+    if (!row || !canView(row, user)) throw notFound();
+    const versions = store.versions(row.id);
+    const v = versions.find((x) => x.no === no);
+    if (!v) throw notFound();
+    const previous = versions.filter((x) => x.no < no).at(-1) ?? null;
+    return { no: v.no, confirmedByName: nameOf(v.confirmedBy), confirmedAt: v.confirmedAt, note: v.note, body: v.body, previousBody: previous?.body ?? null };
   });
 
   app.post('/api/minutes/:meetingId/retry', async (request): Promise<MinutesDetail> => {
@@ -529,16 +657,28 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
     return reply.code(204).send();
   });
 
+  // The minutes as they are now, or (?version=n) a confirmed version as it was confirmed.
   app.get('/api/minutes/:meetingId/export.md', async (request, reply) => {
     const { row } = visible(request);
-    const head = [
-      `<!-- 医薬祭 委員会アプリの議事録（AI の下書きを人が確認） 会議ID ${row.id} -->`,
-      row.confirmedAt ? `<!-- 確定: ${nameOf(row.confirmedBy!).replace(/-{2,}/g, '-')} ${row.confirmedAt} -->` : '<!-- 未確定（下書き） -->',
-      '',
-    ].join('\n');
-    const text = head + (row.body || (row.draft ? draftToMarkdown(row.title, row.heldOn, row.draft) : ''));
+    const { version } = deps.parse(exportQuery, request.query);
+    const versions = store.versions(row.id);
+    const chosen = version === undefined ? null : versions.find((v) => v.no === version);
+    if (chosen === undefined) throw notFound();
+    // Names and notes go into HTML comments: a run of hyphens would end the comment.
+    const safe = (s: string) => s.replace(/-{2,}/g, '-');
+    const last = versions.at(-1);
+    const state = chosen
+      ? `<!-- 確定: ${safe(nameOf(chosen.confirmedBy))} ${chosen.confirmedAt}（第${chosen.no}版${chosen.note ? `・訂正: ${safe(chosen.note)}` : ''}） -->`
+      : row.stage === 'confirmed' && last
+        ? `<!-- 確定: ${safe(nameOf(last.confirmedBy))} ${last.confirmedAt}（第${last.no}版） -->`
+        : last
+          ? `<!-- 訂正中（未確定）。確定している最新は第${last.no}版 -->`
+          : '<!-- 未確定（下書き） -->';
+    const head = [`<!-- 医薬祭 委員会アプリの議事録（AI の下書きを人が確認） 会議ID ${row.id} -->`, state, ''].join('\n');
+    const text = head + (chosen ? chosen.body : row.body || (row.draft ? draftToMarkdown(row.title, row.heldOn, row.draft) : ''));
     reply.header('Content-Type', 'text/markdown; charset=utf-8');
-    reply.header('Content-Disposition', attachmentDisposition(`【AI】議事録_${row.heldOn.replaceAll('-', '')}_${row.title}.md`.replace(/[\\/:*?"<>|]/g, '_'), 'minutes.md'));
+    const suffix = chosen ? `_第${chosen.no}版` : '';
+    reply.header('Content-Disposition', attachmentDisposition(`【AI】議事録_${row.heldOn.replaceAll('-', '')}_${row.title}${suffix}.md`.replace(/[\\/:*?"<>|]/g, '_'), 'minutes.md'));
     reply.header('Cache-Control', 'no-store');
     return reply.send(text);
   });
@@ -631,6 +771,7 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
       const job = store.claim(stages, now(), deps.clock());
       if (!job) return reply.header('Cache-Control', 'no-store').send({ job: null });
       const { row } = job;
+      const pending = job.stage === 'summarize' ? store.pendingReview(row.id) : null;
       return reply.header('Cache-Control', 'no-store').send({
         job: {
           id: row.id,
@@ -640,7 +781,25 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
           heldOn: row.heldOn,
           audio: job.stage === 'transcribe' ? { ext: row.audioExt, bytes: row.audioBytes, sha256: row.audioSha256 } : null,
           glossary: glossary(),
-          transcript: job.stage === 'summarize' ? row.transcript : null,
+          // The text people corrected stands; the worker is told which segments a person checked (not who).
+          transcript:
+            job.stage === 'summarize' && row.transcript
+              ? { ...row.transcript, segments: row.transcript.segments.map((s) => ({ start: s.start, end: s.end, text: s.text, ...(s.checked ? { checked: true } : {}) })) }
+              : null,
+          // A rework of the draft after a comment (2026-11-06): the draft and the body as they are, the comment, and the
+          // comments answered before (so the AI does not undo them). A worker of before ignores it and writes a new
+          // draft; the result then has no reviewId, and the comment is marked failed.
+          review: pending && {
+            id: pending.id,
+            comment: pending.comment,
+            draft: row.draft,
+            body: row.body,
+            earlier: store
+              .reviews(row.id)
+              .filter((r) => r.status === 'done')
+              .slice(-5)
+              .map((r) => ({ comment: r.comment, reply: r.reply ?? '' })),
+          },
         },
       });
     });
@@ -680,13 +839,26 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
       if (body.error !== undefined) {
         ok = store.fail(body.id, body.leaseToken, body.stage, body.error.replace(/\s+/g, ' ').trim() || '処理に失敗しました。', at);
       } else if (body.stage === 'transcribe' && body.transcript) {
-        const segments = body.transcript.segments.map((s) => ({ start: s.start, end: Math.max(s.start, s.end), text: s.text.trim() })).filter((s) => s.text);
+        const segments = body.transcript.segments
+          .map((s) => ({ start: s.start, end: Math.max(s.start, s.end), text: s.text.trim(), ...(s.confidence ? { confidence: s.confidence } : {}) }))
+          .filter((s) => s.text);
         ok = store.completeTranscript(body.id, body.leaseToken, { ...body.transcript, segments }, at);
       } else if (body.stage === 'summarize' && body.draft) {
         const row = store.get(body.id);
         if (!row?.transcript) return reply.code(409).send({ error: 'not_held' });
         const draft = checkedDraft(row.transcript, body.draft);
-        ok = store.completeDraft(body.id, body.leaseToken, draft, draftToMarkdown(row.title, row.heldOn, draft), at);
+        const pending = store.pendingReview(row.id);
+        if (!pending) {
+          ok = store.completeDraft(body.id, body.leaseToken, draft, draftToMarkdown(row.title, row.heldOn, draft), at);
+        } else if (body.reviewId === pending.id) {
+          // The body is written anew from the reworked draft; the attendees a person wrote are carried over.
+          const next = carryOverAttendees(row.body, draftToMarkdown(row.title, row.heldOn, draft));
+          const answer = (body.reply ?? '').replace(/\s+/g, ' ').trim().slice(0, MINUTES_LIMITS.reply) || '（AI からの説明はありませんでした）';
+          ok = store.completeRevision(body.id, body.leaseToken, pending.id, draft, next, answer, at);
+        } else {
+          // A worker of before wrote a new draft without reading the comment: the draft is left as it was.
+          ok = store.fail(body.id, body.leaseToken, 'summarize', '処理役が古い版のため、コメントに沿った手直しができませんでした。システム課に連絡してください。', at);
+        }
       } else {
         return reply.code(400).send({ error: 'invalid', issues: ['transcript, draft or error is required for the stage'] });
       }

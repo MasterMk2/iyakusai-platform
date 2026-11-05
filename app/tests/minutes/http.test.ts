@@ -414,6 +414,142 @@ describe('meeting minutes', () => {
   });
 });
 
+// Sending a draft back to the AI, listening again, and corrections after confirmation (2026-11-06).
+describe('sending back, listening again and correcting confirmed minutes', { timeout: 30_000 }, () => {
+  const measured = [
+    { ...segments[0]!, confidence: { logprob: -0.1, noSpeech: 0.01, compression: 1.5, weak: [] } },
+    { ...segments[1]!, text: '共産の依頼文は総務部が十一月二十日までに作る、ということで決定とします。', confidence: { logprob: -0.13, noSpeech: 0.5, compression: 1.5, weak: [{ start: 300, end: 300.5, word: '共産', p: 0.18 }] } },
+  ];
+
+  /** A meeting through transcription (with the speech model's confidence) to its first AI draft. */
+  async function drafted(recorder: string, fields: Record<string, unknown>, decisions = ['協賛の依頼文は総務部が作る']): Promise<string> {
+    const id = (await upload(recorder, audio, fields)).json.id as string;
+    const t = (await worker(WORKER_PATHS.claim, { stages: ['transcribe'] })).json.job;
+    expect((await worker(WORKER_PATHS.result, { id, leaseToken: t.leaseToken, stage: 'transcribe', transcript: { segments: measured, durationSec: 310, model: 'large-v3' } })).status).toBe(200);
+    const s = (await worker(WORKER_PATHS.claim, { stages: ['summarize'] })).json.job;
+    const draft = { summary: '協賛の依頼について。', decisions: decisions.map((text) => ({ text, evidence: [{ at: 301, quote: '総務部が十一月二十日までに作る' }] })) };
+    expect((await worker(WORKER_PATHS.result, { id, leaseToken: s.leaseToken, stage: 'summarize', draft })).status).toBe(200);
+    return id;
+  }
+
+  it('correct a segment after listening, send the draft back, and rework it with what people corrected', async () => {
+    await build();
+    const recorder = await signIn(MEMBER, '21000002');
+    const chosen = await signIn(OTHER, '21000003');
+    const outsider = await signIn(THIRD, '21000004');
+    const otherId = (await call('GET', '/api/minutes/meta', { cookie: recorder })).json.people.find((p: { name: string }) => p.name === '合成 花子').id as string;
+    const id = await drafted(recorder, { title: '役員会', heldOn: '2026-11-06', visibility: 'selected', viewers: [otherId] });
+
+    const first = (await call('GET', `/api/minutes/${id}`, { cookie: chosen })).json;
+    expect(first.transcript.segments[1].confidence.weak).toEqual([{ start: 300, end: 300.5, word: '共産', p: 0.18 }]);
+    expect(first).toMatchObject({ stage: 'draft', version: 2, revising: false, reopened: false, bodyEdited: false, reviews: [], versions: [], can: { review: true, check: true, reopen: false, discard: false } });
+
+    // Listening again: the reader corrects the text; someone who cannot read the meeting learns nothing.
+    const fix = { expectedText: measured[1]!.text, text: '協賛の依頼文は総務部が十一月二十日までに作る、ということで決定とします。' };
+    expect((await call('PUT', `/api/minutes/${id}/segments/1`, { cookie: outsider, body: fix })).status).toBe(404);
+    const fixed = await call('PUT', `/api/minutes/${id}/segments/1`, { cookie: chosen, body: fix });
+    expect(fixed.status).toBe(200);
+    expect(fixed.json.transcript.segments[1]).toMatchObject({ text: fix.text, checked: { original: measured[1]!.text, byName: '合成 花子' } });
+    expect(fixed.json.transcript.segments[1].checked.by).toBeUndefined();
+    expect(fixed.json.version).toBe(2);
+    expect((await call('PUT', `/api/minutes/${id}/segments/1`, { cookie: recorder, body: { ...fix, text: '別の直し' } })).status).toBe(409);
+    expect((await call('PUT', `/api/minutes/${id}/segments/7`, { cookie: recorder, body: fix })).status).toBe(404);
+
+    // The attendees written into the body are carried into the body the AI writes anew.
+    const withAttendees = first.body.replace('（記入してください）', '合成 太郎、合成 花子');
+    expect((await call('PUT', `/api/minutes/${id}/body`, { cookie: chosen, body: { expectedVersion: 2, body: withAttendees } })).status).toBe(200);
+    expect((await call('POST', `/api/minutes/${id}/review`, { cookie: chosen, body: { expectedVersion: 2, comment: '期限を足して' } })).status).toBe(409);
+    expect((await call('POST', `/api/minutes/${id}/review`, { cookie: chosen, body: { expectedVersion: 3, comment: '  ' } })).status).toBe(400);
+    const sent = await call('POST', `/api/minutes/${id}/review`, { cookie: chosen, body: { expectedVersion: 3, comment: '決定事項に期限 11/20 を書いて' } });
+    expect(sent.status).toBe(200);
+    expect(sent.json).toMatchObject({ stage: 'summarize_wait', revising: true, reviews: [{ status: 'pending', byName: '合成 花子', comment: '決定事項に期限 11/20 を書いて' }], can: { edit: false, review: false } });
+    expect((await call('GET', '/api/minutes', { cookie: recorder })).json.items[0]).toMatchObject({ revising: true, reopened: false });
+    expect((await call('POST', `/api/minutes/${id}/review`, { cookie: chosen, body: { expectedVersion: 4, comment: 'もう一つ' } })).json.message).toContain('AI が手直し中');
+
+    // The worker gets the comment, the draft and the body, and the corrected text marked as checked (not by whom).
+    const job = (await worker(WORKER_PATHS.claim, { stages: ['summarize'] })).json.job;
+    expect(job.review).toMatchObject({ comment: '決定事項に期限 11/20 を書いて', body: withAttendees, earlier: [], draft: { decisions: [{ text: '協賛の依頼文は総務部が作る' }] } });
+    expect(job.transcript.segments[1]).toEqual({ start: 300, end: 306, text: fix.text, checked: true });
+    expect(job.transcript.segments[0]).toEqual({ start: 0, end: 4, text: segments[0]!.text });
+    const reworked = { summary: '協賛の依頼について。', decisions: [{ text: '協賛の依頼文は総務部が 11/20 までに作る', evidence: [{ at: 301, quote: '協賛の依頼文は総務部が' }] }] };
+    expect((await worker(WORKER_PATHS.result, { id, leaseToken: job.leaseToken, stage: 'summarize', draft: reworked, reviewId: job.review.id + 1, reply: 'x' })).status).toBe(200);
+    // A reviewId that is not the pending comment: the draft stays, and the comment is marked failed.
+    let after = (await call('GET', `/api/minutes/${id}`, { cookie: chosen })).json;
+    expect(after).toMatchObject({ stage: 'draft', revising: false, reviews: [{ status: 'failed' }] });
+    expect(after.draft.decisions[0].text).toBe('協賛の依頼文は総務部が作る');
+    expect(after.reviews[0].error).toContain('処理役が古い版');
+
+    const again = await call('POST', `/api/minutes/${id}/review`, { cookie: chosen, body: { expectedVersion: after.version, comment: '決定事項に期限 11/20 を書いて' } });
+    expect(again.status).toBe(200);
+    const job2 = (await worker(WORKER_PATHS.claim, { stages: ['summarize'] })).json.job;
+    expect((await worker(WORKER_PATHS.result, { id, leaseToken: job2.leaseToken, stage: 'summarize', draft: reworked, reviewId: job2.review.id, reply: '決定事項に期限を足しました。' })).status).toBe(200);
+    after = (await call('GET', `/api/minutes/${id}`, { cookie: chosen })).json;
+    expect(after).toMatchObject({ stage: 'draft', revising: false, bodyEdited: false, can: { review: true } });
+    expect(after.reviews.map((r: { status: string }) => r.status)).toEqual(['failed', 'done']);
+    expect(after.reviews[1].reply).toBe('決定事項に期限を足しました。');
+    expect(after.draft.decisions[0]).toMatchObject({ text: '協賛の依頼文は総務部が 11/20 までに作る', evidence: [{ verified: true }] });
+    expect(after.body).toContain('- 出席者: 合成 太郎、合成 花子');
+    expect(after.body).toContain('11/20 までに作る');
+    const before = await call('GET', `/api/minutes/${id}/reviews/${after.reviews[1].id}/body`, { cookie: chosen });
+    expect(before.json.body).toBe(withAttendees);
+    expect((await call('GET', `/api/minutes/${id}/reviews/${after.reviews[1].id}/body`, { cookie: outsider })).status).toBe(404);
+
+    // A worker of before (no reviewId) writes a new draft without the comment: the draft is left as it was.
+    await call('POST', `/api/minutes/${id}/review`, { cookie: recorder, body: { expectedVersion: after.version, comment: '要点を短く' } });
+    const old = (await worker(WORKER_PATHS.claim, { stages: ['summarize'] })).json.job;
+    expect((await worker(WORKER_PATHS.result, { id, leaseToken: old.leaseToken, stage: 'summarize', draft: { summary: '別物' } })).status).toBe(200);
+    const kept = (await call('GET', `/api/minutes/${id}`, { cookie: recorder })).json;
+    expect(kept).toMatchObject({ stage: 'draft', draft: { summary: '協賛の依頼について。' } });
+    expect(kept.reviews.at(-1)).toMatchObject({ status: 'failed', byName: '合成 太郎' });
+  });
+
+  it('correct confirmed minutes into the next version, and drop a correction', async () => {
+    await build();
+    const recorder = await signIn(MEMBER, '21000002');
+    const member = await signIn(OTHER, '21000003');
+    const id = await drafted(recorder, { title: '定例', heldOn: '2026-11-06', visibility: 'members', viewers: [] });
+    const confirmed = (await call('POST', `/api/minutes/${id}/confirm`, { cookie: recorder, body: { expectedVersion: 2 } })).json;
+    expect(confirmed).toMatchObject({ stage: 'confirmed', versions: [{ no: 1, confirmedByName: '合成 太郎', note: '' }], can: { reopen: true, review: false, check: false } });
+    const deletesAt = confirmed.audio.deletesAt as string;
+
+    // Any reader may start a correction; the minutes are a draft again, and the AI and listening again work.
+    ctx.clock.now += 3 * 86_400_000;
+    const reopened = await call('POST', `/api/minutes/${id}/reopen`, { cookie: member, body: { expectedVersion: confirmed.version } });
+    expect(reopened.status).toBe(200);
+    expect(reopened.json).toMatchObject({ stage: 'draft', reopened: true, confirmedByName: '合成 太郎', can: { edit: true, review: true, check: true, discard: true, reopen: false } });
+    expect(reopened.json.audio.deletesAt).toBe(deletesAt);
+    expect((await call('GET', '/api/minutes', { cookie: member })).json.items[0]).toMatchObject({ reopened: true });
+    expect((await call('PUT', `/api/minutes/${id}/segments/0`, { cookie: member, body: { expectedText: segments[0]!.text, text: segments[0]!.text } })).status).toBe(200);
+    const md = await call('GET', `/api/minutes/${id}/export.md`, { cookie: member });
+    expect(md.body).toContain('訂正中（未確定）。確定している最新は第1版');
+
+    const edited = await call('PUT', `/api/minutes/${id}/body`, { cookie: member, body: { expectedVersion: reopened.json.version, body: '# 定例\n\n訂正した本文\n' } });
+    expect((await call('POST', `/api/minutes/${id}/confirm`, { cookie: member, body: { expectedVersion: edited.json.version } })).status).toBe(422);
+    const second = await call('POST', `/api/minutes/${id}/confirm`, { cookie: member, body: { expectedVersion: edited.json.version, note: '本文の誤字を直した' } });
+    expect(second.status).toBe(200);
+    expect(second.json).toMatchObject({ stage: 'confirmed', reopened: false, confirmedByName: '合成 花子', versions: [{ no: 1 }, { no: 2, note: '本文の誤字を直した', confirmedByName: '合成 花子' }] });
+    expect(second.json.audio.deletesAt).toBe(deletesAt);
+    const v2 = (await call('GET', `/api/minutes/${id}/versions/2`, { cookie: recorder })).json;
+    expect(v2).toMatchObject({ no: 2, body: '# 定例\n\n訂正した本文\n', note: '本文の誤字を直した' });
+    expect(v2.previousBody).toContain('## 決定事項');
+    expect((await call('GET', `/api/minutes/${id}/versions/3`, { cookie: recorder })).status).toBe(404);
+    const v1md = await call('GET', `/api/minutes/${id}/export.md?version=1`, { cookie: recorder });
+    expect(v1md.body).toMatch(/確定: 合成 太郎 \S+（第1版）/);
+    expect(v1md.body).toContain('## 決定事項');
+    expect(decodeURIComponent(String(v1md.headers['content-disposition']))).toContain('_第1版.md');
+    expect((await call('GET', `/api/minutes/${id}/export.md`, { cookie: recorder })).body).toMatch(/確定: 合成 花子 \S+（第2版）/);
+
+    // Dropping a correction goes back to the last version, and only during a correction.
+    expect((await call('POST', `/api/minutes/${id}/discard`, { cookie: recorder, body: { expectedVersion: second.json.version } })).status).toBe(409);
+    const third = await call('POST', `/api/minutes/${id}/reopen`, { cookie: recorder, body: { expectedVersion: second.json.version } });
+    await call('PUT', `/api/minutes/${id}/body`, { cookie: recorder, body: { expectedVersion: third.json.version, body: '捨てる本文' } });
+    const latest = (await call('GET', `/api/minutes/${id}`, { cookie: recorder })).json;
+    const dropped = await call('POST', `/api/minutes/${id}/discard`, { cookie: recorder, body: { expectedVersion: latest.version } });
+    expect(dropped.status).toBe(200);
+    expect(dropped.json).toMatchObject({ stage: 'confirmed', body: '# 定例\n\n訂正した本文\n', confirmedByName: '合成 花子', versions: [{ no: 1 }, { no: 2 }] });
+  });
+});
+
 // Each case takes a meeting through the worker and signs in twice, which runs past 5 s on a busy machine.
 describe('the decision register from confirmed minutes (Discord login)', { timeout: 20_000 }, () => {
   let decisions: DecisionsStore;
@@ -482,6 +618,31 @@ describe('the decision register from confirmed minutes (Discord login)', { timeo
     expect(list.json.items.map((i: { title: string }) => i.title)).toEqual(expect.arrayContaining([ITEM]));
     expect((await pick([5])).status).toBe(422);
     expect(decisions.count()).toBe(2);
+  });
+
+  it('keeps the items registered from one draft apart from the items of a draft the AI reworked during a correction', async () => {
+    await build({ decisions });
+    const recorder = await signIn(MEMBER, '21000002');
+    const id = await draftWithItems(recorder, ['最初の決定A', '最初の決定B'], { title: '役員会', heldOn: '2026-11-06', visibility: 'members', viewers: [] });
+    const confirmed = (await call('POST', `/api/minutes/${id}/confirm`, { cookie: recorder, body: { expectedVersion: 2 } })).json;
+    const pick = (items: number[]) => call('POST', `/api/minutes/${id}/decisions`, { cookie: recorder, body: { items, departments: ['somu'], venue: 'board' } });
+    const a = (await pick([0])).json.results[0];
+
+    const reopened = (await call('POST', `/api/minutes/${id}/reopen`, { cookie: recorder, body: { expectedVersion: confirmed.version } })).json;
+    expect(reopened.registeredDecisions).toBe(1);
+    await call('POST', `/api/minutes/${id}/review`, { cookie: recorder, body: { expectedVersion: reopened.version, comment: 'B を先に' } });
+    const job = (await worker(WORKER_PATHS.claim, { stages: ['summarize'] })).json.job;
+    const reworked = { decisions: [{ text: '直した決定B', evidence: [] }, { text: '最初の決定A', evidence: [] }] };
+    expect((await worker(WORKER_PATHS.result, { id, leaseToken: job.leaseToken, stage: 'summarize', draft: reworked, reviewId: job.review.id, reply: '並べ替えた' })).status).toBe(200);
+    const v = (await call('GET', `/api/minutes/${id}`, { cookie: recorder })).json.version as number;
+    expect((await call('POST', `/api/minutes/${id}/confirm`, { cookie: recorder, body: { expectedVersion: v, note: 'B を直した' } })).status).toBe(200);
+
+    // Item 0 is now another decision: it is registered anew, not answered by the decision of the first draft's item 0.
+    const b = (await pick([0])).json.results[0];
+    expect(b.replayed).toBe(false);
+    expect(b.decisionId).not.toBe(a.decisionId);
+    expect(decisions.get(b.decisionId)!.input.title).toBe('直した決定B');
+    expect((await call('GET', `/api/minutes/${id}`, { cookie: recorder })).json.registeredDecisions).toBe(2);
   });
 
   it('refuses a meeting limited to chosen people, and temporary staff, in the register and in the minutes', async () => {

@@ -1,13 +1,21 @@
 import { DECISION_LIMITS, type DecisionInput, type DecisionSource, type DecisionVenue } from '../../shared/decisions.js';
 
 // Registering the AI's decision items of a confirmed meeting (2026-11-03). The server reads the items from the meeting
-// and builds the register's text itself, so the screen only names the items. The token of an item names the meeting
-// and the item's number: the same item is one decision however many times it is sent.
+// and builds the register's text itself, so the screen only names the items. The token of an item names the meeting,
+// the round of the AI's draft and the item's number: the same item is one decision however many times it is sent.
+// The round (2026-11-06) counts the times the AI reworked the draft after a comment; the items of a reworked draft are
+// numbered anew, so the round keeps item 0 of one draft from answering for item 0 of another. Round 0 (the first
+// draft) keeps the token of before.
 
 export const MINUTES_TOKEN_PREFIX = 'minutes-';
 
-export function minutesItemToken(meetingId: string, index: number): string {
-  return `${MINUTES_TOKEN_PREFIX}${meetingId}-${index}`;
+export function minutesItemToken(meetingId: string, index: number, round = 0): string {
+  return round > 0 ? `${MINUTES_TOKEN_PREFIX}${meetingId}-r${round}-${index}` : `${MINUTES_TOKEN_PREFIX}${meetingId}-${index}`;
+}
+
+/** What every token of a meeting starts with, whatever the round. */
+export function minutesTokenPrefix(meetingId: string): string {
+  return `${MINUTES_TOKEN_PREFIX}${meetingId}-`;
 }
 
 // eslint-disable-next-line no-control-regex

@@ -497,6 +497,56 @@ button.minutes-at.minutes-unverified { background: var(--amber-bg); color: var(-
 .minutes-segments { list-style: none; margin: 8px 0 0; padding: 0; max-height: 480px; overflow: auto; display: grid; gap: 4px; line-height: 1.6; }
 .minutes-danger { margin-top: 12px; }
 .minutes-settings:focus { outline: none; }
+/* Sending the draft back, listening again, corrections after confirmation (2026-11-06) */
+.minutes-reopened p { margin: 0; flex: 1 1 320px; }
+.minutes-listen-call { justify-content: space-between; }
+.minutes-note { display: grid; gap: 4px; margin-top: 10px; }
+.minutes-note label, .minutes-sendback label { font-weight: 700; }
+.minutes-note input { width: 100%; box-sizing: border-box; font: inherit; }
+.minutes-reopen { align-items: center; margin-top: 10px; }
+.minutes-sendback { display: grid; gap: 6px; padding-bottom: 12px; margin-bottom: 4px; border-bottom: 1px solid var(--line-soft); }
+.minutes-sendback textarea { width: 100%; box-sizing: border-box; font: inherit; line-height: 1.6; resize: vertical; }
+.minutes-sendback .field-hint, .minutes-sendback .actions { margin: 0; }
+.minutes-sendback .field-hint { font-size: 14px; color: var(--muted); }
+button.quiet.minutes-quote { min-height: 28px; padding: 0 6px; font-size: 13px; }
+.minutes-review-list, .minutes-version-list, .minutes-check-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 0; }
+.minutes-review-list > li, .minutes-version-list > li { padding: 10px 0; border-top: 1px solid var(--line-soft); display: grid; gap: 4px; }
+.minutes-review-list p, .minutes-version-list p { margin: 0; }
+.minutes-comment { white-space: pre-wrap; overflow-wrap: anywhere; }
+.minutes-reply { white-space: pre-wrap; overflow-wrap: anywhere; padding: 6px 10px; border-left: 3px solid var(--info-line); background: var(--info-bg); }
+.minutes-earlier { max-height: 320px; overflow: auto; font-size: 14px; }
+.minutes-transcript-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; }
+.minutes-transcript-head h3 { margin: 0; font-size: 16px; }
+.minutes-check-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; font-size: 14px; }
+.minutes-check-tools label { display: inline-flex; align-items: center; gap: 6px; margin: 0; }
+.minutes-check-list { max-height: 640px; overflow: auto; }
+.minutes-check-row { padding: 10px 0; border-top: 1px solid var(--line-soft); display: grid; gap: 6px; }
+.minutes-check-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.minutes-reasons { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.minutes-certainty { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.minutes-heard { margin: 0; line-height: 1.7; overflow-wrap: anywhere; }
+mark.minutes-weak { background: var(--amber-bg); color: var(--amber); border-bottom: 2px solid var(--amber-line); padding: 0 1px; }
+.minutes-check-edit { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; }
+.minutes-check-edit input { flex: 1 1 280px; min-width: 0; font: inherit; min-height: 40px; box-sizing: border-box; }
+.minutes-check-edit button { margin: 0; }
+.minutes-check-edit .status { flex-basis: 100%; }
+.minutes-checked { margin: 0; font-size: 14px; color: var(--green); display: grid; gap: 2px; }
+.minutes-original { color: var(--muted); overflow-wrap: anywhere; }
+.minutes-empty-text { color: var(--muted); }
+button.minutes-play { min-height: 32px; padding: 0 10px; font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; background: var(--info-bg); color: var(--navy); border: 1px solid var(--info-line); }
+button.minutes-play[aria-pressed='true'], button.minutes-play[aria-pressed='true']:hover:not(:disabled) { background: var(--navy-fill); border-color: var(--navy-fill); color: #fff; }
+.minutes-time { font-size: 13px; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; }
+.minutes-segments li.is-checked .minutes-checked-mark { color: var(--green); font-weight: 700; }
+button.quiet.minutes-fix { min-height: 28px; padding: 0 6px; font-size: 13px; }
+.minutes-segments .minutes-check-edit { margin-top: 4px; }
+.minutes-version-actions { align-items: center; margin: 0; }
+.minutes-version-view { display: grid; gap: 8px; margin-top: 6px; }
+.minutes-version-view .minutes-body { max-height: 480px; overflow: auto; padding: 8px 12px; background: var(--surface-sunken); border-radius: 6px; }
+.minutes-diff { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; max-height: 480px; overflow: auto; font-size: 14px; }
+.minutes-diff li { padding: 2px 8px; border-left: 3px solid; white-space: pre-wrap; overflow-wrap: anywhere; }
+.minutes-diff li.is-add { background: var(--green-bg); color: var(--green); border-color: var(--green); }
+.minutes-diff li.is-del { background: var(--red-bg); color: var(--red); border-color: var(--red); }
+.minutes-diff-mark { font-weight: 700; }
 .bot-open { display: grid; gap: 10px; justify-items: start; }
 .bot-open > .panel { width: 100%; }
 /* The mail screen moves focus to its answer after sending; the region itself is not a control. */

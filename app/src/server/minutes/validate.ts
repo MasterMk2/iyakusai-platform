@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { MINUTES_LIMITS, type MinutesDraft, type MinutesEvidence, type Transcript } from '../../shared/minutes.js';
+import { MINUTES_LIMITS, type MinutesDraft, type MinutesEvidence } from '../../shared/minutes.js';
 
 // What the minutes worker hands back is checked here, not trusted: sizes, shapes, and that every quote the AI
 // gives as evidence is really in the transcript near the time it names (else it is marked unverified and the
@@ -10,9 +10,21 @@ import { MINUTES_LIMITS, type MinutesDraft, type MinutesEvidence, type Transcrip
 const text = (max: number) => z.string().max(max * 4).transform((s) => s.replace(/\s+/g, ' ').trim().slice(0, max));
 const seconds = z.number().finite().min(0).max(24 * 3600);
 
+/** How sure the speech model was (2026-11-06; a worker of before sends none). Probabilities are 0–1. */
+const probability = z.number().finite().min(0).max(1);
+const confidenceSchema = z.strictObject({
+  logprob: z.number().finite().min(-100).max(0),
+  noSpeech: probability,
+  compression: z.number().finite().min(0).max(1_000),
+  weak: z
+    .array(z.strictObject({ start: seconds, end: seconds, word: z.string().max(100), p: probability }))
+    .max(10)
+    .optional(),
+});
+
 export const transcriptSchema = z.strictObject({
   segments: z
-    .array(z.strictObject({ start: seconds, end: seconds, text: z.string().max(MINUTES_LIMITS.segmentText) }))
+    .array(z.strictObject({ start: seconds, end: seconds, text: z.string().max(MINUTES_LIMITS.segmentText), confidence: confidenceSchema.optional() }))
     .max(MINUTES_LIMITS.segments),
   durationSec: seconds,
   model: z.string().min(1).max(60),
@@ -50,7 +62,10 @@ const MIN_QUOTE_CHARS = 4;
  * Marks a quote verified when it is found in the transcript within WINDOW_SEC of `at`. A quote found elsewhere
  * is verified with its time moved to where it was found; one found nowhere (or too short) is unverified.
  */
-export function verifyEvidence(transcript: Transcript, evidence: { at: number; quote: string }[]): MinutesEvidence[] {
+/** What the evidence is checked against: the transcript as it is now (with the corrections people made). */
+type TranscriptText = { segments: { start: number; end: number; text: string }[] };
+
+export function verifyEvidence(transcript: TranscriptText, evidence: { at: number; quote: string }[]): MinutesEvidence[] {
   return evidence.map(({ at, quote }) => {
     const shown = quote.replace(/\s+/g, ' ').trim().slice(0, MINUTES_LIMITS.quote);
     const want = comparable(shown);
@@ -70,7 +85,7 @@ export function verifyEvidence(transcript: Transcript, evidence: { at: number; q
   });
 }
 
-export function checkedDraft(transcript: Transcript, raw: z.infer<typeof draftSchema>): MinutesDraft {
+export function checkedDraft(transcript: TranscriptText, raw: z.infer<typeof draftSchema>): MinutesDraft {
   const ev = (list: { at: number; quote: string }[]) => verifyEvidence(transcript, list);
   return {
     summary: raw.summary,
