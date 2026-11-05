@@ -1,7 +1,7 @@
 import { isIP } from 'node:net';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import type { DiscordSessionResponse, LoginActivityResponse, SessionUser, SignInSummary } from '../../shared/api.js';
+import type { AccessManagersResponse, DiscordSessionResponse, LoginActivityResponse, SessionUser, SignInSummary } from '../../shared/api.js';
 import { normalizeAddress } from '../auth.js';
 import type { User } from '../domain/types.js';
 import { KdfBusyError, PASSWORD_POLICY } from '../login/password.js';
@@ -9,7 +9,7 @@ import { loggableLoginId, type LoginAudit } from './audit.js';
 import { attachRegistrationIssuer, BULK_ISSUER_PATH, ISSUER_PATH } from './bot-host.js';
 import type { DiscordAuthConfig } from './config.js';
 import type { NameRoster } from './names.js';
-import { ACCOUNT_FAILURES_PER_DAY, ACCOUNT_TRIES_PER_10_MIN, AccountError, type AccountIdentity, type DiscordAccountService, type SessionIdentity, type SignInRecord, type StoredAccount } from './service.js';
+import { ACCOUNT_FAILURES_PER_DAY, ACCOUNT_TRIES_PER_10_MIN, AccessManagerError, AccountError, type AccountIdentity, type DiscordAccountService, type SessionIdentity, type SignInRecord, type StoredAccount } from './service.js';
 import type { AccountStore } from './store.js';
 import { CardAuthError, DEVICE_DAYS } from './cards.js';
 import { staffRouteAllowed, temporaryStaffName } from './temporary-staff.js';
@@ -106,6 +106,7 @@ const loginBody = z.strictObject({ loginId: z.string().min(1).max(64), password:
 const registerBody = z.strictObject({ initialLoginId: z.string().max(16), code: z.string().max(16), password: z.string().max(1024), studentId: z.string().max(32) });
 const passwordBody = z.strictObject({ currentPassword: z.string().max(1024), newPassword: z.string().max(1024) });
 const studentIdBody = z.strictObject({ password: z.string().max(1024), studentId: z.string().max(32) });
+const managerBody = z.strictObject({ account: z.string().min(1).max(16), role: z.enum(['master', 'setter', 'none']), expectedVersion: z.number().int().min(0) });
 const reauthBody = z.strictObject({ password: z.string().min(1).max(1024) });
 const logoutBody = z.strictObject({ everywhere: z.boolean().optional() });
 
@@ -509,6 +510,60 @@ export function installDiscordAuth(app: FastifyInstance, rt: DiscordAuthRuntime,
       },
     };
     return response;
+  });
+
+  // Who manages access (2026-11-06): access administrators see it; masters change it.
+  const managersView = (current: { identity: SessionIdentity }): AccessManagersResponse => {
+    const overview = rt.service.accessManagers();
+    const label = (p: { discordUserId: string; studentId: string | null; initialLoginId: string }) => rt.names.nameOf(p.discordUserId) ?? p.studentId ?? p.initialLoginId;
+    const byUid = new Map(overview.people.map((p) => [p.discordUserId, label(p)]));
+    const nameOfUid = (uid: string) => byUid.get(uid) ?? rt.names.nameOf(uid) ?? '（登録のない委員）';
+    return {
+      canEdit: rt.service.isMasterAccount(current.identity.discordUserId),
+      version: overview.version,
+      people: overview.people
+        .map((p) => ({
+          account: p.initialLoginId,
+          name: label(p),
+          studentId: p.studentId,
+          departments: p.departments,
+          status: p.status,
+          role: p.role,
+          byConfig: p.byConfig,
+          self: p.discordUserId === current.identity.discordUserId,
+        }))
+        .sort((x, y) => x.name.localeCompare(y.name, 'ja')),
+      history: overview.history.map((h) => ({ at: iso(h.at)!, actorName: nameOfUid(h.actor), targetName: nameOfUid(h.target), before: h.before, after: h.after })),
+    };
+  };
+
+  app.get('/api/auth/admin/managers', async (request, reply) => {
+    const current = users.get(request);
+    if (!current) return reply.code(401).send(fail('unauthenticated', 'ログインしてください。'));
+    if (!current.identity.admin) return reply.code(403).send(fail('forbidden', '権限設定者の一覧は権限設定者だけが見られます。'));
+    return managersView(current);
+  });
+
+  app.put('/api/auth/admin/managers', async (request, reply) => {
+    const current = users.get(request);
+    if (!current) return reply.code(401).send(fail('unauthenticated', 'ログインしてください。'));
+    const body = managerBody.safeParse(request.body);
+    if (!body.success) return reply.code(400).send(fail('validation', '変更の内容が正しくありません。'));
+    try {
+      rt.service.setAccessManager(current.identity.discordUserId, { initialLoginId: body.data.account, role: body.data.role, expectedVersion: body.data.expectedVersion });
+    } catch (err) {
+      if (!(err instanceof AccessManagerError)) throw err;
+      const answers = {
+        forbidden: [403, 'forbidden', '権限設定者とマスター管理者を選べるのはマスター管理者だけです。'],
+        conflict: [409, 'conflict', '別の操作で一覧が変わりました。読み込み直してからやり直してください。'],
+        not_found: [404, 'not_found', 'その委員のアカウントが見つかりません。'],
+        inactive: [400, 'validation', '利用登録が済んでいない（または停止した）アカウントには付けられません。'],
+        last_master: [400, 'validation', 'マスター管理者を 0 人にはできません。先にほかの人をマスター管理者にしてください。'],
+      } as const;
+      const [status, code, message] = answers[err.code];
+      return reply.code(status).send(fail(code, message));
+    }
+    return managersView(current);
   });
 
   attachRegistrationIssuer(app, { service: rt.service, store: rt.store, config: rt.config });

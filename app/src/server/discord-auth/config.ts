@@ -11,13 +11,13 @@ const SNOWFLAKE = /^[1-9]\d{16,19}$/;
 
 export interface DiscordAuthConfig {
   guildId: string;
-  /** The first account (the chair). Always an access administrator. */
+  /** The first account (the chair): the only master until a master changes the masters in the settings (2026-11-06). */
   bootstrapDiscordUserId: string;
   /** Shared PCs and other non-personal Discord accounts: never registrable. */
   excludedSharedDiscordUserIds: string[];
-  /** Additional access administrators by Discord user ID. */
+  /** Further access administrators (setters) by Discord user ID; the settings screen cannot remove them. */
   adminDiscordUserIds: string[];
-  /** Access administrators by Discord role (e.g. a department). */
+  /** Access administrators (setters) by Discord role (e.g. a department); the settings screen cannot remove them. */
   adminRoleIds: string[];
   /** Discord role ID -> department label shown in the app. */
   departmentRoleIds: Record<string, string>;

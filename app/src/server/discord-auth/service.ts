@@ -2,7 +2,7 @@ import { createHmac, randomBytes, randomInt, timingSafeEqual } from 'node:crypto
 import { checkPasswordPolicy, PasswordHasher } from '../login/password.js';
 import { loggableLoginId, type LoginAudit, type LoginEventKind, type LoginEventReason } from './audit.js';
 import type { DiscordAuthConfig } from './config.js';
-import type { Account, AccountState, AccountStore } from './store.js';
+import { ACCESS_MANAGER_HISTORY, type AccessManagerChange, type AccessManagerRole, type AccessManagers, type Account, type AccountState, type AccountStore } from './store.js';
 import { isStaffStudentId, isTemporaryStaffAccount, isTemporaryStaffId } from './temporary-staff.js';
 import { CARD_DAYS, DEVICE_DAYS, CardAuthError, cardView, type CardAuthState } from './cards.js';
 import type { CardSettings } from '../../shared/card-login.js';
@@ -17,7 +17,8 @@ import { compareDepartments } from '../../shared/departments.js';
 // - a session lasts 14 days on its device (was 1 hour);
 // - a signed-in session keeps working for 48 hours while the Bot host cannot be reached (new logins,
 //   registrations and password changes still need it); a membership answer is reused for 10 minutes;
-// - access administrators are the chair, listed IDs and listed roles (was none);
+// - access administrators are the masters, the setters a master chose in the settings, and listed IDs and roles of
+//   the private configuration (was none); the chair is the first master (2026-11-06);
 // - real names come from an operator roster, never from guesses;
 // - `/register` by a registered person resets a forgotten password (was refused);
 // - a committee roster (Discord ID -> student ID, operator file) gives people their student ID login
@@ -120,6 +121,32 @@ export interface AccountActivity {
   limited: boolean;
   pendingCode: { expiresAt: number; bulk: boolean; attempts: number } | null;
   sessions: number;
+}
+
+/** Why a change of masters or setters was refused. */
+export class AccessManagerError extends Error {
+  constructor(readonly code: 'forbidden' | 'conflict' | 'not_found' | 'inactive' | 'last_master') {
+    super(code);
+  }
+}
+
+const roleIn = (m: AccessManagers, uid: string): AccessManagerRole | 'none' => (m.masters.includes(uid) ? 'master' : m.setters.includes(uid) ? 'setter' : 'none');
+
+/** Masters and setters with the accounts concerned (stored data, no secrets). */
+export interface AccessManagerOverview {
+  version: number;
+  people: {
+    initialLoginId: string;
+    discordUserId: string;
+    studentId: string | null;
+    status: Account['status'];
+    departments: string[];
+    role: AccessManagerRole | 'none';
+    /** A setter by the private configuration (IDs or roles) whatever the role here. */
+    byConfig: boolean;
+  }[];
+  /** Newest first. */
+  history: AccessManagerChange[];
 }
 
 export type BulkIssueResult = { status: 'issued'; initialLoginId: string; code: string; expiresAt: number } | { status: 'would_issue' } | { status: 'skipped'; reason: 'active' };
@@ -244,9 +271,25 @@ export class DiscordAccountService {
     return typeof uid === 'string' && UID.test(uid) && BigInt(uid) < 2n ** 64n && !this.config.excludedSharedDiscordUserIds.includes(uid);
   }
 
-  private isAdmin(uid: string, roleIds: string[]): boolean {
+  /** Masters and setters as stored, or (before any change) the chair as the only master. */
+  private managersOf(s: Readonly<AccountState>): AccessManagers {
+    return s.accessManagers ?? { version: 0, masters: [this.config.bootstrapDiscordUserId], setters: [], history: [] };
+  }
+
+  /** A setter by the private configuration (Discord IDs or roles), which the settings screen cannot change. */
+  private adminByConfig(uid: string, roleIds: string[]): boolean {
+    return this.config.adminDiscordUserIds.includes(uid) || roleIds.some((r) => this.config.adminRoleIds.includes(r));
+  }
+
+  private isMaster(s: Readonly<AccountState>, uid: string): boolean {
+    return !isTemporaryStaffId(uid) && this.managersOf(s).masters.includes(uid);
+  }
+
+  /** Access administrator (権限設定者): a master, a setter chosen by a master, or one named in the configuration. */
+  private isAdmin(s: Readonly<AccountState>, uid: string, roleIds: string[]): boolean {
     if (isTemporaryStaffId(uid)) return false;
-    return uid === this.config.bootstrapDiscordUserId || this.config.adminDiscordUserIds.includes(uid) || roleIds.some((r) => this.config.adminRoleIds.includes(r));
+    const m = this.managersOf(s);
+    return m.masters.includes(uid) || m.setters.includes(uid) || this.adminByConfig(uid, roleIds);
   }
 
   private departments(roleIds: string[]): string[] {
@@ -591,7 +634,7 @@ export class DiscordAccountService {
       studentId,
       temporaryStaff: isTemporaryStaffAccount(a),
       departments: isTemporaryStaffAccount(a) ? ['臨時スタッフ'] : this.departments(roleIds),
-      admin: this.isAdmin(a!.discordUserId, roleIds),
+      admin: this.o.store.read((s) => this.isAdmin(s, a!.discordUserId, roleIds)),
       degraded,
       sessionKey: sessionHash,
       passwordAt: session!.passwordAt ?? session!.createdAt,
@@ -627,7 +670,7 @@ export class DiscordAccountService {
     return this.o.store.read((s) =>
       Object.values(s.accounts)
         .filter((a) => a.status === 'active')
-        .map((a) => ({ initialLoginId: a.initialLoginId, discordUserId: a.discordUserId, studentId: this.studentIdOf(s, a), temporaryStaff: isTemporaryStaffAccount(a), departments: isTemporaryStaffAccount(a) ? ['臨時スタッフ'] : this.departments(a.existingRoleIds), admin: this.isAdmin(a.discordUserId, a.existingRoleIds) })),
+        .map((a) => ({ initialLoginId: a.initialLoginId, discordUserId: a.discordUserId, studentId: this.studentIdOf(s, a), temporaryStaff: isTemporaryStaffAccount(a), departments: isTemporaryStaffAccount(a) ? ['臨時スタッフ'] : this.departments(a.existingRoleIds), admin: this.isAdmin(s, a.discordUserId, a.existingRoleIds) })),
     );
   }
 
@@ -636,7 +679,7 @@ export class DiscordAccountService {
     const a = this.o.store.read((s) => Object.values(s.accounts).find((x) => x.initialLoginId === initialLoginId) ?? null);
     if (!a || a.status !== 'active') return null;
     const studentId = this.o.store.read((s) => this.studentIdOf(s, s.accounts[a.discordUserId]!));
-    return { initialLoginId: a.initialLoginId, discordUserId: a.discordUserId, studentId, temporaryStaff: isTemporaryStaffAccount(a), departments: isTemporaryStaffAccount(a) ? ['臨時スタッフ'] : this.departments(a.existingRoleIds), admin: this.isAdmin(a.discordUserId, a.existingRoleIds) };
+    return { initialLoginId: a.initialLoginId, discordUserId: a.discordUserId, studentId, temporaryStaff: isTemporaryStaffAccount(a), departments: isTemporaryStaffAccount(a) ? ['臨時スタッフ'] : this.departments(a.existingRoleIds), admin: this.o.store.read((s) => this.isAdmin(s, a.discordUserId, a.existingRoleIds)) };
   }
 
   /**
@@ -649,6 +692,59 @@ export class DiscordAccountService {
       if (!a) return null;
       const temporaryStaff = isTemporaryStaffAccount(a);
       return { initialLoginId: a.initialLoginId, discordUserId: a.discordUserId, studentId: this.studentIdOf(s, a), status: a.status, memberVerifiedAt: a.memberVerifiedAt, temporaryStaff, departments: temporaryStaff ? ['臨時スタッフ'] : this.departments(a.existingRoleIds), asOf: this.now() };
+    });
+  }
+
+  /** Whether this Discord user is a master now (stored data). */
+  isMasterAccount(discordUserId: string): boolean {
+    return this.o.store.read((s) => this.isMaster(s, discordUserId) && s.accounts[discordUserId]?.status === 'active');
+  }
+
+  /**
+   * Who manages access, for the settings screen: every committee account that can sign in, and any other account that
+   * still holds a role, with that role. Stored data only (roles of the stored Discord roles), never for authorization.
+   */
+  accessManagers(): AccessManagerOverview {
+    return this.o.store.read((s) => {
+      const m = this.managersOf(s);
+      const people = Object.values(s.accounts)
+        .filter((a) => !isTemporaryStaffAccount(a) && (a.status === 'active' || m.masters.includes(a.discordUserId) || m.setters.includes(a.discordUserId)))
+        .map((a) => ({
+          initialLoginId: a.initialLoginId,
+          discordUserId: a.discordUserId,
+          studentId: this.studentIdOf(s, a),
+          status: a.status,
+          departments: this.departments(a.existingRoleIds),
+          role: roleIn(m, a.discordUserId),
+          byConfig: this.adminByConfig(a.discordUserId, a.existingRoleIds),
+        }));
+      return { version: m.version, people, history: [...m.history].reverse() };
+    });
+  }
+
+  /**
+   * A master sets one committee member's role: master, setter or none. Only masters may do this, for masters too;
+   * the last master cannot be removed.
+   */
+  setAccessManager(actor: string, input: { initialLoginId: string; role: AccessManagerRole | 'none'; expectedVersion: number }): void {
+    this.o.store.transact((s) => {
+      if (!this.isMaster(s, actor) || s.accounts[actor]?.status !== 'active') throw new AccessManagerError('forbidden');
+      const m = structuredClone(this.managersOf(s));
+      if (input.expectedVersion !== m.version) throw new AccessManagerError('conflict');
+      const target = Object.values(s.accounts).find((a) => a.initialLoginId === input.initialLoginId);
+      if (!target || isTemporaryStaffAccount(target)) throw new AccessManagerError('not_found');
+      const uid = target.discordUserId;
+      const before = roleIn(m, uid);
+      if (before === input.role) return;
+      if (input.role !== 'none' && target.status !== 'active') throw new AccessManagerError('inactive');
+      m.masters = m.masters.filter((u) => u !== uid);
+      m.setters = m.setters.filter((u) => u !== uid);
+      if (input.role === 'master') m.masters.push(uid);
+      if (input.role === 'setter') m.setters.push(uid);
+      if (m.masters.length === 0) throw new AccessManagerError('last_master');
+      m.version += 1;
+      m.history = [...m.history, { at: this.now(), actor, target: uid, before, after: input.role }].slice(-ACCESS_MANAGER_HISTORY);
+      s.accessManagers = m;
     });
   }
 
@@ -747,7 +843,7 @@ export class DiscordAccountService {
   private checkCardProof(s: AccountState, proof: { account: Account; sessionHash: string }, admin = false): Account {
     const a = s.accounts[proof.account.discordUserId];
     const se = s.sessions[proof.sessionHash];
-    if (!a || a.status !== 'active' || a.version !== proof.account.version || !se || se.expiresAt <= this.now() || se.version !== a.version || !this.cardSessionValid(s, se) || (admin && !this.isAdmin(a.discordUserId, a.existingRoleIds))) throw new CardAuthError('card_forbidden');
+    if (!a || a.status !== 'active' || a.version !== proof.account.version || !se || se.expiresAt <= this.now() || se.version !== a.version || !this.cardSessionValid(s, se) || (admin && !this.isAdmin(s, a.discordUserId, a.existingRoleIds))) throw new CardAuthError('card_forbidden');
     return a;
   }
 
@@ -822,7 +918,7 @@ export class DiscordAccountService {
       const a = s.accounts[identity.discordUserId]!;
       const se = s.sessions[identity.sessionKey];
       const c = this.cardState(s).cards[id];
-      if (!se || se.version !== a.version || se.expiresAt <= this.now() || !this.cardSessionValid(s, se) || !c || (c.discordUserId !== identity.discordUserId && !this.isAdmin(a.discordUserId, a.existingRoleIds))) throw new CardAuthError('card_forbidden');
+      if (!se || se.version !== a.version || se.expiresAt <= this.now() || !this.cardSessionValid(s, se) || !c || (c.discordUserId !== identity.discordUserId && !this.isAdmin(s, a.discordUserId, a.existingRoleIds))) throw new CardAuthError('card_forbidden');
       c.revokedAt ??= this.now();
       for (const [key, session] of Object.entries(s.sessions)) if (session.cardId === id) delete s.sessions[key];
       this.cardEvent(s, 'card_revoked', identity.discordUserId, c.discordUserId, id);

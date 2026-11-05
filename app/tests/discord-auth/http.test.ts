@@ -228,6 +228,41 @@ describe('sign-in records for access administrators', () => {
   });
 });
 
+describe('masters and setters over HTTP', () => {
+  it('are shown to setters and changed by masters only', async () => {
+    const chair = await register(ctx, CHAIR, '20000001');
+    const member = await register(ctx, MEMBER, '21123456');
+    const chairCookie = `__Host-iy_session=${chair.sessionToken}`;
+    const memberCookie = `__Host-iy_session=${member.sessionToken}`;
+    expect((await call('GET', '/api/auth/admin/managers')).status).toBe(401);
+    expect((await call('GET', '/api/auth/admin/managers', { cookie: memberCookie })).status).toBe(403);
+    const first = await call('GET', '/api/auth/admin/managers', { cookie: chairCookie });
+    expect(first.status).toBe(200);
+    expect(first.json).toMatchObject({ canEdit: true, version: 0, history: [] });
+    expect(first.json.people).toContainEqual(expect.objectContaining({ account: member.initialLoginId, name: '合成 太郎', role: 'none', self: false }));
+    expect(first.body).not.toContain(MEMBER);
+
+    const change = { account: member.initialLoginId, role: 'setter', expectedVersion: 0 };
+    expect((await call('PUT', '/api/auth/admin/managers', { cookie: chairCookie, body: change, csrf: false })).status).toBe(403);
+    expect((await call('PUT', '/api/auth/admin/managers', { cookie: memberCookie, body: change })).status).toBe(403);
+    expect((await call('PUT', '/api/auth/admin/managers', { cookie: chairCookie, body: { ...change, role: 'owner' } })).status).toBe(400);
+    const saved = await call('PUT', '/api/auth/admin/managers', { cookie: chairCookie, body: change });
+    expect(saved.status).toBe(200);
+    expect(saved.json.version).toBe(1);
+    expect(saved.json.history).toEqual([expect.objectContaining({ targetName: '合成 太郎', before: 'none', after: 'setter' })]);
+    expect((await call('PUT', '/api/auth/admin/managers', { cookie: chairCookie, body: change })).status).toBe(409);
+
+    // The setter now sees the list, read-only, and the grant screens open to them.
+    const seen = await call('GET', '/api/auth/admin/managers', { cookie: memberCookie });
+    expect(seen.json.canEdit).toBe(false);
+    expect((await call('GET', '/api/auth/admin/activity', { cookie: memberCookie })).status).toBe(200);
+    expect((await call('PUT', '/api/auth/admin/managers', { cookie: memberCookie, body: { account: chair.initialLoginId, role: 'none', expectedVersion: 1 } })).status).toBe(403);
+    const last = await call('PUT', '/api/auth/admin/managers', { cookie: chairCookie, body: { account: chair.initialLoginId, role: 'none', expectedVersion: 1 } });
+    expect(last.status).toBe(400);
+    expect(last.json.message).toContain('0 人');
+  });
+});
+
 describe('bulk issue of registration codes', () => {
   const DAY = 86_400_000;
   const bulk = (body: Record<string, unknown>, key = ctx.config.bridgeKey) => {

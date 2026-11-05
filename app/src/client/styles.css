@@ -607,6 +607,8 @@ button.minutes-at.minutes-unverified { background: var(--amber-bg); color: var(-
 .rental-access-history summary { cursor: pointer; }
 .rental-access-history li { padding: 7px 0; }
 .rental-access-history li strong, .rental-access-history li span { display: block; }
+.access-managers-confirm { grid-column: 1 / -1; margin: 0; }
+.access-managers-confirm p { margin: 0 0 8px; }
 @media (max-width: 600px) {
   .rental-access-people .rental-access-person { grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
   .rental-access-person-name { grid-column: 1 / -1; }

@@ -120,6 +120,31 @@ export interface LoginActivityResponse {
   limits: { accountTriesPer10Min: number; accountFailuresPerDay: number; clientFailures: number; clientWindowMinutes: number };
 }
 
+/** マスター管理者・権限設定者・なし。 */
+export type AccessManagerRole = 'master' | 'setter' | 'none';
+
+/**
+ * Who manages access (GET /api/auth/admin/managers, access administrators). Masters choose the setters and the other
+ * masters (PUT, masters only).
+ */
+export interface AccessManagersResponse {
+  /** The viewer is a master and may change the roles. */
+  canEdit: boolean;
+  version: number;
+  people: {
+    account: string;
+    name: string;
+    studentId: string | null;
+    departments: string[];
+    status: 'pending' | 'active' | 'retired';
+    role: AccessManagerRole;
+    /** A setter by the server's private configuration, which this screen cannot change. */
+    byConfig: boolean;
+    self: boolean;
+  }[];
+  history: { at: string; actorName: string; targetName: string; before: AccessManagerRole; after: AccessManagerRole }[];
+}
+
 export interface Persona {
   id: string;
   displayName: string;
