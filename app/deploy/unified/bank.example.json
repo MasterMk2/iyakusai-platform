@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "environment": "sunabar",
+  "accountType": "corporation",
+  "clientId": "銀行の画面に出たクライアントID",
+  "clientSecretFile": "/config/bank-client-secret",
+  "clientAuth": "basic",
+  "redirectUri": "https://app.example.org/bank/callback",
+  "scopes": ["private:account", "private:virtual-account"],
+  "tokenKeyFile": "/config/bank-token.key"
+}

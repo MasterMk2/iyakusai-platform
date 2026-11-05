@@ -108,6 +108,8 @@ services:
 | `line.json` | LINE 公式アカウント（`mailbox.json` と同じフォルダ）。あれば LINE をメールの画面に出す。`send` とチャネルのアクセストークンが無ければ読むだけ。Bot からの返信（`discord`）は `"auth": "signed"`（svc-auth/v1、鍵 32 バイト以上）にする |
 | `books-sheets.json` | 会計のマスターシート（`mailbox.json` と同じフォルダ。任意）。あれば帳簿の写しをスプレッドシートに書く。下の「会計のマスターシート」 |
 | `books-sheets-key.json` | 上のサービスアカウントの JSON 鍵（名前は例。所有者だけが読める権限 600） |
+| `bank.json` | 銀行の連携（GMOあおぞらネット銀行 API。`mailbox.json` と同じフォルダ。任意）。あれば設定の画面から銀行とつなげる。下の「銀行の連携」 |
+| `bank-client-secret`・`bank-token.key` | 上のクライアントシークレット（銀行の画面の値を 1 行）と、トークンを暗号化する鍵（32 バイト以上の乱数）。名前は例。どちらも権限 600 |
 | `*.key` | 経路ごとの鍵。32 バイト以上の乱数 |
 | `bot-host-ca.crt` | Bot ホストの CA 証明書 |
 
@@ -153,6 +155,16 @@ services:
 
 - 知らない項目があると、会計のスプレッドシートだけを無効にして起動する（帳簿は使える）。`tabPrefix` は基盤が作るタブの名前の前に付ける文字（既定はなし）、`debounceSeconds` は帳簿が変わってから書くまでの秒数（5〜3600）。
 - 鍵の中身は `client_email` と `private_key` だけを読む。鍵をログ・画面・スプレッドシートに出さない。
+
+銀行の連携（[app/docs/bank.md](../app/docs/bank.md)）を使うとき：
+
+1. 銀行の画面（いまは sunabar ポータル）でアカウントを足し、認可利用を ON、認証プロトコルは OAuth2.0、Redirect_uri は `https://<公開ホスト>/bank/callback`、スコープは `private:account` と `private:virtual-account` だけを ON にする。
+2. 鉛筆アイコンで出るクライアントシークレットを、画面に出さずに `config/bank-client-secret` へ 1 行で保存し、権限を 600 にする。トークン用の鍵は `openssl rand -hex 32 > config/bank-token.key` で作り、同じく 600 にする（ほかの鍵と別の値）。
+3. `bank.json` を置いてアプリを再起動する（例は [`app/deploy/unified/bank.example.json`](../app/deploy/unified/bank.example.json)）。設定 →「銀行の連携」で権限管理者が「銀行と接続する」を押す。
+
+- 銀行の URL は設定に書かない（コードで固定。設定を書き換えてもシークレットやトークンをほかへ送れない）。`environment` はいまは `sunabar` だけを受け付ける。
+- 振込のスコープを書くと、銀行の連携だけを無効にして起動する（ほかは動く）。理由は起動のログに出る（シークレットは出さない）。
+- トークンは `SMM_MAIL_DIR/bank-tokens.json` に暗号化して置く。バックアップには入れない（復元したら設定の画面からつなぎ直す）。
 
 鍵の決まり：
 

@@ -1,6 +1,7 @@
 import { readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { ConfigError } from '../auth.js';
+import { loadBankConfig, type BankConfig } from '../bank/config.js';
 import { loadBooksSheetsConfig, type BooksSheetsConfig } from '../books/sheets-config.js';
 import { loadLineConfig, type LineOaConfig } from '../line/oa-config.js';
 import { loadMinutesConfig, type MinutesConfig } from '../minutes/config.js';
@@ -56,6 +57,8 @@ export interface MailboxConfig {
   minutes?: MinutesConfig | null;
   /** The books' master spreadsheet (books-sheets.json next to this file, 2026-11-05); absent or null when it is off. */
   booksSheets?: BooksSheetsConfig | null;
+  /** The bank connection (bank.json next to this file, 2026-11-06); absent or null when it is off. */
+  bank?: BankConfig | null;
 }
 
 /**
@@ -235,7 +238,18 @@ export function parseMailboxConfig(env: NodeJS.ProcessEnv, discordMode: boolean)
   const key = readKey((raw as Record<string, unknown> | null)?.ingestKeyFile);
   const send = (raw as Record<string, unknown> | null)?.send;
   const password = send && typeof send === 'object' ? readPassword((send as Record<string, unknown>).smtpPasswordFile) : null;
-  return { ...validateMailboxConfig(raw, resolve(dir), key, password), line: lineOrOff(file, resolve(dir)), minutes: minutesOrOff(file, resolve(dir)), booksSheets: booksSheetsOrOff(file) };
+  return { ...validateMailboxConfig(raw, resolve(dir), key, password), line: lineOrOff(file, resolve(dir)), minutes: minutesOrOff(file, resolve(dir)), booksSheets: booksSheetsOrOff(file), bank: bankOrOff(file, resolve(dir)) };
+}
+
+/** A bank.json that cannot be used turns off the bank connection only (no secret named). */
+function bankOrOff(file: string, dir: string): BankConfig | null {
+  try {
+    return loadBankConfig(file, dir);
+  } catch (err) {
+    if (!(err instanceof ConfigError)) throw err;
+    console.error(`銀行の連携は無効のまま起動しました: ${err.message}`);
+    return null;
+  }
 }
 
 /** A line.json that cannot be used turns off LINE only: the mailbox starts as before (the message names no secret). */
