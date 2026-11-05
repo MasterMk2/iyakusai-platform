@@ -67,8 +67,36 @@ export interface Session {
   failedBefore?: number;
 }
 
+/** 'master': マスター管理者（権限設定者を選べる）。'setter': 権限設定者（権限管理者）。 */
+export type AccessManagerRole = 'master' | 'setter';
+
+export interface AccessManagerChange {
+  at: number;
+  /** Discord user IDs. */
+  actor: string;
+  target: string;
+  before: AccessManagerRole | 'none';
+  after: AccessManagerRole | 'none';
+}
+
+/**
+ * Who manages access (2026-11-06). Absent until a master first changes it; until then the chair
+ * (bootstrapDiscordUserId) is the only master. Older versions of the app read a file with this field
+ * and ignore it.
+ */
+export interface AccessManagers {
+  version: number;
+  masters: string[];
+  setters: string[];
+  /** Newest last, at most ACCESS_MANAGER_HISTORY entries. */
+  history: AccessManagerChange[];
+}
+
+export const ACCESS_MANAGER_HISTORY = 100;
+
 export interface AccountState {
   cardAuth?: CardAuthState;
+  accessManagers?: AccessManagers;
   schema: typeof ACCOUNT_SCHEMA;
   revision: number;
   nextInitialId: number;
@@ -118,6 +146,17 @@ export function validateAccountState(value: unknown): asserts value is AccountSt
     if (session.failedBefore !== undefined && (!Number.isSafeInteger(session.failedBefore) || session.failedBefore < 0)) fail();
   }
   for (const [hash, expiresAt] of Object.entries(s.issuerNonces)) if (!DIGEST.test(hash) || !Number.isSafeInteger(expiresAt)) fail();
+  if (s.accessManagers !== undefined && !validAccessManagers(s.accessManagers)) fail();
+}
+
+function validAccessManagers(m: AccessManagers): boolean {
+  const uids = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string' && SNOWFLAKE.test(x)) && new Set(v).size === v.length;
+  const role = (v: unknown) => v === 'master' || v === 'setter' || v === 'none';
+  if (!m || typeof m !== 'object' || !Number.isSafeInteger(m.version) || m.version < 1 || !uids(m.masters) || !uids(m.setters)) return false;
+  // A master always remains, and nobody is both.
+  if (m.masters.length === 0 || m.setters.some((u) => m.masters.includes(u))) return false;
+  if (!Array.isArray(m.history) || m.history.length > ACCESS_MANAGER_HISTORY) return false;
+  return m.history.every((h) => h && Number.isSafeInteger(h.at) && SNOWFLAKE.test(h.actor) && SNOWFLAKE.test(h.target) && role(h.before) && role(h.after));
 }
 
 /**
@@ -191,6 +230,7 @@ export function mergeWithTrial(minimum: unknown, trial: unknown): { state: Accou
     schema: ACCOUNT_SCHEMA,
     revision: trial.revision + 1,
     ...(trial.cardAuth ? { cardAuth: trial.cardAuth } : {}),
+    ...(trial.accessManagers ? { accessManagers: trial.accessManagers } : {}),
     nextInitialId: Math.max(production.nextInitialId, trial.nextInitialId),
     accounts,
     sessions,
