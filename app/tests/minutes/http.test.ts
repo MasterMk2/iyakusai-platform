@@ -282,6 +282,61 @@ describe('meeting minutes', () => {
     expect(readdirSync(path.join(dir, 'mail', AUDIO_DIR)).filter((f) => f.startsWith(id))).toEqual([]);
   });
 
+  it('let the recorder and access administrators change the title, the date and the readers afterwards', async () => {
+    await build();
+    const recorder = await signIn(MEMBER, '21000002');
+    const chosen = await signIn(OTHER, '21000003');
+    const outsider = await signIn(THIRD, '21000004');
+    const people = (await call('GET', '/api/minutes/meta', { cookie: recorder })).json.people as { id: string; name: string }[];
+    const idOf = (name: string) => people.find((p) => p.name === name)!.id;
+    const id = (await upload(recorder, audio, { title: '役員会', heldOn: '2026-11-02', visibility: 'selected', viewers: [idOf('合成 花子')] })).json.id as string;
+    expect((await call('GET', `/api/minutes/${id}`, { cookie: recorder })).json.can.manage).toBe(true);
+    expect((await call('GET', `/api/minutes/${id}`, { cookie: chosen })).json.can.manage).toBe(false);
+
+    // A reader who is not the recorder may not change it; someone who cannot read it learns nothing.
+    const settings = (over: Record<string, unknown> = {}) => ({ title: '役員会', heldOn: '2026-11-02', visibility: 'selected', viewers: [idOf('合成 花子')], ...over });
+    expect((await call('PUT', `/api/minutes/${id}/settings`, { cookie: chosen, body: settings({ viewers: [] }) })).status).toBe(403);
+    expect((await call('PUT', `/api/minutes/${id}/settings`, { cookie: outsider, body: settings({ visibility: 'members' }) })).status).toBe(404);
+    expect((await call('PUT', `/api/minutes/${id}/settings`, { cookie: recorder, body: settings({ viewers: ['1000000000000009999'] }) })).status).toBe(422);
+    expect((await call('PUT', `/api/minutes/${id}/settings`, { cookie: recorder, body: settings({ title: ' ' }) })).status).toBe(400);
+
+    // The outsider is added and the chosen taken off: the change holds at once, in the list and the meeting.
+    const changed = await call('PUT', `/api/minutes/${id}/settings`, { cookie: recorder, body: settings({ title: '臨時\n役員会', heldOn: '2026-11-03', viewers: [idOf('合成 次郎'), idOf('合成 太郎')] }) });
+    expect(changed.status).toBe(200);
+    expect(changed.json).toMatchObject({ title: '臨時 役員会', heldOn: '2026-11-03', visibility: 'selected', viewers: [{ name: '合成 次郎' }], version: 1 });
+    expect((await call('GET', '/api/minutes', { cookie: outsider })).json.items.map((m: { id: string }) => m.id)).toEqual([id]);
+    expect((await call('GET', `/api/minutes/${id}`, { cookie: chosen })).status).toBe(404);
+    expect((await call('GET', '/api/minutes', { cookie: chosen })).json.items).toEqual([]);
+
+    // Every member, then back; it changes while the worker holds it too, and the worker sees the new title.
+    expect((await call('PUT', `/api/minutes/${id}/settings`, { cookie: recorder, body: settings({ visibility: 'members', viewers: [] }) })).status).toBe(200);
+    expect((await call('GET', `/api/minutes/${id}`, { cookie: chosen })).status).toBe(200);
+    const job = (await worker(WORKER_PATHS.claim, { stages: ['transcribe'] })).json.job;
+    expect(job.title).toBe('役員会');
+    expect((await call('PUT', `/api/minutes/${id}/settings`, { cookie: recorder, body: settings({ title: '定例', viewers: [] }) })).status).toBe(200);
+    expect((await call('GET', `/api/minutes/${id}`, { cookie: chosen })).status).toBe(404);
+    expect((await worker(WORKER_PATHS.result, { id, leaseToken: job.leaseToken, stage: 'transcribe', transcript: { segments, durationSec: 310, model: 'large-v3' } })).status).toBe(200);
+    const s = (await worker(WORKER_PATHS.claim, { stages: ['summarize'] })).json.job;
+    expect(s.title).toBe('定例');
+
+    // An access administrator changes another's meeting.
+    const chair = await signIn(CHAIR, '21000001');
+    const byChair = await call('PUT', `/api/minutes/${id}/settings`, { cookie: chair, body: settings({ title: '定例', visibility: 'members', viewers: [] }) });
+    expect(byChair.status).toBe(200);
+    expect(byChair.json.can.manage).toBe(true);
+    expect((await call('GET', `/api/minutes/${id}`, { cookie: chosen })).status).toBe(200);
+  });
+
+  it('take a recording of up to 2 GB and say the limit beyond it', async () => {
+    await build();
+    const recorder = await signIn(MEMBER, '21000002');
+    expect((await call('GET', '/api/minutes/meta', { cookie: recorder })).json.maxAudioBytes).toBe(2 * 1024 ** 3);
+    // (A file of exactly 2 GB is also checked against the disk's free space, which depends on the machine.)
+    const refused = await call('POST', '/api/minutes/uploads', { cookie: recorder, body: { filename: 'long.wav', type: 'audio/wav', bytes: 2 * 1024 ** 3 + 1 } });
+    expect(refused.status).toBe(422);
+    expect(refused.json.message).toContain('2 GB まで');
+  });
+
   it('refuse an unnamed worker before reading its body, and say when a result is too large', async () => {
     await build();
     const big = Buffer.alloc(17 * 1024 * 1024, 0x20);

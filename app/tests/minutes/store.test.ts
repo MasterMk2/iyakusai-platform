@@ -34,6 +34,17 @@ afterEach(() => {
 });
 
 describe('the minutes ledger', () => {
+  it('changes the settings at any stage, keeping the version and the settings before in the history', () => {
+    const id = newMeetingId();
+    store.create(id, meeting, 'u1', iso(T0));
+    const changed = store.updateSettings(id, { title: '臨時役員会', heldOn: '2026-11-03', visibility: 'members', viewers: [] }, 'admin', iso(T0 + 1000))!;
+    expect(changed).toMatchObject({ title: '臨時役員会', heldOn: '2026-11-03', visibility: 'members', viewers: [], version: 1, updatedBy: 'admin', stage: 'transcribe_wait' });
+    const last = store.db.prepare("SELECT actor_id, action, before_body FROM meeting_history WHERE meeting_id=? ORDER BY id DESC LIMIT 1").get(id) as { actor_id: string; action: string; before_body: string };
+    expect(last).toMatchObject({ actor_id: 'admin', action: 'settings' });
+    expect(JSON.parse(last.before_body)).toEqual({ title: '役員会', heldOn: '2026-11-02', visibility: 'selected', viewers: ['u2'] });
+    expect(store.updateSettings(newMeetingId(), { title: 't', heldOn: '2026-11-03', visibility: 'members', viewers: [] }, 'admin', iso(T0))).toBeNull();
+  });
+
   it('moves a meeting from the recording to the confirmed minutes, one stage at a time', () => {
     const id = newMeetingId();
     expect(store.create(id, meeting, 'u1', iso(T0))).toMatchObject({ stage: 'transcribe_wait', version: 1, viewers: ['u2'] });

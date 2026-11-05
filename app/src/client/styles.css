@@ -450,6 +450,7 @@ button.minutes-at:hover:not(:disabled) { background: var(--hover-strong); border
 button.minutes-at.minutes-unverified { background: var(--amber-bg); color: var(--amber); border-color: var(--amber-line); }
 .minutes-segments { list-style: none; margin: 8px 0 0; padding: 0; max-height: 480px; overflow: auto; display: grid; gap: 4px; line-height: 1.6; }
 .minutes-danger { margin-top: 12px; }
+.minutes-settings:focus { outline: none; }
 .bot-open { display: grid; gap: 10px; justify-items: start; }
 .bot-open > .panel { width: 100%; }
 /* The mail screen moves focus to its answer after sending; the region itself is not a control. */

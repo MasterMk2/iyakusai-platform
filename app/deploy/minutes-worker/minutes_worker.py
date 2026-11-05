@@ -53,6 +53,13 @@ DEFAULT_EXTRA_ARGS = "--strict-mcp-config"
 # 1 回の要約に渡す文字起こしの上限（これを超える会議は区切って要約し、つなぐ）。
 PART_CHARS = 60_000
 GLOSSARY_CHARS = 400
+# 文字起こしは音声を区切って渡す。faster-whisper は渡された音声の特徴量を一度に計算し、音声 1 時間あたり約 3.4GB を
+# 使う（2026-11-05 に手元で測定）。モデル（約 3.6GB）と合わせてコンテナの 6GB に収まるよう、10 分ずつにする。
+SAMPLE_RATE = 16_000
+WINDOW_SEC = 600
+# 区切る位置は、10 分の手前 60 秒の中で一番静かな 0.2 秒（言葉の途中で切らないため）。
+CUT_SEARCH_SEC = 60
+CUT_FRAME_SEC = 0.2
 
 
 # ---- 署名（src/server/tasks/signing.ts と同じ正規化文字列）
@@ -157,19 +164,93 @@ def glossary_prompt(words: list[str]) -> str:
     return out.rstrip("、") + "。"
 
 
+def quiet_cut(samples, start: int, frame: int) -> int:
+    """samples[start:] を frame ずつに分け、一番静かな（二乗の和が小さい）ところの真ん中の位置を返す。"""
+    import numpy as np
+
+    n = (len(samples) - start) // frame
+    if n <= 0:
+        return len(samples)
+    tail = samples[start:start + n * frame].astype(np.float32).reshape(n, frame)
+    return start + int(np.argmin(np.square(tail).sum(axis=1))) * frame + frame // 2
+
+
+def audio_windows(path: Path, window_sec: float = WINDOW_SEC, search_sec: float = CUT_SEARCH_SEC):
+    """音声を 16kHz・モノラルの float32 にして、(開始の秒, 配列) を window_sec ごとに返す。全体を一度にメモリに置かない。
+    区切りは窓の終わりの search_sec の中で一番静かなところ。読み方は faster_whisper.audio.decode_audio と同じ
+    （s16・モノラルへの変換、壊れたフレームは飛ばす、時刻の確認はしない）。"""
+    import gc
+
+    import av
+    import numpy as np
+
+    window = int(window_sec * SAMPLE_RATE)
+    search = min(int(search_sec * SAMPLE_RATE), window - 1)
+    frame = max(1, int(CUT_FRAME_SEC * SAMPLE_RATE))
+    resampler = av.audio.resampler.AudioResampler(format="s16", layout="mono", rate=SAMPLE_RATE)
+    fifo = av.audio.fifo.AudioFifo()
+    pending: list = []
+    have = 0
+    offset = 0
+
+    def decoded(container):
+        frames = iter(container.decode(audio=0))
+        while True:
+            try:
+                f = next(frames)
+            except StopIteration:
+                break
+            except av.error.InvalidDataError:
+                continue
+            f.pts = None
+            fifo.write(f)
+            if fifo.samples >= 500_000:
+                yield from resampler.resample(fifo.read())
+        if fifo.samples > 0:
+            yield from resampler.resample(fifo.read())
+        yield from resampler.resample(None)
+
+    try:
+        with av.open(str(path), mode="r", metadata_errors="ignore") as container:
+            for f in decoded(container):
+                pending.append(f.to_ndarray().reshape(-1))
+                have += pending[-1].shape[0]
+                while have >= window:
+                    buf = np.concatenate(pending)
+                    cut = quiet_cut(buf[:window], window - search, frame)
+                    yield offset / SAMPLE_RATE, buf[:cut].astype(np.float32) / 32768.0
+                    offset += cut
+                    pending = [buf[cut:]]
+                    have = pending[0].shape[0]
+        if have > 0:
+            yield offset / SAMPLE_RATE, np.concatenate(pending).astype(np.float32) / 32768.0
+    finally:
+        # faster-whisper と同じく、変換器まわりが残らないように片付ける。
+        del resampler
+        gc.collect()
+
+
 def transcribe(app: App, job: dict) -> dict:
     model, name = whisper_model()
+    prompt = glossary_prompt(job.get("glossary") or [])
+    out: list[dict] = []
+    duration = 0.0
     with tempfile.TemporaryDirectory(prefix="iyk-minutes-") as tmp:
         audio = Path(tmp) / f"audio.{job['audio']['ext']}"
         app.download(job, audio)
         started = time.monotonic()
-        segments, info = model.transcribe(str(audio), language="ja", vad_filter=True, beam_size=5,
-                                          initial_prompt=glossary_prompt(job.get("glossary") or []),
-                                          condition_on_previous_text=False)
-        out = [{"start": round(s.start, 2), "end": round(max(s.start, s.end), 2), "text": s.text.strip()[:1000]}
-               for s in segments if s.text.strip() and math.isfinite(s.start) and math.isfinite(s.end)]
-        log.info("文字起こし %s: 音声 %.0f 秒を %.0f 秒で（%d 文）", job["id"], info.duration, time.monotonic() - started, len(out))
-    return {"segments": out, "durationSec": round(info.duration, 2), "model": name}
+        windows = 0
+        # 区切りごとに独立して文字起こしする（もともと前の文脈を使わない設定なので、つなぎ目で失うものは少ない）。
+        for offset, samples in audio_windows(audio):
+            windows += 1
+            segments, _ = model.transcribe(samples, language="ja", vad_filter=True, beam_size=5,
+                                           initial_prompt=prompt, condition_on_previous_text=False)
+            for s in segments:
+                if s.text.strip() and math.isfinite(s.start) and math.isfinite(s.end):
+                    out.append({"start": round(offset + s.start, 2), "end": round(offset + max(s.start, s.end), 2), "text": s.text.strip()[:1000]})
+            duration = offset + samples.shape[0] / SAMPLE_RATE
+        log.info("文字起こし %s: 音声 %.0f 秒を %.0f 秒で（%d 区切り・%d 文）", job["id"], duration, time.monotonic() - started, windows, len(out))
+    return {"segments": out, "durationSec": round(duration, 2), "model": name}
 
 
 # ---- 要約

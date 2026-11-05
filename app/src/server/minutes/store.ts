@@ -8,7 +8,8 @@ import type { MinutesAudioExtension, MinutesDraft, MinutesStage, MinutesVisibili
 // carries it; the recordings are separate files in minutes-audio/ and are not backed up (they are deleted a
 // fixed number of days after confirmation). A meeting moves through the stages of shared/minutes.ts; the worker
 // takes a waiting stage with a lease, and a lease that runs out puts the stage back (at most MAX_ATTEMPTS times).
-// Every change of the minutes keeps a history row with the body as it was before.
+// Every change of the minutes keeps a history row with the body as it was before; a change of the settings (title,
+// date, who may read it) keeps the settings as they were before, as JSON in the same column.
 
 export const MINUTES_FILE = 'minutes.sqlite3';
 export const AUDIO_DIR = 'minutes-audio';
@@ -145,6 +146,8 @@ export interface NewMeeting {
   audioBytes: number;
   audioSha256: string;
 }
+
+export type MeetingSettings = Pick<MeetingRow, 'title' | 'heldOn' | 'visibility' | 'viewers'>;
 
 export interface ClaimedJob {
   row: MeetingRow;
@@ -305,6 +308,23 @@ export class MinutesStore {
       if (back === 'transcribe_wait' && r.audioDeletedAt) return 'no-audio';
       this.db.prepare('UPDATE meetings SET stage=?, failed_stage=NULL, error=NULL, attempts=0, updated_by=?, updated_at=? WHERE id=?').run(back, actor, now, id);
       this.history(id, now, actor, 'retry', null);
+      return this.get(id)!;
+    });
+  }
+
+  /**
+   * The title, the date and who may read the meeting, at any stage (2026-11-05). The version is left as it is: it
+   * guards the body, and a reader's unsaved corrections must not be refused because the settings changed.
+   */
+  updateSettings(id: string, settings: MeetingSettings, actor: string, now: string): MeetingRow | null {
+    return this.tx(() => {
+      const r = this.get(id);
+      if (!r) return null;
+      const before: MeetingSettings = { title: r.title, heldOn: r.heldOn, visibility: r.visibility, viewers: r.viewers };
+      this.db
+        .prepare('UPDATE meetings SET title=?, held_on=?, visibility=?, viewers_json=?, updated_by=?, updated_at=? WHERE id=?')
+        .run(settings.title, settings.heldOn, settings.visibility, JSON.stringify(settings.viewers), actor, now, id);
+      this.history(id, now, actor, 'settings', JSON.stringify(before));
       return this.get(id)!;
     });
   }

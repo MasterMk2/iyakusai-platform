@@ -8,8 +8,11 @@ import {
   type MinutesEvidence,
   type MinutesListResponse,
   type MinutesMeta,
+  type MinutesPerson,
+  type MinutesSettingsUpdate,
   type MinutesStage,
   type MinutesVisibility,
+  sizeLabel,
 } from '../../../shared/minutes';
 import { api, ApiFailure, fmtDate, toFailure } from '../../api';
 import { useLoader } from '../../useLoader';
@@ -75,6 +78,7 @@ export function MinutesView({ meetingId, onOpen }: MinutesViewProps) {
       <MinutesDetailView
         key={meetingId}
         meetingId={meetingId}
+        people={meta.data.people}
         onBack={() => {
           setListVersion((v) => v + 1);
           onOpen(null);
@@ -326,6 +330,53 @@ async function uploadRecording(file: File, onProgress: (sent: number) => void): 
   return opened.uploadId;
 }
 
+// ---- who may read a meeting (the new-meeting form and the settings of a meeting)
+
+function ViewerFields(props: {
+  idPrefix: string;
+  people: MinutesPerson[];
+  visibility: MinutesVisibility;
+  viewers: Set<string>;
+  onVisibility: (v: MinutesVisibility) => void;
+  onViewers: (v: Set<string>) => void;
+  hint?: string;
+}) {
+  const { idPrefix, people, visibility, viewers, onVisibility, onViewers, hint } = props;
+  return (
+    <fieldset>
+      <legend className="minutes-legend">見られる人（録音した人と権限管理者はいつでも見られます）</legend>
+      {hint && <p className="field-hint">{hint}</p>}
+      <div className="bot-check">
+        <input id={`${idPrefix}-vis-selected`} type="radio" name={`${idPrefix}-visibility`} checked={visibility === 'selected'} onChange={() => onVisibility('selected')} />
+        <label htmlFor={`${idPrefix}-vis-selected`}>選んだ人だけ（役員会など）</label>
+      </div>
+      <div className="bot-check">
+        <input id={`${idPrefix}-vis-members`} type="radio" name={`${idPrefix}-visibility`} checked={visibility === 'members'} onChange={() => onVisibility('members')} />
+        <label htmlFor={`${idPrefix}-vis-members`}>委員全員</label>
+      </div>
+      {visibility === 'selected' && (
+        <div className="minutes-people" data-testid={`${idPrefix}-people`}>
+          {people.map((p) => (
+            <label key={p.id} className="minutes-person">
+              <input
+                type="checkbox"
+                checked={viewers.has(p.id)}
+                onChange={(e) => {
+                  const next = new Set(viewers);
+                  if (e.target.checked) next.add(p.id);
+                  else next.delete(p.id);
+                  onViewers(next);
+                }}
+              />
+              {p.name}
+            </label>
+          ))}
+        </div>
+      )}
+    </fieldset>
+  );
+}
+
 // ---- a new meeting
 
 function MinutesNew({ meta, onCancel, onCreated }: { meta: MinutesMeta; onCancel: () => void; onCreated: (id: string) => void }) {
@@ -347,7 +398,7 @@ function MinutesNew({ meta, onCancel, onCreated }: { meta: MinutesMeta; onCancel
     if (!file || sending) return;
     setFailure(null);
     if (file.size > meta.maxAudioBytes) {
-      setFailure(`録音ファイルは ${mb(meta.maxAudioBytes)} までです。`);
+      setFailure(`録音ファイルは ${sizeLabel(meta.maxAudioBytes)} までです（このファイルは ${mb(file.size)}）。`);
       return;
     }
     setSending({ sent: 0, total: file.size });
@@ -376,36 +427,7 @@ function MinutesNew({ meta, onCancel, onCreated }: { meta: MinutesMeta; onCancel
       <label htmlFor="minutes-date">日付</label>
       <input id="minutes-date" type="date" value={heldOn} onChange={(e) => setHeldOn(e.target.value)} required />
 
-      <fieldset>
-        <legend className="minutes-legend">見られる人（録音した人と権限管理者はいつでも見られます）</legend>
-        <div className="bot-check">
-          <input id="minutes-vis-selected" type="radio" name="visibility" checked={visibility === 'selected'} onChange={() => setVisibility('selected')} />
-          <label htmlFor="minutes-vis-selected">選んだ人だけ（役員会など）</label>
-        </div>
-        <div className="bot-check">
-          <input id="minutes-vis-members" type="radio" name="visibility" checked={visibility === 'members'} onChange={() => setVisibility('members')} />
-          <label htmlFor="minutes-vis-members">委員全員</label>
-        </div>
-        {visibility === 'selected' && (
-          <div className="minutes-people" data-testid="minutes-people">
-            {meta.people.map((p) => (
-              <label key={p.id} className="minutes-person">
-                <input
-                  type="checkbox"
-                  checked={viewers.has(p.id)}
-                  onChange={(e) => {
-                    const next = new Set(viewers);
-                    if (e.target.checked) next.add(p.id);
-                    else next.delete(p.id);
-                    setViewers(next);
-                  }}
-                />
-                {p.name}
-              </label>
-            ))}
-          </div>
-        )}
-      </fieldset>
+      <ViewerFields idPrefix="minutes" people={meta.people} visibility={visibility} viewers={viewers} onVisibility={setVisibility} onViewers={setViewers} hint="作ったあとでも、録音した人と権限管理者が変えられます。" />
 
       <fieldset disabled={recording || !!sending}>
         <legend className="minutes-legend">録音</legend>
@@ -421,7 +443,7 @@ function MinutesNew({ meta, onCancel, onCreated }: { meta: MinutesMeta; onCancel
 
       {source === 'file' && (
         <>
-          <label htmlFor="minutes-file">録音ファイル（webm・m4a・mp3・wav など。{mb(meta.maxAudioBytes)} まで）</label>
+          <label htmlFor="minutes-file">録音ファイル（webm・m4a・mp3・wav など。{sizeLabel(meta.maxAudioBytes)} まで）</label>
           <input id="minutes-file" type="file" accept="audio/*,.m4a,.webm" onChange={(e) => setPicked(e.target.files?.[0] ?? null)} disabled={!!sending} />
         </>
       )}
@@ -528,7 +550,70 @@ function EvidenceLinks({ evidence, onJump }: { evidence: MinutesEvidence[]; onJu
   );
 }
 
-function MinutesDetailView({ meetingId, onBack }: { meetingId: string; onBack: () => void }) {
+/**
+ * The title, the date and who may read the meeting, changed in place (2026-11-05; the recorder and the access
+ * administrators). Saving leaves the body being corrected as it is.
+ */
+function MinutesSettings({ m, people, onSaved, onCancel }: { m: MinutesDetail; people: MinutesPerson[]; onSaved: (next: MinutesDetail) => void; onCancel: () => void }) {
+  const [title, setTitle] = useState(m.title);
+  const [heldOn, setHeldOn] = useState(m.heldOn);
+  const [visibility, setVisibility] = useState<MinutesVisibility>(m.visibility);
+  const [viewers, setViewers] = useState(() => new Set(m.viewers.map((v) => v.id)));
+  const [saving, setSaving] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  // The button that opened it is gone: keyboard users go on from the form (without raising a phone's keyboard).
+  const form = useRef<HTMLFormElement | null>(null);
+  useEffect(() => form.current?.focus(), []);
+  // People chosen earlier who are no longer listed as members stay on the list, so they can be taken off.
+  const listed = [...people, ...m.viewers.filter((v) => !people.some((p) => p.id === v.id)).map((v) => ({ id: v.id, name: `${v.name}（いまは委員の一覧にいません）` }))];
+  const narrowed = m.visibility === 'members' && visibility === 'selected';
+  const renamed = (title.trim() !== m.title || heldOn !== m.heldOn) && m.body.trim() !== '';
+
+  const save = async (event: FormEvent) => {
+    event.preventDefault();
+    setSaving(true);
+    setFailure(null);
+    try {
+      const body: MinutesSettingsUpdate = { title, heldOn, visibility, viewers: [...viewers] };
+      onSaved(await api<MinutesDetail>('PUT', `/api/minutes/${m.id}/settings`, body));
+    } catch (err) {
+      setFailure(toFailure(err).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form ref={form} tabIndex={-1} className="bot-form panel minutes-settings" onSubmit={(e) => void save(e)} aria-label="会議名・日付・見られる人" data-testid="minutes-settings">
+      <label htmlFor="minutes-set-title">会議名</label>
+      <input id="minutes-set-title" type="text" value={title} maxLength={MINUTES_LIMITS.title} onChange={(e) => setTitle(e.target.value)} required />
+      <label htmlFor="minutes-set-date">日付</label>
+      <input id="minutes-set-date" type="date" value={heldOn} onChange={(e) => setHeldOn(e.target.value)} required />
+      {renamed && <p className="field-hint">本文の中の会議名・日付は変わりません。{m.stage === 'draft' ? '必要なら本文で直してください。' : ''}</p>}
+      <ViewerFields idPrefix="minutes-set" people={listed} visibility={visibility} viewers={viewers} onVisibility={setVisibility} onViewers={setViewers} />
+      {narrowed && m.registeredDecisions > 0 && (
+        <p className="status warning" role="status" data-testid="minutes-settings-registered">
+          この議事録から決定事項の台帳に {m.registeredDecisions} 件登録しています。見られる人を絞っても、台帳の項目は委員全員に見えたまま残ります。必要なら台帳で取り消してください。
+        </p>
+      )}
+      {failure && (
+        <p className="status error" role="alert">
+          {failure}
+        </p>
+      )}
+      <div className="actions">
+        <button type="submit" disabled={saving || !title.trim()} data-testid="minutes-settings-save">
+          {saving ? '変更しています…' : 'この内容に変更する'}
+        </button>
+        <button type="button" className="secondary" onClick={onCancel} disabled={saving}>
+          やめる
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function MinutesDetailView({ meetingId, people, onBack }: { meetingId: string; people: MinutesPerson[]; onBack: () => void }) {
   const [version, setVersion] = useState(0);
   const load = useCallback(
     (signal: AbortSignal) => {
@@ -549,6 +634,7 @@ function MinutesDetailView({ meetingId, onBack }: { meetingId: string; onBack: (
   const [body, setBody] = useState<{ text: string; base: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const audio = useRef<HTMLAudioElement | null>(null);
   const transcriptBox = useRef<HTMLOListElement | null>(null);
   const processing = m ? PROCESSING.includes(m.stage) : false;
@@ -614,6 +700,33 @@ function MinutesDetailView({ meetingId, onBack }: { meetingId: string; onBack: (
         <StageTag stage={m.stage} /> 録音: {m.createdByName}（{fmtDate(m.createdAt)}）
         {m.confirmedByName && m.confirmedAt ? `・確定: ${m.confirmedByName}（${fmtDate(m.confirmedAt)}）` : ''}・見られる人: {m.visibility === 'members' ? '委員全員' : m.viewers.map((v) => v.name).join('、') || '録音した人だけ'}
       </p>
+      {m.can.manage && !settingsOpen && (
+        <div>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              setMessage(null);
+              setSettingsOpen(true);
+            }}
+            data-testid="minutes-settings-open"
+          >
+            会議名・日付・見られる人を変える
+          </button>
+        </div>
+      )}
+      {m.can.manage && settingsOpen && (
+        <MinutesSettings
+          m={m}
+          people={people}
+          onCancel={() => setSettingsOpen(false)}
+          onSaved={(next) => {
+            setLatest(next);
+            setSettingsOpen(false);
+            setMessage({ tone: 'ok', text: '会議名・日付・見られる人を変更しました。' });
+          }}
+        />
+      )}
       {loader.error && <LoadStatus loader={loader} what="議事録" />}
       {processing && (
         <p className="status loading" role="status" data-testid="minutes-processing">
