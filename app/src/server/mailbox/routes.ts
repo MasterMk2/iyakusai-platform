@@ -7,7 +7,7 @@ import { MAIL_ATTACHMENTS_MAX, MAIL_BODY_MAX, MAIL_SUBJECT_MAX, REAUTH_REQUIRED,
 import { DUE_DATE_PATTERN } from '../../shared/mailDue.js';
 import { fiscalYearOf, tokyoDate } from '../../shared/books.js';
 import { registerBankRoutes } from '../bank/routes.js';
-import { BankService } from '../bank/service.js';
+import { BANK_SWEEP_INTERVAL_MS, BankService } from '../bank/service.js';
 import { registerBooksRoutes } from '../books/routes.js';
 import { sheetTabs } from '../books/sheet-tabs.js';
 import { SheetsSync, SheetsWriter } from '../books/sheets.js';
@@ -299,6 +299,18 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
   // the tokens encrypted in the mail folder, with the payments' accounting permissions (bank/routes.ts). Without
   // bank.json the status says "not configured" to those who may see it, and nothing else exists.
   const bank = rt.config.bank ? new BankService(rt.config.bank, { fetch: rt.bankFetch ?? fetch, now, clock: deps.clock }) : null;
+  if (bank) {
+    // Expired tokens are renewed or deleted on a timer, not only when someone next uses the connection.
+    const sweep = () => void bank.sweep().catch(() => undefined);
+    const first = setTimeout(sweep, 30_000);
+    const every = setInterval(sweep, BANK_SWEEP_INTERVAL_MS);
+    first.unref();
+    every.unref();
+    app.addHook('onClose', async () => {
+      clearTimeout(first);
+      clearInterval(every);
+    });
+  }
   registerBankRoutes(app, bank, {
     requireUser: deps.requireUser,
     session: deps.session,
