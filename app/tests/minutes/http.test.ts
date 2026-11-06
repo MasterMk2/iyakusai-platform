@@ -388,6 +388,104 @@ describe('meeting minutes', () => {
     expect(refused.json.message).toContain('2 GB まで');
   });
 
+  it('keep a recording sent in part through a restart, and go on with it only for the same file', async () => {
+    await build();
+    let recorder = await signIn(MEMBER, '21000002');
+    const opened = await call('POST', '/api/minutes/uploads', { cookie: recorder, body: { filename: 'meeting\n.m4a', type: 'audio/mp4', bytes: audio.length } });
+    const uploadId = opened.json.uploadId as string;
+    expect((await call('PUT', `/api/minutes/uploads/${uploadId}?offset=0`, { cookie: recorder, bytes: audio.subarray(0, 10) })).status).toBe(200);
+    const listed = await call('GET', '/api/minutes/uploads', { cookie: recorder });
+    expect(listed.json.items).toEqual([
+      { uploadId, filename: 'meeting .m4a', bytes: audio.length, received: 10, openedAt: new Date(ctx.clock.now).toISOString(), expiresAt: new Date(ctx.clock.now + 86_400_000).toISOString() },
+    ]);
+    // Someone else neither sees it nor goes on with it.
+    const other = await signIn(OTHER, '21000003');
+    expect((await call('GET', '/api/minutes/uploads', { cookie: other })).json.items).toEqual([]);
+    const head = (b: Buffer) => createHash('sha256').update(b).digest('hex');
+    expect((await call('POST', `/api/minutes/uploads/${uploadId}/resume`, { cookie: other, body: { bytes: audio.length, headBytes: 10, headSha256: head(audio.subarray(0, 10)) } })).status).toBe(404);
+
+    // The app restarts: the part is still there, and the sender goes on with it.
+    await app.close();
+    mail.close();
+    ctx.clock.now += 3_600_000;
+    await build();
+    recorder = await signIn(MEMBER, '21000002');
+    expect((await call('GET', '/api/minutes/uploads', { cookie: recorder })).json.items).toMatchObject([{ uploadId, received: 10 }]);
+    const resume = (body: Record<string, unknown>) => call('POST', `/api/minutes/uploads/${uploadId}/resume`, { cookie: recorder, body });
+    // Another file of the same size, or of another size, is refused; a head measured short is told how much is held.
+    const otherFile = Buffer.from(audio.map((b) => b ^ 1));
+    expect((await resume({ bytes: audio.length, headBytes: 10, headSha256: head(otherFile.subarray(0, 10)) })).json).toMatchObject({ error: 'conflict' });
+    expect((await resume({ bytes: audio.length + 1, headBytes: 10, headSha256: head(audio.subarray(0, 10)) })).status).toBe(409);
+    expect((await resume({ bytes: audio.length, headBytes: 4, headSha256: head(audio.subarray(0, 4)) })).json).toMatchObject({ error: 'offset', received: 10 });
+    const ok = await resume({ bytes: audio.length, headBytes: 10, headSha256: head(audio.subarray(0, 10)) });
+    expect(ok.status).toBe(200);
+    expect(ok.json).toMatchObject({ uploadId, received: 10 });
+
+    expect((await call('PUT', `/api/minutes/uploads/${uploadId}?offset=10`, { cookie: recorder, bytes: audio.subarray(10) })).status).toBe(200);
+    const created = await call('POST', '/api/minutes', { cookie: recorder, body: { uploadId, title: '役員会', heldOn: '2026-11-07', visibility: 'members', viewers: [] } });
+    expect(created.status).toBe(201);
+    expect(readdirSync(path.join(dir, 'mail', AUDIO_DIR))).toEqual([`${uploadId}.m4a`]);
+    const claim = (await worker(WORKER_PATHS.claim, { stages: ['transcribe'] })).json.job;
+    expect(claim.audio.sha256).toBe(createHash('sha256').update(audio).digest('hex'));
+    expect((await call('GET', '/api/minutes/uploads', { cookie: recorder })).json.items).toEqual([]);
+  });
+
+  it('drop a part a day after its last piece, and leftovers without their note', async () => {
+    await build();
+    const recorder = await signIn(MEMBER, '21000002');
+    const open = async () => {
+      const id = (await call('POST', '/api/minutes/uploads', { cookie: recorder, body: { filename: 'a.webm', type: 'audio/webm', bytes: audio.length } })).json.uploadId as string;
+      expect((await call('PUT', `/api/minutes/uploads/${id}?offset=0`, { cookie: recorder, bytes: audio.subarray(0, 5) })).status).toBe(200);
+      return id;
+    };
+    const old = await open();
+    ctx.clock.now += 20 * 3_600_000;
+    const fresh = await open();
+    const audioDir = path.join(dir, 'mail', AUDIO_DIR);
+    writeFileSync(path.join(audioDir, 'mt_00000000000000ff.uploading'), 'stray');
+    writeFileSync(path.join(audioDir, `${fresh}.uploading.json.next`), '{"id":');
+
+    await app.close();
+    mail.close();
+    ctx.clock.now += 5 * 3_600_000;
+    await build();
+    const again = await signIn(MEMBER, '21000002');
+    expect((await call('GET', '/api/minutes/uploads', { cookie: again })).json.items.map((i: { uploadId: string }) => i.uploadId)).toEqual([fresh]);
+    expect(readdirSync(audioDir).sort()).toEqual([`${fresh}.uploading`, `${fresh}.uploading.json`]);
+    expect(old).not.toBe(fresh);
+  });
+
+  it('keep the transcription with a worker that reports, however long it takes, and take it back from one that stopped', async () => {
+    await build();
+    const recorder = await signIn(MEMBER, '21000002');
+    const id = (await upload(recorder, audio, { title: '長い会議', heldOn: '2026-11-07', visibility: 'members', viewers: [] })).json.id as string;
+    const job = (await worker(WORKER_PATHS.claim, { stages: ['transcribe'] })).json.job;
+    const report = (token: string, done: number) => worker(WORKER_PATHS.progress, { id, leaseToken: token, stage: 'transcribe', done, total: 40_000 });
+    // Twelve hours of a slow machine, reporting all the while: the lease of eight hours never runs out.
+    for (let h = 1; h <= 12; h++) {
+      ctx.clock.now += 3_600_000;
+      expect((await report(job.leaseToken, h * 3_000)).status).toBe(200);
+      expect((await worker(WORKER_PATHS.claim, { stages: ['transcribe'] })).json.job).toBeNull();
+    }
+    expect((await worker(WORKER_PATHS.result, { id, leaseToken: job.leaseToken, stage: 'transcribe', transcript: { segments, durationSec: 40_000, model: 'large-v3' } })).status).toBe(200);
+
+    // Another meeting whose worker stops reporting: taken back two hours after its last report (past the first eight).
+    // (The sign-in of twelve hours ago has run out: signed in again.)
+    const login = await call('POST', '/api/auth/login', { body: { loginId: '21000002', password: PASSWORD } });
+    const id2 = (await upload(cookieOf(login.headers['set-cookie']), audio, { title: '止まった会議', heldOn: '2026-11-07', visibility: 'members', viewers: [] })).json.id as string;
+    const job2 = (await worker(WORKER_PATHS.claim, { stages: ['transcribe'] })).json.job;
+    ctx.clock.now += 7 * 3_600_000;
+    expect((await worker(WORKER_PATHS.progress, { id: id2, leaseToken: job2.leaseToken, stage: 'transcribe', done: 10, total: null })).status).toBe(200);
+    ctx.clock.now += 2 * 3_600_000 - 60_000;
+    expect((await worker(WORKER_PATHS.claim, { stages: ['transcribe'] })).json.job).toBeNull();
+    ctx.clock.now += 120_000;
+    const taken = (await worker(WORKER_PATHS.claim, { stages: ['transcribe'] })).json.job;
+    expect(taken).toMatchObject({ id: id2, stage: 'transcribe' });
+    expect(taken.leaseToken).not.toBe(job2.leaseToken);
+    // A report of the old lease neither shows nor pushes the new one out.
+    expect((await worker(WORKER_PATHS.progress, { id: id2, leaseToken: job2.leaseToken, stage: 'transcribe', done: 20, total: null })).status).toBe(409);
+  });
+
   it('refuse an unnamed worker before reading its body, and say when a result is too large', async () => {
     await build();
     const big = Buffer.alloc(17 * 1024 * 1024, 0x20);

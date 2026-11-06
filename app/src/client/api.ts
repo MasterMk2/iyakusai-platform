@@ -1,4 +1,5 @@
-import type { ApiError } from '../shared/api';
+// With the extension, so that the unit tests (Node's module resolution) can import the modules that use this file.
+import type { ApiError } from '../shared/api.js';
 
 export class ApiFailure extends Error {
   readonly status: number;
