@@ -35,6 +35,24 @@ class Summary(unittest.TestCase):
         self.assertLessEqual(len(p), w.GLOSSARY_CHARS + 2)
         self.assertTrue(p.startswith("医薬祭実行委員会の会議。"))
 
+    def test_summary_is_told_the_committee_words(self):
+        job = {"title": "役員会", "heldOn": "2026-11-07", "glossary": ["協賛", "渉外課", "協賛", " ", "合成 太郎"],
+               "review": {"id": 1, "comment": "直して", "draft": {}, "body": "", "earlier": []}}
+        for prompt in (w.build_prompt(job, ["[00:00:00|0] 共産の依頼"], 1, 1), w.build_revise_prompt(job, ["[00:00:00|0] 共産の依頼"], 1, 1)):
+            rule = next(line for line in prompt.splitlines() if "正しい表記" in line)
+            self.assertTrue(rule.endswith(": 協賛、渉外課、合成 太郎"), rule)
+            self.assertIn("quote だけは文字起こしのまま", rule)
+        # 用語集が無い（古いアプリ）ときは、その行ごと無い。
+        bare = w.build_prompt({**job, "glossary": []}, ["[00:00:00|0] あ"], 1, 1)
+        self.assertNotIn("正しい表記", bare)
+        self.assertIn("unclear に書く。\n- 個人の事情", bare)
+
+    def test_summary_glossary_is_cut_short(self):
+        rule = w.glossary_rule(["名前%d" % i for i in range(1000)])
+        words = rule.rstrip("\n").split(": ", 1)[1].split("、")
+        self.assertLessEqual(sum(len(x) + 1 for x in words), w.SUMMARY_GLOSSARY_CHARS)
+        self.assertEqual(words[0], "名前0")
+
     def test_split_parts_keeps_every_line(self):
         lines = ["あ" * 100 for _ in range(50)]
         parts = w.split_parts(lines, limit=1000)
