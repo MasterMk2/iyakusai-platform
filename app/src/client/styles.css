@@ -478,6 +478,8 @@ html { scroll-padding-top: 64px; }
 .minutes-live { width: 100%; border-radius: 6px; font-size: 16px; }
 .minutes-live button { margin-top: 0; }
 .minutes-done { display: grid; gap: 6px; justify-items: start; }
+.minutes-pending { margin: 0; padding-left: 1.2em; display: grid; gap: 4px; }
+.minutes-pending button { margin: 0 0 0 8px; }
 .minutes-done audio, .minutes-audio { width: 100%; max-width: 640px; }
 .minutes-columns { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; align-items: start; }
 @media (max-width: 860px) { .minutes-columns { grid-template-columns: minmax(0, 1fr); } }

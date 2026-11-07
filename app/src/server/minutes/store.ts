@@ -8,7 +8,7 @@ import type { MinutesAudioExtension, MinutesDraft, MinutesStage, MinutesVisibili
 // carries it; the recordings are separate files in minutes-audio/ and are not backed up (they are deleted a
 // fixed number of days after the first confirmation). A meeting moves through the stages of shared/minutes.ts; the
 // worker takes a waiting stage with a lease, and a lease that runs out puts the stage back (at most MAX_ATTEMPTS
-// times). Every change of the minutes keeps a history row with the body as it was before; a change of the settings
+// times; since 2026-11-07 a report of progress pushes the lease out, so only a worker that stopped loses it). Every change of the minutes keeps a history row with the body as it was before; a change of the settings
 // (title, date, who may read it) keeps the settings as they were before, as JSON in the same column; a corrected
 // segment of the transcript keeps its index and text before, the same way.
 //
@@ -24,6 +24,12 @@ const SCHEMA_VERSION = '1';
 export const MAX_ATTEMPTS = 3;
 /** How long the worker may hold a stage before it is offered again. */
 export const LEASE_MS = { transcribe: 8 * 3_600_000, summarize: 45 * 60_000 } as const;
+/**
+ * How far each report of progress pushes the lease out (2026-11-07). The worker reports about every 20 seconds while
+ * it works, so a stage that takes longer than LEASE_MS on a slow machine is kept; a worker that stops reporting loses
+ * the stage this long after its last report (or LEASE_MS after it took it, whichever is later).
+ */
+export const LEASE_RENEW_MS = { transcribe: 2 * 3_600_000, summarize: 45 * 60_000 } as const;
 export type WorkerStage = keyof typeof LEASE_MS;
 
 const SCHEMA = `
@@ -412,6 +418,12 @@ export class MinutesStore {
         .run(`${stage}_run`, token, nowMs + LEASE_MS[stage], r.id);
       return { row: this.get(r.id)!, stage, leaseToken: token };
     });
+  }
+
+  /** Pushes the lease out to `untilMs` (never pulls it in) while the worker holds the stage with this lease. */
+  renewLease(id: string, stage: WorkerStage, token: string, untilMs: number): boolean {
+    const r = this.db.prepare('UPDATE meetings SET lease_until=MAX(lease_until, ?) WHERE id=? AND stage=? AND lease_token=?').run(untilMs, id, `${stage}_run`, token);
+    return Number(r.changes) > 0;
   }
 
   /** The row while the worker still holds this stage with this lease, else null (a late or repeated answer). */

@@ -16,9 +16,11 @@ import {
   type MinutesStage,
   type MinutesVisibility,
   sizeLabel,
+  type MinutesUploadItem,
   type TranscriptSegment,
 } from '../../../shared/minutes';
-import { api, ApiFailure, fmtDate, toFailure } from '../../api';
+import { api, fmtDate, toFailure } from '../../api';
+import { forgetUpload, pendingUploads, sendRecording, type UploadState } from './minutesUpload';
 import { useLoader } from '../../useLoader';
 import { LoadStatus } from '../LoadStatus';
 import { MinutesReviewHistory, MinutesSendBack } from './MinutesSendBack';
@@ -344,39 +346,7 @@ function useRecorder() {
   return { rec, error: current.error, elapsed, start, pause, resume, stop, discard, setUploading };
 }
 
-// ---- uploading in pieces (the server takes 8 MB at a time)
-
-async function uploadRecording(file: File, onProgress: (sent: number) => void): Promise<string> {
-  const opened = await api<{ uploadId: string; chunkBytes: number }>('POST', '/api/minutes/uploads', { filename: file.name, type: file.type, bytes: file.size });
-  let offset = 0;
-  let failures = 0;
-  while (offset < file.size) {
-    const piece = file.slice(offset, offset + opened.chunkBytes);
-    let res: Response;
-    try {
-      res = await fetch(`/api/minutes/uploads/${opened.uploadId}?offset=${offset}`, {
-        method: 'PUT',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/octet-stream', 'X-SMM-CSRF': '1' },
-        body: piece,
-      });
-    } catch {
-      if (++failures > 5) throw new ApiFailure(0, null, '通信が切れたため、録音ファイルを送れませんでした。通信状態を確かめてから、もう一度取り込んでください。');
-      await new Promise((r) => setTimeout(r, 2000 * failures));
-      continue;
-    }
-    const json = (await res.json().catch(() => null)) as { received?: number; message?: string } | null;
-    if (res.status === 409 && typeof json?.received === 'number') {
-      offset = json.received;
-      continue;
-    }
-    if (!res.ok) throw new ApiFailure(res.status, null, json?.message ?? `サーバーがエラーを返しました（${res.status}）。`);
-    offset = json?.received ?? offset + piece.size;
-    failures = 0;
-    onProgress(offset);
-  }
-  return opened.uploadId;
-}
+const clockOf = (ms: number) => new Date(ms).toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit' });
 
 // ---- who may read a meeting (the new-meeting form and the settings of a meeting)
 
@@ -435,11 +405,29 @@ function MinutesNew({ meta, onCancel, onCreated }: { meta: MinutesMeta; onCancel
   const [source, setSource] = useState<'record' | 'file'>('record');
   const [withTab, setWithTab] = useState(false);
   const [picked, setPicked] = useState<File | null>(null);
-  const [sending, setSending] = useState<{ sent: number; total: number } | null>(null);
+  const [sending, setSending] = useState<UploadState | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  // Recordings this person sent only in part (2026-11-07): choosing the same file goes on from where it stopped.
+  const [pending, setPending] = useState<MinutesUploadItem[]>([]);
   const recorder = useRecorder();
   const recording = recorder.rec.state === 'recording' || recorder.rec.state === 'paused';
   const file = source === 'file' ? picked : recorder.rec.state === 'done' ? recorder.rec.file : null;
+
+  const refreshPending = useCallback(() => {
+    void pendingUploads().then(setPending);
+  }, []);
+  useEffect(() => {
+    refreshPending();
+  }, [refreshPending]);
+
+  const dropPending = async (uploadId: string) => {
+    try {
+      await api('DELETE', `/api/minutes/uploads/${uploadId}`);
+    } catch (err) {
+      setFailure(toFailure(err).message);
+    }
+    refreshPending();
+  };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -449,15 +437,18 @@ function MinutesNew({ meta, onCancel, onCreated }: { meta: MinutesMeta; onCancel
       setFailure(`録音ファイルは ${sizeLabel(meta.maxAudioBytes)} までです（このファイルは ${mb(file.size)}）。`);
       return;
     }
-    setSending({ sent: 0, total: file.size });
+    setSending({ sent: 0, total: file.size, waitingUntil: null });
     recorder.setUploading(true);
     try {
-      const uploadId = await uploadRecording(file, (sent) => setSending({ sent, total: file.size }));
+      const candidates = pending.filter((p) => p.bytes === file.size).map((p) => p.uploadId);
+      const uploadId = await sendRecording(file, setSending, candidates);
       const created = await api<MinutesDetail>('POST', '/api/minutes', { uploadId, title, heldOn, visibility, viewers: [...viewers] });
+      forgetUpload(file);
       if (recorder.rec.state === 'done') recorder.discard();
       onCreated(created.id);
     } catch (err) {
       setFailure(toFailure(err).message);
+      refreshPending();
     } finally {
       recorder.setUploading(false);
       setSending(null);
@@ -476,6 +467,22 @@ function MinutesNew({ meta, onCancel, onCreated }: { meta: MinutesMeta; onCancel
       <input id="minutes-date" type="date" value={heldOn} onChange={(e) => setHeldOn(e.target.value)} required />
 
       <ViewerFields idPrefix="minutes" people={meta.people} visibility={visibility} viewers={viewers} onVisibility={setVisibility} onViewers={setViewers} hint="作ったあとでも、録音した人と権限管理者が変えられます。" />
+
+      {pending.length > 0 && !sending && (
+        <div className="banner banner-warning" role="status" data-testid="minutes-pending">
+          <p>送りかけの録音があります。同じファイルを選んで「取り込む」を押すと、続きから送ります。</p>
+          <ul className="minutes-pending">
+            {pending.map((p) => (
+              <li key={p.uploadId}>
+                {p.filename || '名前のない録音'}（{mb(p.received)} / {mb(p.bytes)}。{fmtDate(p.expiresAt)} まで残します）
+                <button type="button" className="quiet" onClick={() => void dropPending(p.uploadId)}>
+                  捨てる
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <fieldset disabled={recording || !!sending}>
         <legend className="minutes-legend">録音</legend>
@@ -555,8 +562,10 @@ function MinutesNew({ meta, onCancel, onCreated }: { meta: MinutesMeta; onCancel
       )}
 
       {sending && (
-        <p className="status loading" role="status">
-          送信中… {mb(sending.sent)} / {mb(sending.total)}
+        <p className={`status ${sending.waitingUntil ? 'warning' : 'loading'}`} role="status" data-testid="minutes-sending">
+          {sending.waitingUntil
+            ? `通信が切れています。つながれば続きから送ります（${clockOf(sending.waitingUntil)} まで待ちます）。送った分: ${mb(sending.sent)} / ${mb(sending.total)}`
+            : `送信中… ${mb(sending.sent)} / ${mb(sending.total)}`}
         </p>
       )}
       {failure && (

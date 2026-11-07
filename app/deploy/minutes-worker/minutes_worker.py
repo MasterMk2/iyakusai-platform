@@ -9,7 +9,7 @@
   MINUTES_APP_URL      アプリの URL（例 https://app.example.org）
   MINUTES_KEY_FILE     鍵のファイル（600）
   MINUTES_STAGES       transcribe,summarize（既定は両方）
-  WHISPER_MODEL        large-v3（既定） / medium / small
+  WHISPER_MODEL        large-v3（既定） / large-v3-turbo / medium / small
   WHISPER_DEVICE       auto / cpu / cuda
   WHISPER_COMPUTE      既定: cuda は float16、cpu は int8
   WHISPER_THREADS      CPU のスレッド数（0 は自動）

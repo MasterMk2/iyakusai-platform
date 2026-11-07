@@ -271,6 +271,36 @@ export interface MinutesListResponse {
   items: MinutesListItem[];
 }
 
+/**
+ * A recording sent only in part (2026-11-07). The part already sent stays on the server through a restart of the app,
+ * until it has had no new piece for a day; choosing the same file again goes on from where it stopped.
+ */
+export interface MinutesUploadItem {
+  uploadId: string;
+  filename: string;
+  bytes: number;
+  received: number;
+  openedAt: string;
+  /** Dropped at this time unless another piece comes. */
+  expiresAt: string;
+}
+
+export interface MinutesUploadsResponse {
+  items: MinutesUploadItem[];
+}
+
+/**
+ * Going on with a recording sent in part: the file's size and the SHA-256 of its first `headBytes` bytes (as many as
+ * the server holds, up to MINUTES_UPLOAD_HEAD_BYTES), so the rest of another file is never added to it.
+ */
+export interface MinutesUploadResume {
+  bytes: number;
+  headBytes: number;
+  headSha256: string;
+}
+
+export const MINUTES_UPLOAD_HEAD_BYTES = 1024 * 1024;
+
 export interface MinutesDetail {
   id: string;
   title: string;

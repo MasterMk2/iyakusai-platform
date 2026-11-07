@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { appendFileSync, createReadStream, existsSync, readdirSync, renameSync, rmSync, statfsSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, closeSync, createReadStream, existsSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statfsSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -14,6 +14,7 @@ import {
   MINUTES_AUDIO_TYPES,
   MINUTES_CONSENT_TEXT,
   MINUTES_LIMITS,
+  MINUTES_UPLOAD_HEAD_BYTES,
   MINUTES_VISIBILITIES,
   sizeLabel,
   type MinutesAudioExtension,
@@ -23,6 +24,7 @@ import {
   type MinutesPerson,
   type MinutesProgress,
   type MinutesReviewBodyResponse,
+  type MinutesUploadsResponse,
   type MinutesVersionResponse,
   type TranscriptSegment,
 } from '../../shared/minutes.js';
@@ -37,7 +39,7 @@ import type { MailSession } from '../mailbox/routes.js';
 import type { People } from '../mailbox/service.js';
 import { MAX_SKEW_MS, verifySignature } from '../tasks/signing.js';
 import type { MinutesConfig } from './config.js';
-import { MinutesStore, newMeetingId, type MeetingRow, type StoredTranscript, type WorkerStage } from './store.js';
+import { LEASE_RENEW_MS, MinutesStore, newMeetingId, type MeetingRow, type StoredTranscript, type WorkerStage } from './store.js';
 import { checkedDraft, draftSchema, transcriptSchema } from './validate.js';
 
 // Meeting minutes (α, 2026-11-02). Browser routes under /api/minutes (Discord login, committee members only, like
@@ -74,8 +76,8 @@ const UPLOADS_PER_PERSON = 3;
 const UNCONFIRMED_PER_PERSON = 10;
 /** Free disk space always left for the rest of the server (mail, the database, the backups). */
 const DISK_RESERVE_BYTES = 5 * 1024 * 1024 * 1024;
-/** An upload left unfinished this long is dropped. */
-const UPLOAD_EXPIRES_MS = 12 * 3_600_000;
+/** An upload that has had no new piece this long is dropped, with its part on disk (2026-11-07: was 12 hours after it was opened). */
+const UPLOAD_IDLE_MS = 24 * 3_600_000;
 /** Words the speech model is told to expect, besides the members' names and departments. */
 const FIXED_GLOSSARY = ['医薬祭', '実行委員会', '役員会', '富山大学', '杉谷', '五福', '高岡', '富大祭', '創己祭', '白パス', '協賛', '出展団体', '物品貸出', '基盤システム'];
 
@@ -118,6 +120,17 @@ const oneLine = (s: string) => s.replace(/[\u0000-\u001f\u007f\s]+/g, ' ').trim(
 const uploadParams = z.strictObject({ uploadId: z.string().regex(/^mt_[0-9a-f]{16}$/) });
 const uploadOpen = z.strictObject({ filename: z.string().max(255), type: z.string().max(100), bytes: z.number().int().min(1) });
 const chunkQuery = z.strictObject({ offset: z.coerce.number().int().min(0) });
+const resumeBody = z.strictObject({ bytes: z.number().int().min(1), headBytes: z.number().int().min(0).max(MINUTES_UPLOAD_HEAD_BYTES), headSha256: z.string().regex(/^[0-9a-f]{64}$/) });
+/** The note kept beside the part of an upload on disk, so a restart of the app does not lose it (2026-11-07). */
+const storedUpload = z.strictObject({
+  id: z.string().regex(/^mt_[0-9a-f]{16}$/),
+  userId: z.string().min(1).max(200),
+  ext: z.enum(MINUTES_AUDIO_EXTENSIONS),
+  bytes: z.number().int().min(1).max(MINUTES_LIMITS.audioBytes),
+  name: z.string().max(255),
+  openedAt: z.number().int().min(0),
+  touchedAt: z.number().int().min(0),
+});
 const settingsFields = {
   title: z.string().max(MINUTES_LIMITS.title * 2).transform(oneLine).pipe(z.string().min(1, '会議名を入力してください。').max(MINUTES_LIMITS.title)),
   heldOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日付を選んでください。'),
@@ -134,7 +147,11 @@ interface Upload {
   bytes: number;
   received: number;
   tmp: string;
+  /** The file's name as the sender's device gave it (shown when the sender comes back to it). */
+  name: string;
   openedAt: number;
+  /** When the last piece came (or the upload was opened or taken up again). */
+  touchedAt: number;
   /** Being hashed and moved into place: it can no longer be dropped. */
   finalizing?: boolean;
 }
@@ -360,16 +377,65 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
   // ---- uploading a recording in pieces (the reverse proxy takes at most 17 MB per request; a long recording is
   // hundreds of MB). POST /api/minutes/uploads opens an upload, PUT .../uploads/<id>?offset=<n> appends one piece
   // (a lost piece is sent again from the offset the server answers), POST /api/minutes makes the meeting from it.
+  //
+  // 2026-11-07: an upload outlives a restart of the app (a note beside its part on disk), and the sender can come back
+  // to it after reloading the page: GET .../uploads lists the sender's own, and POST .../uploads/<id>/resume checks
+  // that the file chosen again is the same (its size and the first bytes the server holds) before going on.
 
   const uploads = new Map<string, Upload>();
   const uploadPath = (id: string) => path.join(store.audioDir, `${id}.uploading`);
+  const notePath = (id: string) => `${uploadPath(id)}.json`;
+  /** Written whole or not at all (a note cut off by a stop would lose the part with it). */
+  const saveUpload = (u: Upload) => {
+    const next = `${notePath(u.id)}.next`;
+    writeFileSync(next, JSON.stringify({ id: u.id, userId: u.userId, ext: u.ext, bytes: u.bytes, name: u.name, openedAt: u.openedAt, touchedAt: u.touchedAt }), { mode: 0o600 });
+    renameSync(next, notePath(u.id));
+  };
   const dropUpload = (u: Upload) => {
     if (u.finalizing) return;
     uploads.delete(u.id);
     rmSync(u.tmp, { force: true });
+    rmSync(notePath(u.id), { force: true });
   };
-  // Leftovers of a restart in the middle of an upload.
-  for (const name of readdirSync(store.audioDir)) if (name.endsWith('.uploading')) rmSync(path.join(store.audioDir, name), { force: true });
+  // What was being sent when the app stopped: taken back with as many bytes as its part holds (a piece cut off by the
+  // stop is sent again from there). A part without a readable note, or untouched too long, is removed as before.
+  for (const name of readdirSync(store.audioDir)) {
+    if (!name.endsWith('.uploading.json')) continue;
+    let restored: Upload | null = null;
+    try {
+      const saved = storedUpload.parse(JSON.parse(readFileSync(path.join(store.audioDir, name), 'utf8')));
+      const tmp = uploadPath(saved.id);
+      const size = name === `${saved.id}.uploading.json` && existsSync(tmp) ? statSync(tmp).size : -1;
+      if (size >= 0 && size <= saved.bytes && now() - saved.touchedAt <= UPLOAD_IDLE_MS) restored = { ...saved, received: size, tmp };
+    } catch {
+      // unreadable: removed below
+    }
+    if (restored) uploads.set(restored.id, restored);
+    else rmSync(path.join(store.audioDir, name), { force: true });
+  }
+  for (const name of readdirSync(store.audioDir)) {
+    const orphan = (name.endsWith('.uploading') && !uploads.has(name.slice(0, -'.uploading'.length))) || name.endsWith('.uploading.json.next');
+    if (orphan) rmSync(path.join(store.audioDir, name), { force: true });
+  }
+
+  /** SHA-256 of the first `bytes` bytes of a part on disk. */
+  const headOf = (file: string, bytes: number) => {
+    const buf = Buffer.alloc(bytes);
+    if (bytes > 0) {
+      const fd = openSync(file, 'r');
+      try {
+        let got = 0;
+        while (got < bytes) {
+          const n = readSync(fd, buf, got, bytes - got, got);
+          if (n === 0) break;
+          got += n;
+        }
+      } finally {
+        closeSync(fd);
+      }
+    }
+    return createHash('sha256').update(buf).digest('hex');
+  };
 
   function ownUpload(uploadId: string, user: User): Upload {
     const u = uploads.get(uploadId);
@@ -397,10 +463,45 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
     const mine = [...uploads.values()].filter((u) => u.userId === user.id && !u.finalizing);
     if (mine.length >= UPLOADS_PER_PERSON) dropUpload(mine.sort((a, b) => a.openedAt - b.openedAt)[0]!);
     const id = newMeetingId();
-    const u: Upload = { id, userId: user.id, ext, bytes: body.bytes, received: 0, tmp: uploadPath(id), openedAt: now() };
+    const at = now();
+    const u: Upload = { id, userId: user.id, ext, bytes: body.bytes, received: 0, tmp: uploadPath(id), name: oneLine(body.filename).slice(0, 255), openedAt: at, touchedAt: at };
     writeFileSync(u.tmp, '', { mode: 0o600 });
+    saveUpload(u);
     uploads.set(id, u);
     return reply.code(201).send({ uploadId: id, chunkBytes: UPLOAD_CHUNK_BYTES });
+  });
+
+  app.get('/api/minutes/uploads', async (request): Promise<MinutesUploadsResponse> => {
+    const user = member(request);
+    const items = [...uploads.values()]
+      .filter((u) => u.userId === user.id && !u.finalizing)
+      .sort((a, b) => b.touchedAt - a.touchedAt)
+      .map((u) => ({
+        uploadId: u.id,
+        filename: u.name,
+        bytes: u.bytes,
+        received: u.received,
+        openedAt: new Date(u.openedAt).toISOString(),
+        expiresAt: new Date(u.touchedAt + UPLOAD_IDLE_MS).toISOString(),
+      }));
+    return { items };
+  });
+
+  // Going on with an upload: the same size, and the first bytes the server holds (up to 1 MB) are the same. A sender
+  // that measured fewer or more bytes than the server now holds is told how many, and measures again.
+  app.post('/api/minutes/uploads/:uploadId/resume', async (request, reply) => {
+    const user = member(request);
+    const u = ownUpload(deps.parse(uploadParams, request.params).uploadId, user);
+    const body = deps.parse(resumeBody, request.body);
+    if (u.finalizing) throw new DomainError('conflict', 'この録音はもう取り込み中です。');
+    const headBytes = Math.min(u.received, MINUTES_UPLOAD_HEAD_BYTES);
+    if (body.headBytes !== headBytes) return reply.code(409).send({ error: 'offset', message: '続きの位置が合いません。', received: u.received });
+    if (body.bytes !== u.bytes || body.headSha256 !== headOf(u.tmp, headBytes)) {
+      throw new DomainError('conflict', '選んだファイルは、送りかけの録音と違います。同じファイルを選ぶか、新しく取り込んでください。');
+    }
+    u.touchedAt = now();
+    saveUpload(u);
+    return { uploadId: u.id, chunkBytes: UPLOAD_CHUNK_BYTES, received: u.received };
   });
 
   void app.register(async (scope) => {
@@ -422,6 +523,8 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
       if (u.received + piece.length > u.bytes) throw new DomainError('validation', '録音ファイルが最初に伝えた大きさを超えました。');
       appendFileSync(u.tmp, piece);
       u.received += piece.length;
+      u.touchedAt = now();
+      saveUpload(u);
       return { received: u.received };
     });
   });
@@ -447,6 +550,7 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
     try {
       await pipeline(createReadStream(u.tmp), new Writable({ write: (chunk: Buffer, _enc, done) => { hash.update(chunk); done(); } }));
       renameSync(u.tmp, finalPath);
+      rmSync(notePath(u.id), { force: true });
     } catch (err) {
       u.finalizing = false;
       throw err;
@@ -880,6 +984,9 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
       }
       const row = store.get(body.id);
       if (!row || !holds(row, body)) return reply.code(409).send({ error: 'not_held' });
+      // A worker that reports is still at it: its lease is pushed out (2026-11-07), so a slow machine is never
+      // overtaken by its own lease; one that stops reporting loses the stage as before.
+      store.renewLease(row.id, body.stage, body.leaseToken, now() + LEASE_RENEW_MS[body.stage]);
       if (!reported.has(row.id) && reported.size >= MAX_REPORTED) {
         for (const [id, p] of reported) {
           const r = store.get(id);
@@ -906,7 +1013,7 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
   // ---- deleting the audio a fixed number of days after confirmation (設計書 §4-2)
 
   const sweep = () => {
-    for (const u of [...uploads.values()]) if (now() - u.openedAt > UPLOAD_EXPIRES_MS) dropUpload(u);
+    for (const u of [...uploads.values()]) if (now() - u.touchedAt > UPLOAD_IDLE_MS) dropUpload(u);
     try {
       const cutoff = new Date(now() - config.audioRetentionDays * 86_400_000).toISOString();
       for (const row of store.audioDue(cutoff)) {
