@@ -516,8 +516,30 @@ describe('meeting minutes', () => {
 describe('sending back, listening again and correcting confirmed minutes', { timeout: 30_000 }, () => {
   const measured = [
     { ...segments[0]!, confidence: { logprob: -0.1, noSpeech: 0.01, compression: 1.5, weak: [] } },
-    { ...segments[1]!, text: '共産の依頼文は総務部が十一月二十日までに作る、ということで決定とします。', confidence: { logprob: -0.13, noSpeech: 0.5, compression: 1.5, weak: [{ start: 300, end: 300.5, word: '共産', p: 0.18 }] } },
+    // A wrong word the fixes of the committee's words leave as it is (共産 they fix).
+    { ...segments[1]!, text: '強酸の依頼文は総務部が十一月二十日までに作る、ということで決定とします。', confidence: { logprob: -0.13, noSpeech: 0.5, compression: 1.5, weak: [{ start: 300, end: 300.5, word: '強酸', p: 0.18 }] } },
   ];
+
+  it('the committee words the speech model writes wrong are fixed as the transcript comes in', async () => {
+    await build();
+    const recorder = await signIn(MEMBER, '21000002');
+    const id = (await upload(recorder, audio, { title: '役員会', heldOn: '2026-11-07', visibility: 'members', viewers: [] })).json.id as string;
+    const t = (await worker(WORKER_PATHS.claim, { stages: ['transcribe'] })).json.job;
+    const heard = [
+      { start: 0, end: 4, text: '共産の依頼について、障害課から報告をお願いします。', confidence: { logprob: -0.1, noSpeech: 0.01, compression: 1.5, weak: [{ start: 0, end: 0.4, word: '共', p: 0.3 }, { start: 0.4, end: 0.8, word: '産', p: 0.4 }, { start: 2, end: 2.5, word: '障害課', p: 0.2 }] } },
+      { start: 5, end: 9, text: '模擬店の出店団体には、システム障害のことも伝えます。' },
+    ];
+    expect((await worker(WORKER_PATHS.result, { id, leaseToken: t.leaseToken, stage: 'transcribe', transcript: { segments: heard, durationSec: 10, model: 'large-v3-turbo' } })).status).toBe(200);
+    const got = (await call('GET', `/api/minutes/${id}`, { cookie: recorder })).json.transcript.segments;
+    expect(got[0].text).toBe('協賛の依頼について、渉外課から報告をお願いします。');
+    // 共 and 産 are no longer in the text, so they are not marked; 障害課 is marked as 渉外課.
+    expect(got[0].confidence.weak).toEqual([{ start: 2, end: 2.5, word: '渉外課', p: 0.2 }]);
+    expect(got[1].text).toBe(heard[1]!.text);
+    // The summary works from the fixed text, and is told the committee's words.
+    const s = (await worker(WORKER_PATHS.claim, { stages: ['summarize'] })).json.job;
+    expect(s.transcript.segments[0].text).toBe('協賛の依頼について、渉外課から報告をお願いします。');
+    expect(s.glossary).toEqual(expect.arrayContaining(['協賛', '白パス', '創己祭']));
+  });
 
   /** A meeting through transcription (with the speech model's confidence) to its first AI draft. */
   async function drafted(recorder: string, fields: Record<string, unknown>, decisions = ['協賛の依頼文は総務部が作る']): Promise<string> {
@@ -539,7 +561,7 @@ describe('sending back, listening again and correcting confirmed minutes', { tim
     const id = await drafted(recorder, { title: '役員会', heldOn: '2026-11-06', visibility: 'selected', viewers: [otherId] });
 
     const first = (await call('GET', `/api/minutes/${id}`, { cookie: chosen })).json;
-    expect(first.transcript.segments[1].confidence.weak).toEqual([{ start: 300, end: 300.5, word: '共産', p: 0.18 }]);
+    expect(first.transcript.segments[1].confidence.weak).toEqual([{ start: 300, end: 300.5, word: '強酸', p: 0.18 }]);
     expect(first).toMatchObject({ stage: 'draft', version: 2, revising: false, reopened: false, bodyEdited: false, reviews: [], versions: [], can: { review: true, check: true, reopen: false, discard: false } });
 
     // Listening again: the reader corrects the text; someone who cannot read the meeting learns nothing.
