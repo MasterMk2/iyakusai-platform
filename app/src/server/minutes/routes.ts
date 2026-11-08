@@ -39,6 +39,7 @@ import type { MailSession } from '../mailbox/routes.js';
 import type { People } from '../mailbox/service.js';
 import { MAX_SKEW_MS, verifySignature } from '../tasks/signing.js';
 import type { MinutesConfig } from './config.js';
+import { fixedSegment } from './fixes.js';
 import { LEASE_RENEW_MS, MinutesStore, newMeetingId, type MeetingRow, type StoredTranscript, type WorkerStage } from './store.js';
 import { checkedDraft, draftSchema, transcriptSchema } from './validate.js';
 
@@ -944,7 +945,7 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
         ok = store.fail(body.id, body.leaseToken, body.stage, body.error.replace(/\s+/g, ' ').trim() || '処理に失敗しました。', at);
       } else if (body.stage === 'transcribe' && body.transcript) {
         const segments = body.transcript.segments
-          .map((s) => ({ start: s.start, end: Math.max(s.start, s.end), text: s.text.trim(), ...(s.confidence ? { confidence: s.confidence } : {}) }))
+          .map((s) => fixedSegment({ start: s.start, end: Math.max(s.start, s.end), text: s.text.trim(), ...(s.confidence ? { confidence: s.confidence } : {}) }))
           .filter((s) => s.text);
         ok = store.completeTranscript(body.id, body.leaseToken, { ...body.transcript, segments }, at);
       } else if (body.stage === 'summarize' && body.draft) {
