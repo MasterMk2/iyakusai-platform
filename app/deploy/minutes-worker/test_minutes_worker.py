@@ -53,6 +53,16 @@ class Summary(unittest.TestCase):
         self.assertLessEqual(sum(len(x) + 1 for x in words), w.SUMMARY_GLOSSARY_CHARS)
         self.assertEqual(words[0], "名前0")
 
+    def test_a_copy_of_the_glossary_is_not_a_line(self):
+        words = ["医薬祭", "役員会", "協賛", "山田 花子", "医薬祭実行委員会"]
+        prompt = w.glossary_prompt(words)
+        # 2026-11-08 の本物の録音で large-v3 が書いた形（読点が入ったものも）と、用語が続いた形は捨てる。
+        for text in ("医薬祭実行委員会の会議。", "医薬祭、実行委員会の会議。", " 役員会、協賛、山田花子。 "):
+            self.assertTrue(w.echoes_prompt(text, prompt, words), text)
+        # 用語 1 つだけ（長い用語も）・短い返事・プロンプトに無い言葉が付いた文は発言として残す。
+        for text in ("協賛。", "山田 花子", "医薬祭実行委員会。", "会議。", "医薬祭実行委員会の会議です。", "協賛の件です"):
+            self.assertFalse(w.echoes_prompt(text, prompt, words), text)
+
     def test_split_parts_keeps_every_line(self):
         lines = ["あ" * 100 for _ in range(50)]
         parts = w.split_parts(lines, limit=1000)
@@ -184,6 +194,21 @@ class Windows(unittest.TestCase):
         self.assertEqual(r["durationSec"], 14.6)
         self.assertFalse(model.kw["condition_on_previous_text"])
         self.assertIn("協賛", model.kw["initial_prompt"])
+
+    def test_transcribe_drops_the_copies_of_the_glossary(self):
+        class Seg:
+            def __init__(self, start, end, text):
+                self.start, self.end, self.text = start, end, text
+
+        class Model:
+            def transcribe(self, samples, **kw):
+                return iter([Seg(18.0, 52.0, "医薬祭実行委員会の会議。"), Seg(53.0, 54.0, "協賛。"), Seg(55.0, 56.0, "始めます")]), None
+
+        job = {"id": "mt_1", "audio": {"ext": "wav"}, "glossary": ["協賛"]}
+        windows = [(0.0, np.zeros(16000 * 60, dtype=np.float32))]
+        with mock.patch.object(w, "whisper_model", return_value=(Model(), "large-v3")), mock.patch.object(w, "audio_windows", return_value=iter(windows)):
+            r = w.transcribe(mock.Mock(), job)
+        self.assertEqual([x["text"] for x in r["segments"]], ["協賛。", "始めます"])
 
 
 class ProgressReports(unittest.TestCase):

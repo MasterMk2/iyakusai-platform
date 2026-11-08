@@ -62,6 +62,10 @@ PART_CHARS = 60_000
 GLOSSARY_CHARS = 400
 # 要約の指示に載せる用語集の上限（文字起こしへの初期プロンプトより長く渡せる）。
 SUMMARY_GLOSSARY_CHARS = 2_000
+# Whisper は声のはっきりしない所で、初期プロンプト（用語集）をそのまま文として書き出すことがある（2026-11-08 に
+# 本物の 74 分の録音で、large-v3 が「医薬祭実行委員会の会議。」を 3 回書いた）。記号を除いてこの文字数以上あり、
+# 初期プロンプトの一部と同じで、用語 1 つの中に収まらない文は、発言ではないとみなして捨てる。
+PROMPT_ECHO_MIN_CHARS = 6
 # 文字起こしは音声を区切って渡す。faster-whisper は渡された音声の特徴量を一度に計算し、音声 1 時間あたり約 3.4GB を
 # 使う（2026-11-05 に手元で測定）。モデル（約 3.6GB）と合わせてコンテナの 6GB に収まるよう、10 分ずつにする。
 SAMPLE_RATE = 16_000
@@ -254,6 +258,17 @@ def glossary_prompt(words: list[str]) -> str:
     return out.rstrip("、") + "。"
 
 
+ECHO_IGNORED = re.compile(r"[\s、。，．,.!?！？「」『』・…]")
+
+
+def echoes_prompt(text: str, prompt: str, words: list[str]) -> bool:
+    """text が初期プロンプトを書き写しただけの文なら True。用語 1 つだけ（「協賛。」など）は本当に言うことがあるので残す。"""
+    bare = ECHO_IGNORED.sub("", text)
+    if len(bare) < PROMPT_ECHO_MIN_CHARS or bare not in ECHO_IGNORED.sub("", prompt):
+        return False
+    return not any(bare in ECHO_IGNORED.sub("", w) for w in words)
+
+
 def quiet_cut(samples, start: int, frame: int) -> int:
     """samples[start:] を frame ずつに分け、一番静かな（二乗の和が小さい）ところの真ん中の位置を返す。"""
     import numpy as np
@@ -360,7 +375,8 @@ def confidence_of(s, offset: float) -> dict | None:
 
 def transcribe(app: App, job: dict) -> dict:
     model, name = whisper_model()
-    prompt = glossary_prompt(job.get("glossary") or [])
+    glossary = job.get("glossary") or []
+    prompt = glossary_prompt(glossary)
     words = os.environ.get("WHISPER_WORD_TIMESTAMPS", "1") != "0"
     out: list[dict] = []
     duration = 0.0
@@ -372,6 +388,7 @@ def transcribe(app: App, job: dict) -> dict:
         progress.report(0, total, force=True)
         started = time.monotonic()
         windows = 0
+        echoes = 0
         # 区切りごとに独立して文字起こしする（もともと前の文脈を使わない設定なので、つなぎ目で失うものは少ない）。
         for offset, samples in audio_windows(audio):
             windows += 1
@@ -380,6 +397,9 @@ def transcribe(app: App, job: dict) -> dict:
                                            initial_prompt=prompt, condition_on_previous_text=False, word_timestamps=words)
             for s in segments:
                 if s.text.strip() and math.isfinite(s.start) and math.isfinite(s.end):
+                    if echoes_prompt(s.text, prompt, glossary):
+                        echoes += 1
+                        continue
                     row = {"start": round(offset + s.start, 2), "end": round(offset + max(s.start, s.end), 2), "text": s.text.strip()[:1000]}
                     conf = confidence_of(s, offset)
                     if conf:
@@ -391,7 +411,8 @@ def transcribe(app: App, job: dict) -> dict:
         if windows == 0:
             # 空の下書きにすると、録った人には何が起きたか分からない。失敗にして画面に理由を出す。
             raise RuntimeError("音声を 1 秒も読み取れませんでした（録音の形式が読めないか、ファイルが壊れています）")
-        log.info("文字起こし %s: 音声 %.0f 秒を %.0f 秒で（%d 区切り・%d 文）", job["id"], duration, time.monotonic() - started, windows, len(out))
+        log.info("文字起こし %s: 音声 %.0f 秒を %.0f 秒で（%d 区切り・%d 文・用語集の書き写し %d 文を除いた）", job["id"], duration,
+                 time.monotonic() - started, windows, len(out), echoes)
     return {"segments": out, "durationSec": round(duration, 2), "model": name}
 
 
