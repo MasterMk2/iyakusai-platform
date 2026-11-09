@@ -10,6 +10,7 @@ import { StateStore } from '../../src/server/domain/store.js';
 import { buildApp, SESSION_COOKIE } from '../../src/server/http/app.js';
 import { seedRentalDemo } from '../../src/server/rental/seed.js';
 import { RentalStore } from '../../src/server/rental/store.js';
+import { RentalSwitch } from '../../src/server/rental/switch.js';
 import { diffDayOfPosts, type DayOfBoardResponse, type DayOfNoticesResponse } from '../../src/shared/dayof.js';
 import { ADMIN, EDITOR_A, EDITOR_C, seedState, TEST_HOST, TEST_PORT, VIEWER_B } from '../helpers.js';
 
@@ -369,6 +370,11 @@ describe('the board', () => {
     const withPermission = await board(EDITOR_A);
     expect(withPermission.supplies).toEqual({ cardsOut: expect.any(Number), unitsOut: expect.any(Number), groupsOpen: expect.any(Number) });
     expect((await board(VIEWER_B)).supplies).toBeNull();
+    // Stopped on the settings screen (設定 › 使う機能): no counts, and back once it is in use again.
+    new RentalSwitch(rental).set(false, { id: ADMIN, name: '試験管理者' });
+    expect((await board(EDITOR_A)).supplies).toBeNull();
+    new RentalSwitch(rental).set(true, { id: ADMIN, name: '試験管理者' });
+    expect((await board(EDITOR_A)).supplies).toEqual(withPermission.supplies);
     await app.close();
     await build({ withRental: false });
     expect((await board(EDITOR_A)).supplies).toBeNull();

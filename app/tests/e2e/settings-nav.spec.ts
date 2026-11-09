@@ -55,6 +55,8 @@ async function open(page: Page, hash: string, o: { admin?: boolean; bank?: 200 |
         return o.rental === false
           ? respond({ error: 'not_found' }, 404)
           : respond({ revision: 0, allMembersAdmin: false, people: people.map((p) => ({ ...p, storedPermissions: [], effectivePermissions: [], effectiveAdmin: false })), history: [] });
+      case '/api/rental/admin/switch':
+        return o.rental === false ? respond({ error: 'not_found' }, 404) : respond({ enabled: true, loaned: 0, review: 0, history: [] });
       case '/api/bank/status':
         return (o.bank ?? 403) === 403
           ? respond({ error: 'forbidden', message: '銀行の連携は、権限管理者と会計を見る人だけが使えます。' }, 403)
@@ -76,7 +78,7 @@ const part = (page: Page, key: string) => page.locator(`.settings-part[data-sect
 test('a PC shows the list beside one part; a link opens another part and keeps a choice not saved in the first', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await open(page, '/#/settings');
-  await expect(nav(page).getByRole('link')).toHaveText(['アカウント', '委員カード', '画面の色', 'メールの権限', '公式LINE の権限', '物品の権限', 'ログインの記録']);
+  await expect(nav(page).getByRole('link')).toHaveText(['アカウント', '委員カード', '画面の色', 'メールの権限', '公式LINE の権限', '物品の権限', '使う機能', 'ログインの記録']);
   await expect(nav(page).getByRole('link', { name: 'アカウント' })).toHaveAttribute('aria-current', 'page');
   await expect(part(page, 'account')).toBeVisible();
   await expect(page.getByTestId('mail-access')).toBeHidden();
@@ -107,6 +109,7 @@ test('a part this server or person does not have is not listed, and its address 
   await open(page, '/#/settings/rental', { rental: false });
   await expect(part(page, 'account')).toBeVisible();
   await expect(nav(page).getByRole('link', { name: '物品の権限' })).toHaveCount(0);
+  await expect(nav(page).getByRole('link', { name: '使う機能' })).toHaveCount(0);
   await expect(nav(page).getByRole('link', { name: 'メールの権限' })).toBeVisible();
 });
 
@@ -127,7 +130,7 @@ test('a phone shows the list first, then the part alone with the way back to the
   await page.setViewportSize({ width: 375, height: 812 });
   await open(page, '/#/settings');
   await expect(nav(page)).toBeVisible();
-  await expect(nav(page).getByRole('link')).toHaveText(['アカウント', '委員カード', '画面の色', 'メールの権限', '公式LINE の権限', '物品の権限', 'ログインの記録']);
+  await expect(nav(page).getByRole('link')).toHaveText(['アカウント', '委員カード', '画面の色', 'メールの権限', '公式LINE の権限', '物品の権限', '使う機能', 'ログインの記録']);
   await expect(nav(page).getByRole('link', { name: 'アカウント' })).not.toHaveAttribute('aria-current', 'page');
   await expect(part(page, 'account')).toBeHidden();
   for (const link of await nav(page).getByRole('link').all()) expect((await link.boundingBox())!.height).toBeGreaterThanOrEqual(44);

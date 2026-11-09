@@ -92,8 +92,10 @@ async function request(path, options = {}) {
   if (!response.ok) { const e = Object.assign(new Error(result.error || '処理を完了できませんでした'), { status: response.status, code: result.code }); if (response.status === 401) showLogin(); throw e; }
   return result;
 }
-function showLogin(text = '医薬祭アカウントでログインしてください。ログインすると、この画面に戻ります。', canLogin = true) { state.staff = null; if (state.reader) state.reader.readGeneration = (state.reader.readGeneration || 0) + 1; stopCamera(); stopNFC(); $('workspace').hidden = true; $('login-panel').hidden = false; $('logout').hidden = true; $('staff-name').textContent = ''; $('login-text').textContent = text; $('login-button').hidden = !canLogin; }
+function showLogin(text = '医薬祭アカウントでログインしてください。ログインすると、この画面に戻ります。', canLogin = true, title = 'ログイン') { state.staff = null; if (state.reader) state.reader.readGeneration = (state.reader.readGeneration || 0) + 1; stopCamera(); stopNFC(); $('workspace').hidden = true; $('login-panel').hidden = false; $('logout').hidden = true; $('staff-name').textContent = ''; $('login-text').textContent = text; $('login-panel').querySelector('h1').textContent = title; $('login-button').hidden = !canLogin; $('login-panel').querySelector('p.small').hidden = !canLogin; }
 async function activateSession(result) {
+  // Stopped on the settings screen (設定 › 使う機能): no camera, no reader, no queue; what is queued here stays here.
+  if (result.enabled === false) { showLogin('再開するときは、権限管理者が 設定 › 使う機能 で切り替えます。この端末で保留した登録は、再開後に送れます。', false, '物品貸出は停止中です'); $('connection').textContent = '停止中'; return; }
   if (!(result.permissions || []).includes('rental.loan')) { showLogin('この医薬祭アカウントには物品の貸出・返却の権限がありません。権限管理者に付与を依頼してください。', false); return; }
   state.staff = result.staff; state.serverMode = result.mode || ''; if (!state.staff?.id) throw new Error('スタッフ情報を取得できません');
   state.canEditItems = result.can_edit_items === true && (result.capabilities || []).includes('item_edit_v1');

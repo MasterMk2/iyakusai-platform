@@ -213,6 +213,26 @@ function useHashRoute(): [Route, (r: Route) => void] {
 /** Answer of GET /api/rental/me (only the part this screen uses). */
 interface RentalMe {
   permissions: string[];
+  /** False while rental is stopped (設定 › 使う機能); absent on a server from before the switch. */
+  enabled?: boolean;
+}
+
+// The last answer about the switch, so the tabs do not move on every load while rental is stopped (this browser only).
+const RENTAL_PAUSED_KEY = 'iyakusai-rental-paused';
+function rememberedRentalPaused(): boolean {
+  try {
+    return window.localStorage.getItem(RENTAL_PAUSED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+function rememberRentalPaused(paused: boolean): void {
+  try {
+    if (paused) window.localStorage.setItem(RENTAL_PAUSED_KEY, '1');
+    else window.localStorage.removeItem(RENTAL_PAUSED_KEY);
+  } catch {
+    // Not kept: the tab may show for a moment on the next load.
+  }
 }
 
 /** Set by the rental phone screen before it sends a signed-out person to this screen. */
@@ -299,7 +319,12 @@ export function App() {
     [refresh, user],
   );
   const rental = useLoader(loadRental);
-  const rentalEntry = (rental.data?.permissions.length ?? 0) > 0;
+  // Stopped (設定 › 使う機能): the tab, the home part and the day-of links go; the ledger stays on the server.
+  const rentalPaused = rental.data ? rental.data.enabled === false : rental.loading && rememberedRentalPaused();
+  useEffect(() => {
+    if (rental.data) rememberRentalPaused(rental.data.enabled === false);
+  }, [rental.data]);
+  const rentalEntry = (rental.data?.permissions.length ?? 0) > 0 && !rentalPaused;
 
   // Coming back from the rental screen: after signing in, return to the item that was being read.
   useEffect(() => {
@@ -450,7 +475,7 @@ export function App() {
   const navItems: NavItem[] = [
     { key: 'home', label: 'ホーム', href: '#/home', onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'home' }) },
     { key: 'tasks', label: 'タスク', href: '#/tasks', onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'tasks' }) },
-    { key: 'rental', label: '物品貸出', labelBreaks: ['物品', '貸出'], href: '/rental' },
+    ...(rentalPaused ? [] : [{ key: 'rental', label: '物品貸出', labelBreaks: ['物品', '貸出'], href: '/rental' } as NavItem]),
     // The tab is "メール", not "メールボックス": mail is sent from here too. The mailboxes inside it are each a "受信箱".
     { key: 'inbox', label: 'メール', href: '#/all', onSelect: () => navigate(EMPTY_ROUTE) },
     // The official LINE has its own tab (2026-11-03): its people, counts and sending differ from mail's.

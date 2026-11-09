@@ -1086,6 +1086,10 @@
     wire();
     try {
       const me = await request(`${RENTAL}/me`);
+      if (me.enabled === false) {
+        say('物品貸出は停止中です。再開するときは、権限管理者が 設定 › 使う機能 で切り替えます。', 'info');
+        return;
+      }
       state.perms = me.permissions || [];
       $('staff-name').textContent = me.staff ? me.staff.name || me.staff.id : '';
     } catch (error) {
