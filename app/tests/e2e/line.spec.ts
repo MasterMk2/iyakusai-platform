@@ -39,25 +39,36 @@ test('editor sees email and LINE on their own tabs, previews the exact reply, ed
   await expect(received).toBeVisible();
   await expect.poll(() => received.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0);
 
-  const box = detail.getByRole('textbox', { name: '返信本文' });
-  await box.fill('E2E の返信（合成）');
-  await detail.getByRole('button', { name: '下書きを保存して送信内容を確認' }).click();
+  // The reply is written like a mail reply (2026-11-09): the fixed target, 本文, then 送信内容を確認.
+  const reply = detail.getByRole('region', { name: 'LINE で返信（模擬送信）' });
+  await expect(reply.getByTestId('line-reply-target')).toHaveText('顧客サンプルL1（1:1 トーク・ID …c001）');
+  const box = reply.getByRole('textbox', { name: '本文' });
+  await reply.getByRole('button', { name: '送信内容を確認' }).click();
+  await expect(reply.locator('#line-reply-body-error')).toHaveText('本文を入力してください。');
+  await box.fill('E2E の返信（合成）。2026年11月13日（木）に伺います。');
+  await reply.getByRole('button', { name: '送信内容を確認' }).click();
   const preview = page.getByTestId('line-reply-preview');
   await expect(page.getByTestId('preview-account')).toHaveText('LINE公式 サポート（模擬）');
   await expect(page.getByTestId('preview-target')).toHaveText('顧客サンプルL1（1:1 トーク・ID …c001）');
   await expect(page.getByTestId('preview-recipients')).toContainText('1 人');
   await expect(page.getByTestId('preview-method')).toHaveText('プッシュメッセージ（模擬）');
-  await expect(page.getByTestId('preview-body')).toHaveText('E2E の返信（合成）');
+  await expect(page.getByTestId('preview-body')).toHaveText('E2E の返信（合成）。2026年11月13日（木）に伺います。');
   await expect(preview).toContainText('月間のメッセージ通数');
+  // The checks before sending run on the confirmed text; the form is hidden while checking.
+  await expect(preview.getByTestId('line-screen')).toContainText('「2026年11月13日(木)」の曜日が違います');
+  await expect(preview).toContainText('注意 1 件を確かめたうえで、この送信先と内容で送ります');
+  await expect(box).toHaveCount(0);
   await expect(preview.getByRole('button', { name: '模擬送信する' })).toBeDisabled();
 
-  // Editing after the preview discards it.
-  await box.fill('E2E の返信（合成・修正）');
+  // Going back to edit discards the confirmation; the changed text is confirmed again.
+  await preview.getByRole('button', { name: '編集に戻る' }).click();
   await expect(preview).toHaveCount(0);
-  await expect(detail.getByText('もう一度確認が必要です')).toBeVisible();
-  await detail.getByRole('button', { name: '下書きを保存して送信内容を確認' }).click();
+  await expect(box).toHaveValue('E2E の返信（合成）。2026年11月13日（木）に伺います。');
+  await box.fill('E2E の返信（合成・修正）');
+  await reply.getByRole('button', { name: '送信内容を確認' }).click();
   await expect(page.getByTestId('preview-body')).toHaveText('E2E の返信（合成・修正）');
-  await page.getByLabel('上記の送信先・本文で送信することを確認しました').check();
+  await expect(preview.getByTestId('line-screen')).toContainText('気になる点は見つかりませんでした');
+  await page.getByLabel('この送信先と内容で送ります').check();
   await page.getByRole('button', { name: '模擬送信する' }).dblclick();
 
   await expect(page.getByTestId('line-reply-message')).toContainText('受付済み（模擬）');
@@ -112,7 +123,7 @@ test('read-only viewer cannot reply, legacy history is read-only, and users with
 
   await openLine(page, 'line-oa-support', '顧客サンプルL1');
   await expect(page.getByTestId('line-reply-unavailable')).toContainText('返信する権限がありません');
-  await expect(page.getByRole('textbox', { name: '返信本文' })).toHaveCount(0);
+  await expect(page.getByTestId('line-reply-body')).toHaveCount(0);
   await expect(page.getByText('閲覧のみの権限です')).toBeVisible();
   const convUrl = page.url();
   const conversationId = new URL(convUrl).hash.split('conv=')[1]!;

@@ -1,12 +1,17 @@
 import { useRef, useState } from 'react';
 import { LINE_LIMITS, type LineConversationDetail, type LineDraftView, type LinePreviewResponse, type LineSendResponse } from '../../shared/line';
+import { composeLineReviewRequest } from '../../shared/lineReview';
+import { screenLine } from '../../shared/lineScreen';
 import { api, fmtDate, toFailure } from '../api';
+import { BotReview } from './BotReview';
 import { LineImagePicker, type PickedImage } from './LineImagePicker';
+import { LineScreenChecks } from './LineScreenChecks';
 
 /**
- * Manual reply: save draft -> server preview with a short-lived confirmation ->
- * explicit confirmation -> one send per confirmation. Any edit after the preview
- * discards it, and the send button is disabled while a request is in flight.
+ * Manual reply, shaped like the mail reply (2026-11-09): write → check what will be sent (the draft is saved, the
+ * server returns the exact text with a short-lived confirmation; the fixed checks run on that text) → tick → one
+ * send per confirmation. The form is hidden while checking ("編集に戻る" brings it back), and the send button is
+ * disabled while a request is in flight. The Bot can proofread it below.
  */
 export function LineReplyPanel({ detail, onSent }: { detail: LineConversationDetail; onSent: () => void }) {
   const [saved, setSaved] = useState<LineDraftView | null>(detail.reply.draft);
@@ -17,14 +22,16 @@ export function LineReplyPanel({ detail, onSent }: { detail: LineConversationDet
   const [operationId, setOperationId] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [editedAfterPreview, setEditedAfterPreview] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
   const sending = useRef(false);
+  const mock = detail.sending !== 'live';
+  const title = mock ? 'LINE で返信（模擬送信）' : 'LINE で返信';
 
   if (!detail.reply.available) {
     return (
-      <section className="line-reply" aria-label="LINE で返信">
-        <h4>LINE で返信</h4>
+      <section className="mail-compose line-compose line-reply" aria-label="LINE で返信">
+        <h3 className="line-reply-title">LINE で返信</h3>
         <p className="status info" data-testid="line-reply-unavailable">
           {detail.reply.reason ?? 'この会話には返信できません。'}
         </p>
@@ -32,30 +39,19 @@ export function LineReplyPanel({ detail, onSent }: { detail: LineConversationDet
     );
   }
 
-  function chooseImage(next: PickedImage | null) {
-    setImage(next);
-    discardPreview();
-  }
-
-  function edit(value: string) {
-    setBody(value);
-    discardPreview();
-  }
-
   function discardPreview() {
-    if (preview) {
-      // The confirmation covered the previous text only.
-      setPreview(null);
-      setOperationId(null);
-      setConfirmed(false);
-      setEditedAfterPreview(true);
-    }
+    setPreview(null);
+    setOperationId(null);
+    setConfirmed(false);
   }
 
   async function prepare() {
+    const length = body.trim().length;
+    if (length === 0) return setError('本文を入力してください。');
+    if (length > LINE_LIMITS.replyMaxLength) return setError(`本文は ${LINE_LIMITS.replyMaxLength.toLocaleString('ja-JP')} 文字以内にしてください（いま ${length.toLocaleString('ja-JP')} 文字）。`);
+    setError(null);
     setBusy(true);
     setMessage(null);
-    setEditedAfterPreview(false);
     try {
       let draft = saved;
       if (!draft || draft.body !== body.trim() || (draft.imageId ?? null) !== (image?.id ?? null)) {
@@ -91,9 +87,7 @@ export function LineReplyPanel({ detail, onSent }: { detail: LineConversationDet
         draftVersion: preview.draftVersion,
         body: preview.body,
       });
-      setPreview(null);
-      setOperationId(null);
-      setConfirmed(false);
+      discardPreview();
       setSaved(null);
       setBody('');
       setImage(null);
@@ -101,11 +95,7 @@ export function LineReplyPanel({ detail, onSent }: { detail: LineConversationDet
       onSent();
     } catch (err) {
       const failure = toFailure(err);
-      if (failure.status !== 0 && failure.status < 500) {
-        setPreview(null);
-        setOperationId(null);
-        setConfirmed(false);
-      }
+      if (failure.status !== 0 && failure.status < 500) discardPreview();
       setMessage({ kind: 'error', text: failure.message });
       onSent();
     } finally {
@@ -115,33 +105,77 @@ export function LineReplyPanel({ detail, onSent }: { detail: LineConversationDet
   }
 
   const length = body.trim().length;
-  const mock = detail.sending !== 'live';
+  const target = detail.target;
+  const people = target.type === 'user' ? null : target.memberCount;
+  const targetText = `${detail.title}（${target.typeLabel}${people ? `・${people} 人` : ''}${target.maskedId ? `・ID ${target.maskedId}` : ''}）`;
+  // One conversation: a name or a greeting in it is meant (in a group, calling one member by name is ordinary).
+  const findings = preview ? screenLine({ body: preview.body, recipients: [{ title: detail.title }], hasImage: !!preview.image }) : [];
+  const warnings = findings.filter((f) => f.level === 'warning').length;
+  const audience = target.type === 'user' ? '1:1 の相手 1 人' : `${target.typeLabel}${people ? `（${people} 人）` : ''}の全員`;
+
   return (
-    <section className="line-reply" aria-label="LINE で返信">
-      <h4>{mock ? 'LINE で返信（手動・模擬送信）' : 'LINE で返信'}</h4>
-      <p className="hint">
-        手動の返信だけを扱います（自動返信はしません。複数の相手には「公式LINE」タブの「公式LINEを送信」から）。送信前に送信先と本文を確認し、確認した内容だけを 1 回送ります。
-      </p>
-      <textarea aria-label="返信本文" rows={4} value={body} onChange={(e) => edit(e.target.value)} disabled={busy} placeholder="返信本文を入力" />
-      <span className={`counter ${length > LINE_LIMITS.replyMaxLength ? 'over' : ''}`}>
-        {length} / {LINE_LIMITS.replyMaxLength}
-      </span>
-      {detail.reply.imagesEnabled ? (
-        <LineImagePicker accountId={detail.account.id} image={image} onChange={chooseImage} disabled={busy} />
-      ) : (
-        detail.sending === 'live' && <p className="hint">このサーバーでは画像を送れません（公開 URL が設定されていません）。</p>
-      )}
-      {editedAfterPreview && <p className="status warning">本文または画像を変更したため、送信前にもう一度確認が必要です。</p>}
-      {!preview && (
-        <div className="actions">
-          <button type="button" onClick={() => void prepare()} disabled={busy || length === 0}>
-            下書きを保存して送信内容を確認
-          </button>
+    <section className="mail-compose line-compose line-reply" aria-labelledby="line-reply-title">
+      <div className="compose-head">
+        <div>
+          <h3 id="line-reply-title">{title}</h3>
+          <p className="hint compose-sub">この会話の相手に、公式アカウントから手動で送ります（自動返信はしません。複数の相手には「公式LINE」タブの「公式LINEを送信」から）。</p>
         </div>
-      )}
-      {preview && (
-        <div className="line-preview" data-testid="line-reply-preview">
-          <h5>送信内容の確認</h5>
+      </div>
+      {!preview ? (
+        <form
+          className="compose-form"
+          noValidate
+          onSubmit={(e) => {
+            e.preventDefault();
+            void prepare();
+          }}
+        >
+          <span className="compose-label">送信先</span>
+          <p className="compose-static" data-testid="line-reply-target">
+            {targetText}
+          </p>
+          <label htmlFor="line-reply-body">本文</label>
+          <textarea
+            id="line-reply-body"
+            rows={6}
+            value={body}
+            onChange={(e) => {
+              setBody(e.target.value);
+              setError(null);
+            }}
+            disabled={busy}
+            aria-invalid={error ? true : undefined}
+            aria-describedby={error ? 'line-reply-body-error' : undefined}
+            data-testid="line-reply-body"
+          />
+          <span className={`counter ${length > LINE_LIMITS.replyMaxLength ? 'over' : ''}`}>
+            {length} / {LINE_LIMITS.replyMaxLength}
+          </span>
+          {error && (
+            <p className="field-error" id="line-reply-body-error">
+              {error}
+            </p>
+          )}
+          {(detail.reply.imagesEnabled || detail.sending === 'live') && (
+            <div className="compose-files">
+              <span className="compose-files-label">画像（任意）</span>
+              {detail.reply.imagesEnabled ? (
+                <LineImagePicker accountId={detail.account.id} image={image} onChange={setImage} disabled={busy} />
+              ) : (
+                <p className="hint">このサーバーでは画像を送れません（公開 URL が設定されていません）。</p>
+              )}
+            </div>
+          )}
+          <div className="actions">
+            <button type="submit" disabled={busy} data-testid="line-reply-prepare">
+              {busy ? '確かめています…' : '送信内容を確認'}
+            </button>
+          </div>
+          <p className="field-hint">「送信内容を確認」を押すと、本文は下書きとして保存されます（送るまでは相手に届きません）。</p>
+        </form>
+      ) : (
+        <div className="compose-preview" data-testid="line-reply-preview">
+          <h4>送信内容の確認</h4>
           <dl>
             <dt>送信元</dt>
             <dd data-testid="preview-account">{preview.account.name}</dd>
@@ -154,12 +188,6 @@ export function LineReplyPanel({ detail, onSent }: { detail: LineConversationDet
             <dd data-testid="preview-recipients">{preview.billableRecipients} 人（通数として {preview.billableRecipients} 通）</dd>
             <dt>送信方法</dt>
             <dd data-testid="preview-method">{preview.mock ? 'プッシュメッセージ（模擬）' : 'プッシュメッセージ（公式アカウントから送信）'}</dd>
-            <dt>本文</dt>
-            <dd>
-              <pre className="mail-text" data-testid="preview-body">
-                {preview.body}
-              </pre>
-            </dd>
             {preview.image && (
               <>
                 <dt>画像</dt>
@@ -168,33 +196,30 @@ export function LineReplyPanel({ detail, onSent }: { detail: LineConversationDet
                 </dd>
               </>
             )}
-            <dt>確認の期限</dt>
-            <dd>{fmtDate(preview.expiresAt)}</dd>
+            <dt>期限</dt>
+            <dd>この確認は {fmtDate(preview.expiresAt)} まで有効です</dd>
           </dl>
-          <ul className="notices">
-            {preview.notices.map((n) => (
-              <li key={n}>{n}</li>
-            ))}
-          </ul>
+          <pre className="mail-text compose-preview-body" data-testid="preview-body">
+            {preview.body}
+          </pre>
+          <LineScreenChecks findings={findings} />
+          {preview.notices.length > 0 && (
+            <ul className="notices">
+              {preview.notices.map((n) => (
+                <li key={n}>{n}</li>
+              ))}
+            </ul>
+          )}
           <label className="confirm-check">
-            <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} disabled={busy} />
-            上記の送信先・本文で送信することを確認しました
+            <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} disabled={busy} data-testid="line-reply-confirm" />
+            {warnings > 0 ? `注意 ${warnings} 件を確かめたうえで、` : ''}この送信先と内容で送ります
           </label>
           <div className="actions">
-            <button type="button" onClick={() => void send()} disabled={!confirmed || busy}>
-              {busy ? '送信処理中…' : preview.mock ? '模擬送信する' : 'LINE で送信する'}
+            <button type="button" onClick={() => void send()} disabled={!confirmed || busy} data-testid="line-reply-send">
+              {busy ? '送信しています…' : preview.mock ? '模擬送信する' : 'LINE で送信する'}
             </button>
-            <button
-              type="button"
-              className="secondary"
-              disabled={busy}
-              onClick={() => {
-                setPreview(null);
-                setOperationId(null);
-                setConfirmed(false);
-              }}
-            >
-              確認をやめて編集に戻る
+            <button type="button" className="secondary" disabled={busy} onClick={discardPreview}>
+              編集に戻る
             </button>
           </div>
         </div>
@@ -204,6 +229,13 @@ export function LineReplyPanel({ detail, onSent }: { detail: LineConversationDet
           {message.text}
         </p>
       )}
+      <BotReview
+        request={composeLineReviewRequest({ accountName: detail.account.name, audience, body })}
+        empty={length === 0}
+        intro="誤字・敬語、日付・曜日・金額・名称などを委員会の資料と照らした食い違い、LINE での読みやすさを Bot（AI）が確かめます。送信元の名前・相手の種類と人数・本文が Bot に渡ります。相手の名前と LINE の ID は渡しません。"
+        changedWhat="本文"
+        testId="line-review"
+      />
     </section>
   );
 }
