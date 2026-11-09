@@ -808,9 +808,27 @@ button.quiet.department-only { flex: 0 0 auto; min-height: 36px; padding: 4px 6p
 .row-open .snippet { font-size: 14px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row-open .chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .row > .status-buttons { padding: 0 12px 10px; }
-.row-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 8px; padding: 0 12px 8px; }
+.row-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 4px 8px; padding: 0 12px 8px; }
 .row-foot:empty { display: none; }
 .row-foot > .status-buttons { margin-left: auto; }
+/* Labels of a LINE conversation from its row (2026-11-10): 「＋ ラベル」 after the chips, the editor under the row. */
+.label-toggle { min-height: 30px; padding: 2px 10px; background: transparent; color: var(--muted); border: 1px dashed var(--field); border-radius: 5px; font-size: 14px; font-weight: 400; }
+.label-toggle:hover:not(:disabled) { background: var(--hover-strong); color: var(--ink); border-color: var(--field); }
+.label-toggle[aria-expanded='true'] { color: var(--ink); border-style: solid; }
+.line-label-editor { display: grid; gap: 8px; margin: 0 12px 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.lle-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; min-width: 0; }
+.lle-caption { flex: 0 0 5.5em; font-size: 14px; color: var(--muted); }
+.lle-row > .lle-choices, .lle-row > .lle-add, .lle-row > .labels-edit { min-width: 10em; }
+.lle-row > .labels-edit { flex: 1 1 0; min-width: 0; }
+.lle-choices { display: flex; flex-wrap: wrap; gap: 6px; flex: 1 1 0; min-width: 0; }
+.lle-add { display: flex; align-items: stretch; gap: 6px; flex: 1 1 0; min-width: 0; max-width: 28em; }
+.lle-add input { flex: 1 1 auto; min-width: 0; font-weight: 400; }
+.lle-add > button { flex: 0 0 auto; white-space: nowrap; }
+.label-suggest { min-height: 32px; padding: 2px 10px; background: var(--surface); color: var(--ink); border: 1px solid var(--field); border-radius: 5px; font-size: 14px; font-weight: 400; max-width: 100%; overflow-wrap: anywhere; text-align: left; }
+.label-suggest:hover:not(:disabled) { background: var(--hover-strong); color: var(--ink); border-color: var(--field); }
+.label-suggest[aria-pressed='true'], .label-suggest[aria-pressed='true']:hover:not(:disabled) { background: var(--violet-bg); color: var(--violet); border: 2px solid var(--violet); padding: 1px 9px; font-weight: 700; }
+.line-label-editor .hint, .line-label-editor .status { margin: 0; }
+.lle-status:empty { display: none; }
 .thread.is-unhandled .subject { color: var(--ink); }
 .due { flex: 0 0 auto; display: inline-flex; align-items: baseline; gap: 6px; font-size: 14px; white-space: nowrap; color: var(--muted); font-variant-numeric: tabular-nums; }
 .due strong { font-weight: 700; color: var(--ink); }
@@ -1265,6 +1283,7 @@ button.task-tree-toggle:focus-visible { outline-offset: -3px; }
   .task-draft-others button, .task-draft-reqs > summary, .task-draft-sources > summary, .task-draft-tags > summary, .task-draft-include label { min-height: 44px; }
   .link-button { display: inline-flex; align-items: center; }
   .status-button { min-height: 44px; }
+  .label-toggle, .label-suggest { min-height: 44px; }
   .row-open { min-height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) {
