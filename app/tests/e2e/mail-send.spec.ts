@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import type { ReceiptView } from '../../src/shared/api.js';
 import type { MailSendOptions, MailSendRequest } from '../../src/shared/mailbox.js';
+import { MAIL_SIGNATURE_RULE, type SignatureView } from '../../src/shared/signature.js';
 import { installBotFake, MAIL_SUBJECT } from './assistant-fake.js';
 import { expect, test } from './fixtures.js';
 
@@ -22,7 +23,7 @@ function readForm(body: Buffer): Sent {
   return { message: JSON.parse(json) as MailSendRequest, files };
 }
 
-async function mailbox(page: Page, o: { from?: MailSendOptions['from']; sendAnswer?: { status: number; json: unknown }; receipt?: Partial<ReceiptView> } = {}) {
+async function mailbox(page: Page, o: { from?: MailSendOptions['from']; sendAnswer?: { status: number; json: unknown }; receipt?: Partial<ReceiptView>; signature?: SignatureView } = {}) {
   const receipt: ReceiptView = {
     receiptId: 'rc_0000000000000001', threadId: 'th_0000000000000001', mailbox: box, mailboxes: [box],
     access: 'read', canEditAssignmentAndLabels: true, canEditStatus: true,
@@ -35,6 +36,8 @@ async function mailbox(page: Page, o: { from?: MailSendOptions['from']; sendAnsw
   const options: MailSendOptions = {
     enabled: true, from: o.from ?? [box, sponsor].map((b) => ({ mailboxId: b.id, name: b.name, address: b.address })),
     fromName: '合成 医学薬学祭実行委員会', bcc: 'archive@committee.example', maxAttachmentBytes: 15 * 1024 * 1024, maxRecipients: 30, senderName: '合成 太郎',
+    // The committee's signature (2026-11-10); without it, the earlier one (an older server).
+    ...(o.signature ? { signature: { organization: o.signature.organization, name: o.signature.name, title: o.signature.title, address: o.signature.address, contactEmail: o.signature.contactEmail, personalEmail: o.signature.personalEmail } } : {}),
   };
   const sent: Sent[] = [];
   await page.route('**/api/**', async (route) => {
@@ -47,6 +50,13 @@ async function mailbox(page: Page, o: { from?: MailSendOptions['from']; sendAnsw
     });
     if (path === '/api/mail/status') return respond({ enabled: true, canOpen: true, reauthRequired: false, idleHours: 12, unhandledTotal: 1 });
     if (path === '/api/mail/send/options') return respond(options);
+    if (path === '/api/signature' && o.signature) {
+      if (route.request().method() === 'PUT') {
+        const typed = route.request().postDataJSON() as { title: string; personalEmail: string };
+        o.signature = { ...o.signature, title: typed.title || o.signature.defaultTitle, personalEmail: typed.personalEmail, own: typed, updatedAt: '2026-11-10T00:00:00Z' };
+      }
+      return respond(o.signature);
+    }
     if (path === '/api/mailboxes') return respond([{ ...box, access: 'read', threadCount: 1, unhandledCount: 1 }]);
     if (path === '/api/tasks/context') return respond({ enabled: false, bound: false, memberships: [] });
     if (path === '/api/rental/me') return respond({ permissions: [] });
@@ -355,4 +365,59 @@ test('the Bot proofreads and fact-checks the mail being written, without the add
   // Changing the text after asking says the answer is for the earlier text.
   await compose.getByLabel('本文').fill('取引先 様\n\n10月30日（金）の午後に伺います。\n\n--\n合成 医学薬学祭実行委員会');
   await expect(review).toContainText('依頼したあとで件名か本文が変わっています。');
+});
+
+const SIGNED: SignatureView = {
+  organization: '合成 医学薬学祭実行委員会', name: '合成 太郎', title: '副委員長', address: '〒000-0000 合成市 合成キャンパス', contactEmail: 'contact@committee.example', personalEmail: 'taro@committee.example',
+  defaultTitle: '企画課', own: { title: '副委員長', personalEmail: 'taro@committee.example' }, canEditCommittee: false, updatedAt: '2026-11-09T00:00:00Z', committeeUpdatedAt: '2026-11-09T00:00:00Z',
+};
+const SIGNED_TEXT = [MAIL_SIGNATURE_RULE, '送信者', '', '合成 医学薬学祭実行委員会', '副委員長 合成 太郎', '', '〒000-0000 合成市 合成キャンパス', '団体代表email : contact@committee.example', '委員個人email : taro@committee.example', MAIL_SIGNATURE_RULE].join('\n');
+
+test('with the committee signature: a reply and new mail start with it, another From keeps it, and it is sent', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const { sent } = await mailbox(page, { signature: { ...SIGNED } });
+  await page.goto('/#/all?thread=th_0000000000000001');
+  await page.getByRole('button', { name: '返信', exact: true }).click();
+  const reply = page.getByRole('region', { name: '返信' });
+  const replyBody = await reply.getByLabel('本文').inputValue();
+  expect(replyBody.startsWith(`\n\n${SIGNED_TEXT}\n\n`)).toBe(true);
+  expect(replyBody).not.toContain('問い合わせ（contact@committee.example）');
+
+  await page.getByRole('button', { name: 'メールを送信' }).click();
+  await expect(page).toHaveURL(/compose=1/);
+  const compose = page.getByRole('region', { name: '新しいメール' });
+  await expect(compose.getByLabel('本文')).toHaveValue(`\n\n${SIGNED_TEXT}\n`);
+  await compose.getByLabel('差出人').selectOption('sponsorship');
+  await expect(compose.getByLabel('本文')).toHaveValue(`\n\n${SIGNED_TEXT}\n`);
+  await compose.getByLabel('宛先', { exact: true }).fill('株式会社 合成 ご担当者様 <company@partner.example>');
+  await compose.getByLabel('件名').fill('協賛のお願い');
+  await compose.getByLabel('本文').fill(`株式会社 合成 ご担当者様\n\n協賛のお願いでご連絡いたしました。よろしくお願いいたします。\n\n${SIGNED_TEXT}\n`);
+  await compose.getByRole('button', { name: '送信内容を確認' }).click();
+  await expect(compose.getByTestId('compose-screen')).not.toContainText('署名が見当たりません');
+  await page.screenshot({ path: '.tmp/mail-send-signature.png', fullPage: true });
+  await compose.getByLabel('この宛先と内容で、委員会のアドレスから送ります').check();
+  await compose.getByRole('button', { name: '送信する' }).click();
+  await expect.poll(() => sent.length).toBe(1);
+  expect(sent[0]!.message.body).toContain(SIGNED_TEXT);
+});
+
+test('the settings set the title and the own address of the signature, with a preview of both', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await mailbox(page, { signature: { ...SIGNED, title: '企画課', personalEmail: '', own: { title: '', personalEmail: '' }, updatedAt: null } });
+  await page.goto('/#/settings/signature');
+  const panel = page.getByTestId('signature-settings');
+  await expect(panel.getByTestId('signature-title')).toHaveAttribute('placeholder', '企画課');
+  await expect(panel.getByTestId('signature-preview-mail')).toContainText('企画課 合成 太郎');
+  await expect(panel.getByTestId('signature-preview-mail')).not.toContainText('委員個人email');
+  await expect(panel.getByTestId('signature-preview-line')).toHaveText('ーーー\n合成 医学薬学祭実行委員会\n企画課 合成 太郎');
+  // Not an access administrator: the committee lines are not editable here.
+  await expect(panel.getByTestId('signature-address')).toHaveCount(0);
+  await panel.getByTestId('signature-title').fill('副委員長');
+  await panel.getByTestId('signature-personal-email').fill('taro@committee.example');
+  await expect(panel.getByTestId('signature-preview-mail')).toContainText('副委員長 合成 太郎');
+  await expect(panel.getByTestId('signature-preview-mail')).toContainText('委員個人email : taro@committee.example');
+  await page.screenshot({ path: '.tmp/settings-signature.png', fullPage: true });
+  await panel.getByTestId('signature-save').click();
+  await expect(panel.getByTestId('signature-message')).toContainText('自分の署名を保存しました');
+  await expect(panel.getByTestId('signature-title')).toHaveValue('副委員長');
 });

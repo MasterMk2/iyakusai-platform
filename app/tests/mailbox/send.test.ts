@@ -640,3 +640,64 @@ describe('without "send" in the configuration', () => {
     expect((await call('GET', '/api/mail/admin/access', { cookie: (await signIn(CHAIR, '21000001')).cookie })).json.sendable).toBeNull();
   });
 });
+
+describe('the signature settings (2026-11-10)', () => {
+  beforeEach(() => build());
+
+  it('signs with the department and the name until the person sets more; the committee lines are an administrator\'s', async () => {
+    const chair = await signIn(CHAIR, '21000001');
+    const member = await signIn(MEMBER, '21000002', [ROLE_PLANNING]);
+    const first = await call('GET', '/api/signature', { cookie: member.cookie });
+    expect(first.status).toBe(200);
+    expect(first.json).toEqual({
+      organization: '合成 医学薬学祭実行委員会',
+      name: '合成 太郎',
+      title: '企画部',
+      address: '',
+      contactEmail: '',
+      personalEmail: '',
+      defaultTitle: '企画部',
+      own: { title: '', personalEmail: '' },
+      canEditCommittee: false,
+      updatedAt: null,
+      committeeUpdatedAt: null,
+    });
+    expect((await call('GET', '/api/mail/send/options', { cookie: member.cookie })).json.signature).toEqual({ organization: '合成 医学薬学祭実行委員会', name: '合成 太郎', title: '企画部', address: '', contactEmail: '', personalEmail: '' });
+
+    // The person's own title and address; a malformed address or a second line is refused.
+    expect((await call('PUT', '/api/signature', { cookie: member.cookie, body: { title: '副委員長', personalEmail: 'not an address' } })).status).toBe(400);
+    expect((await call('PUT', '/api/signature', { cookie: member.cookie, body: { title: '副\n委員長', personalEmail: '' } })).status).toBe(400);
+    const own = await call('PUT', '/api/signature', { cookie: member.cookie, body: { title: ' 副委員長 ', personalEmail: `taro@${DOMAIN}` } });
+    expect(own.status).toBe(200);
+    expect(own.json).toMatchObject({ title: '副委員長', personalEmail: `taro@${DOMAIN}`, own: { title: '副委員長', personalEmail: `taro@${DOMAIN}` } });
+
+    // The committee lines: administrators only, and everyone's signature carries them.
+    const lines = { address: '〒000-0000 合成市 合成キャンパス', contactEmail: `contact@${DOMAIN}` };
+    expect((await call('PUT', '/api/signature/committee', { cookie: member.cookie, body: lines })).status).toBe(403);
+    const set = await call('PUT', '/api/signature/committee', { cookie: chair.cookie, body: lines });
+    expect(set.status).toBe(200);
+    expect(set.json).toMatchObject({ ...lines, canEditCommittee: true, title: '', name: '合成 委員長' });
+    expect((await call('GET', '/api/mail/send/options', { cookie: member.cookie })).json.signature).toEqual({ organization: '合成 医学薬学祭実行委員会', name: '合成 太郎', title: '副委員長', ...lines, personalEmail: `taro@${DOMAIN}` });
+
+    // Kept in the mail folder across a restart; both fields empty forgets the person (the default applies again).
+    await app.close();
+    mail.close();
+    await build();
+    const login = await call('POST', '/api/auth/login', { body: { loginId: '21000002', password: PASSWORD } });
+    const again = { cookie: cookieOf(login.headers['set-cookie']) };
+    expect((await call('GET', '/api/signature', { cookie: again.cookie })).json).toMatchObject({ title: '副委員長', ...lines });
+    expect((await call('PUT', '/api/signature', { cookie: again.cookie, body: { title: '', personalEmail: '' } })).json).toMatchObject({ title: '企画部', personalEmail: '', own: { title: '', personalEmail: '' } });
+  });
+
+  it('needs a sign-in, and an unreadable file turns off the settings only: sending signs with the name alone', async () => {
+    expect((await call('GET', '/api/signature')).status).toBe(401);
+    await app.close();
+    mail.close();
+    writeFileSync(path.join(dir, 'mail', 'signatures.json'), '{ broken');
+    await build();
+    const member = await signIn(MEMBER, '21000002');
+    expect((await call('GET', '/api/signature', { cookie: member.cookie })).status).toBe(503);
+    expect((await call('PUT', '/api/signature', { cookie: member.cookie, body: { title: '', personalEmail: '' } })).status).toBe(503);
+    expect((await call('GET', '/api/mail/send/options', { cookie: member.cookie })).json.signature).toEqual({ organization: '合成 医学薬学祭実行委員会', name: '合成 太郎', title: '', address: '', contactEmail: '', personalEmail: '' });
+  });
+});

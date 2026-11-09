@@ -13,6 +13,7 @@ import {
 } from '../../shared/mailbox';
 import { isDueDate, japaneseDay, jstDay, replyDueSentence } from '../../shared/mailDue';
 import { screenMail } from '../../shared/mailScreen';
+import { mailSignature, replaceDraftSignature } from '../../shared/signature';
 import { apiForm, fmtDate, toFailure } from '../api';
 import { MailReview } from './MailReview';
 import { RecipientInput } from './RecipientInput';
@@ -42,16 +43,27 @@ function fmtSize(bytes: number): string {
   return bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-/** The signature the body starts with (it can be changed like the rest of the text). */
+/**
+ * The signature the body starts with (it can be changed like the rest of the text): the committee's shape, made from
+ * what the server says (2026-11-10; each person sets their title and address in the settings). An older server sends
+ * no parts: the earlier signature, which names the From mailbox.
+ */
 export function signature(options: MailSendOptions, mailboxId: string): string {
+  if (options.signature) return mailSignature(options.signature);
   const box = options.from.find((f) => f.mailboxId === mailboxId);
   return ['--', options.fromName, box ? `${box.name}（${box.address}）` : '', options.senderName].filter(Boolean).join('\n');
 }
 
-/** A Bot draft's body, with the committee's signature added when the Bot did not write the committee's name. */
+/**
+ * A Bot draft's body with the committee's signature: the Bot's own signature block is replaced by it, and a draft
+ * without one gets it after the text unless the Bot already wrote the committee's name.
+ */
 function withSignature(options: MailSendOptions, mailboxId: string, body: string): string {
   const text = body.replace(/\r\n/g, '\n').trimEnd();
-  return text.includes(options.fromName) ? `${text}\n` : `${text}\n\n${signature(options, mailboxId)}\n`;
+  const sig = signature(options, mailboxId);
+  const replaced = options.signature ? replaceDraftSignature(text, sig, options.fromName) : null;
+  if (replaced !== null) return `${replaced}\n`;
+  return text.includes(options.fromName) ? `${text}\n` : `${text}\n\n${sig}\n`;
 }
 
 /** New mail; `to` is set when it is written from a contact. */

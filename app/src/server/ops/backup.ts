@@ -33,8 +33,8 @@ async function main(): Promise<void> {
     manifest.files[relative] = { bytes: buf.length, sha256: sha256(buf) };
   };
 
-  // mailbox/line-state.json: the committee's official LINE account (2026-10-28).
-  for (const relative of ['accounts/accounts.json', 'mail/state.json', 'mail/task-links.json', 'mail/state.line.json', 'mailbox/line-state.json']) {
+  // mailbox/line-state.json: the committee's official LINE account (2026-10-28). mailbox/signatures.json: the signature's settings (2026-11-10).
+  for (const relative of ['accounts/accounts.json', 'mail/state.json', 'mail/task-links.json', 'mail/state.line.json', 'mailbox/line-state.json', 'mailbox/signatures.json']) {
     const file = path.join(data, relative);
     if (!existsSync(file)) continue;
     const buf = readFileSync(file);

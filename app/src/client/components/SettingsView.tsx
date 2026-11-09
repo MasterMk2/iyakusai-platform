@@ -13,6 +13,7 @@ import { LoginActivityPanel } from './LoginActivityPanel';
 import { MailAccessPanel } from './MailAccessPanel';
 import { RentalAccessPanel } from './RentalAccessPanel';
 import { RolloverPanel } from './rollover/RolloverPanel';
+import { SignaturePanel } from './SignaturePanel';
 import { CardSettingsPanel } from './CardSettingsPanel';
 import { AccountingAccessPanel } from './payments/AccountingAccessPanel';
 import { BankPanel } from './bank/BankPanel';
@@ -26,7 +27,7 @@ import './payments/payments.css';
  * PC and in place of it on a phone (../docs/ui-guidelines.md §6): before, every part was on one page, some 20,000px
  * long for an access administrator, with five lists of every member one after another.
  */
-export const SETTINGS_SECTIONS = ['account', 'card', 'theme', 'managers', 'mail', 'line', 'accounting', 'rental', 'features', 'dayof', 'login', 'bank', 'rollover', 'directory'] as const;
+export const SETTINGS_SECTIONS = ['account', 'card', 'theme', 'signature', 'managers', 'mail', 'line', 'accounting', 'rental', 'features', 'dayof', 'login', 'bank', 'rollover', 'directory'] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
 export function parseSettingsSection(value: string | undefined): SettingsSection | null {
@@ -117,6 +118,8 @@ export function SettingsView({
     // The card login messages and the card writer say 「設定 → 委員カード」: the same name here.
     ...(discord ? [{ key: 'card', group: 'self', label: '委員カード', body: <CardSettingsPanel admin={admin} onChanged={onChanged} /> } as Part] : []),
     { key: 'theme', group: 'self', label: '画面の色', body: <ThemeSection /> },
+    // The mail and official LINE signature (2026-11-10): with the committee mailbox only (the panel answers 404 otherwise).
+    ...(committeeMail ? [{ key: 'signature', group: 'self', label: '署名', body: <SignaturePanel onAvailable={report('signature')} /> } as Part] : []),
     ...(admin
       ? ([
           ...(discord ? [{ key: 'managers', group: 'grants', label: '権限設定者', body: <AccessManagersPanel onChanged={onChanged} onAvailable={report('managers')} /> } as Part] : []),

@@ -24,11 +24,14 @@ const HEAD = [
   '4. 相手に失礼になりうる点、誤解されうる点',
 ].join('\n');
 
+const EMAIL_IN_TEXT = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g;
+
 /** The doc job's content and whether the body had to be cut. */
 export function composeMailReviewRequest(input: MailReviewInput): { content: string; cut: boolean } {
   const names = input.toNames.map((n) => cleanText(n)).filter(Boolean).join('、') || '（名前なし）';
   const top = `${HEAD}\n\n【差出人】${cleanText(input.fromName)}\n【宛先】${names}\n【件名】${cleanText(input.subject)}\n【本文】\n`;
-  const body = cleanText(input.body);
+  // Addresses in the text (the signature carries the committee's and the person's own, 2026-11-10) are not sent either.
+  const body = cleanText(input.body).replace(EMAIL_IN_TEXT, '（メールアドレス）');
   const room = ASSISTANT_LIMITS.docContentMax - top.length - 40;
   if (body.length <= room) return { content: `${top}${body}`, cut: false };
   return { content: `${top}${body.slice(0, Math.max(0, room))}\n（長いので、ここから後は省きました）`, cut: true };

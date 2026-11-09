@@ -2,11 +2,13 @@ import { useRef, useState } from 'react';
 import { LINE_ATTACH_LIMITS, LINE_LIMITS, type LineConversationDetail, type LineDraftView, type LinePreviewResponse, type LinePublicDays, type LineSendResponse } from '../../shared/line';
 import { composeLineReviewRequest } from '../../shared/lineReview';
 import { screenLine } from '../../shared/lineScreen';
+import { lineOwnText } from '../../shared/signature';
 import { api, fmtDate, toFailure } from '../api';
 import { BotReview } from './BotReview';
 import { LineAttachPicker, PreviewAttachments, type PickedFile } from './LineAttachPicker';
 import type { PickedImage } from './LineImagePicker';
 import { LineScreenChecks } from './LineScreenChecks';
+import { useLineSignature } from './useLineSignature';
 
 /**
  * Manual reply, shaped like the mail reply (2026-11-09): write → check what will be sent (the draft is saved, the
@@ -36,6 +38,15 @@ export function LineReplyPanel({ detail, onSent }: { detail: LineConversationDet
   const sending = useRef(false);
   const mock = detail.sending !== 'live';
   const title = mock ? 'LINE で返信（模擬送信）' : 'LINE で返信';
+  // The committee's short signature at the end (2026-11-10): put in once it is known, unless a saved draft or typing
+  // came first. A body with the signature alone counts as empty.
+  const signature = useLineSignature();
+  const [signed, setSigned] = useState(!!detail.reply.draft);
+  if (signature && !signed) {
+    setSigned(true);
+    if (body === '') setBody(`\n\n${signature}`);
+  }
+  const fresh = () => (signature ? `\n\n${signature}` : '');
 
   if (!detail.reply.available) {
     return (
@@ -56,7 +67,7 @@ export function LineReplyPanel({ detail, onSent }: { detail: LineConversationDet
 
   async function prepare() {
     const length = body.trim().length;
-    if (length === 0) return setError('本文を入力してください。');
+    if (lineOwnText(body, signature).length === 0) return setError('本文を入力してください。');
     if (length > LINE_LIMITS.replyMaxLength) return setError(`本文は ${LINE_LIMITS.replyMaxLength.toLocaleString('ja-JP')} 文字以内にしてください（いま ${length.toLocaleString('ja-JP')} 文字）。`);
     setError(null);
     setBusy(true);
@@ -103,7 +114,7 @@ export function LineReplyPanel({ detail, onSent }: { detail: LineConversationDet
       });
       discardPreview();
       setSaved(null);
-      setBody('');
+      setBody(fresh());
       setImages([]);
       setFiles([]);
       setMessage({ kind: 'ok', text: `${res.outbox.mock ? '模擬送信の結果' : '送信の結果'}: ${res.outbox.statusLabel}。${res.outbox.statusNote}` });
@@ -243,7 +254,7 @@ export function LineReplyPanel({ detail, onSent }: { detail: LineConversationDet
       )}
       <BotReview
         request={composeLineReviewRequest({ accountName: detail.account.name, audience, body })}
-        empty={length === 0}
+        empty={lineOwnText(body, signature).length === 0}
         intro="誤字・敬語、日付・曜日・金額・名称などを委員会の資料と照らした食い違い、LINE での読みやすさを Bot（AI）が確かめます。送信元の名前・相手の種類と人数・本文が Bot に渡ります。相手の名前と LINE の ID は渡しません。"
         changedWhat="本文"
         testId="line-review"

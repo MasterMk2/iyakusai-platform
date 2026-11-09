@@ -1572,3 +1572,15 @@ button.task-tree-toggle:focus-visible { outline-offset: -3px; }
 .home-decisions .rows li { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
 .home-decisions .rows li > a { min-width: 0; }
 .view-switch-row { margin: 8px 0 4px; }
+
+/* The signature's settings (2026-11-10): one field per line like the other settings forms, previews in the mail font. */
+.signature-form { display: grid; gap: 6px; margin: 8px 0 12px; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-sunken); min-width: 0; max-width: 40rem; }
+.signature-form h4 { margin: 0 0 4px; }
+.signature-form > label { font-weight: 700; font-size: 14px; }
+.signature-form input[type='text'], .signature-form input[type='email'] { width: 100%; box-sizing: border-box; }
+.signature-form .hint { margin: 0 0 4px; }
+.signature-form .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 4px; }
+.signature-preview { max-width: 40rem; margin: 4px 0 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; }
+@media (max-width: 600px) {
+  .signature-form { padding: 10px; }
+}

@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from 'react';
 import { LINE_ATTACH_LIMITS, LINE_LIMITS, type BroadcastOptionsResponse, type BroadcastPreviewResponse, type BroadcastSendResponse, type LinePublicDays } from '../../shared/line';
 import { composeLineReviewRequest } from '../../shared/lineReview';
 import { screenLine } from '../../shared/lineScreen';
+import { lineOwnText } from '../../shared/signature';
 import { api, fmtDate, toFailure } from '../api';
 import { useLoader } from '../useLoader';
 import { BotReview } from './BotReview';
@@ -10,6 +11,7 @@ import type { PickedImage } from './LineImagePicker';
 import { LineRecipientField } from './LineRecipientField';
 import { LineScreenChecks } from './LineScreenChecks';
 import { LoadStatus } from './LoadStatus';
+import { useLineSignature } from './useLineSignature';
 
 /**
  * Sending from the official account (broadcast 2026-11-02; the form shaped like the mail one 2026-11-09): the same
@@ -39,10 +41,19 @@ export function LineBroadcast({ accountId, refresh, onSent, onClose }: { account
   const [errors, setErrors] = useState<Partial<Record<'to' | 'body', string>>>({});
   const [message, setMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
   const sending = useRef(false);
+  // The committee's short signature at the end (2026-11-10): put in once it is known, unless typing came first.
+  const signature = useLineSignature();
+  const [signed, setSigned] = useState(false);
+  if (signature && !signed) {
+    setSigned(true);
+    if (body === '') setBody(`\n\n${signature}`);
+  }
 
   const o = options.data;
   const count = all ? (o?.recipients.length ?? 0) : selected.length;
   const length = body.trim().length;
+  // A body with the signature alone counts as empty.
+  const own = lineOwnText(body, signature);
   const friendOf = new Map((o?.recipients ?? []).map((r) => [r.conversationId, r.friend]));
 
   function changed() {
@@ -54,7 +65,7 @@ export function LineBroadcast({ accountId, refresh, onSent, onClose }: { account
   function check(): boolean {
     const next: typeof errors = {};
     if (count === 0) next.to = '宛先を選んでください。名前を入れて候補から選ぶか、「一覧から選ぶ」から選びます。';
-    if (length === 0) next.body = '本文を入力してください。';
+    if (own.length === 0) next.body = '本文を入力してください。';
     else if (length > LINE_LIMITS.replyMaxLength) next.body = `本文は ${LINE_LIMITS.replyMaxLength.toLocaleString('ja-JP')} 文字以内にしてください（いま ${length.toLocaleString('ja-JP')} 文字）。`;
     setErrors(next);
     return Object.keys(next).length === 0;
@@ -90,7 +101,7 @@ export function LineBroadcast({ accountId, refresh, onSent, onClose }: { account
     try {
       const res = await api<BroadcastSendResponse>('POST', '/api/line/broadcast/send', { consentId: preview.consentId, operationId, body: preview.body });
       changed();
-      setBody('');
+      setBody(signature ? `\n\n${signature}` : '');
       setImages([]);
       setFiles([]);
       setSelected([]);
@@ -292,7 +303,7 @@ export function LineBroadcast({ accountId, refresh, onSent, onClose }: { account
       {o && (
         <BotReview
           request={composeLineReviewRequest({ accountName: o.account.name, audience: audienceOf(count), body })}
-          empty={length === 0}
+          empty={own.length === 0}
           intro="誤字・敬語、日付・曜日・金額・名称などを委員会の資料と照らした食い違い、LINE での読みやすさを Bot（AI）が確かめます。送信元の名前・相手の人数・本文が Bot に渡ります。相手の名前と LINE の ID は渡しません。"
           changedWhat="本文か宛先の人数"
           testId="line-review"
