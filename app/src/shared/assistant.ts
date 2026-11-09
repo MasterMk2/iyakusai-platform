@@ -23,7 +23,8 @@ export const IMAGE_ASPECTS = ['1:1', '16:9', '9:16', '4:3', '3:4'] as const;
 export const REMINDER_REPEATS = ['none', 'daily', 'weekly', 'monthly'] as const;
 export const CANDIDATE_ACTIONS = ['ok', 'ng', 'undo', 'return'] as const;
 
-export type AssistantJobKind = 'ask' | 'doc' | 'image' | 'remind' | 'screening';
+/** taskdraft (2026-11-09): task drafting, read by the person who asked only (contract §9). */
+export type AssistantJobKind = 'ask' | 'doc' | 'image' | 'remind' | 'screening' | 'taskdraft';
 export type AssistantJobState = 'queued' | 'running' | 'done' | 'failed' | 'canceled';
 /** Jobs a browser may create (remind and screening have their own routes). */
 export type BrowserJobKind = 'ask' | 'doc' | 'image';
@@ -63,6 +64,71 @@ export interface AssistantJobResult {
   reminder?: AssistantReminder;
   message?: string;
   taskNumber?: number | null;
+  /** taskdraft: the proposed tasks (checked by this server before the browser sees it). */
+  draft?: TaskDraft;
+}
+
+// ---- task drafting (taskdraft, 2026-11-09, contract §9): an outline in, tasks and proposed assignees out
+
+export const TASK_DRAFT_LIMITS = {
+  overviewMax: 2000,
+  /** People the Bot may propose (the Bot host's limit). */
+  rosterMax: 80,
+  /** Open tasks sent so the Bot does not propose the same work again (the Bot host's limit). */
+  openTasksMax: 40,
+  itemsMax: 10,
+} as const;
+
+/** Someone the Bot could also ask, with the counts the code (not the AI) took from the task list. */
+export interface TaskDraftPerson {
+  id: string;
+  name: string;
+  /** "企画課｜主担当 2・副担当 1・期限超過 1". */
+  facts: string;
+}
+
+export interface TaskDraftItem {
+  title: string;
+  tags: string[];
+  deadline: string | null;
+  purpose: string;
+  deliverable: string;
+  completionCriteria: string;
+  openQuestions: string;
+  /** A Task user from the roster sent with the request, or null. */
+  assigneeId: string | null;
+  assigneeName: string | null;
+  /** 'ai': the Bot chose; 'rule': the code chose (department, then fewest open tasks); null: no proposal. */
+  assigneeBy: 'ai' | 'rule' | null;
+  assigneeFacts: string;
+  reason: string;
+  helperIds: string[];
+  helperNames: string[];
+  alternatives: TaskDraftPerson[];
+}
+
+export interface TaskDraft {
+  /** A new parent task (project) for the items, or null (one item, or drafting under an existing parent). */
+  parent: TaskDraftItem | null;
+  items: TaskDraftItem[];
+  notes: string;
+  /** Things to decide that the outline did not say. */
+  questions: string[];
+  /** The existing parent the items go under, when the draft was asked for from one. */
+  parentTask: { id: string; title: string } | null;
+  /** Committee documents the Bot read for hints. */
+  sources: { label: string; excerpt: string }[];
+  model?: string;
+}
+
+/** POST /api/assistant/taskdraft: the browser sends the outline; the server adds the roster and the open tasks. */
+export interface TaskDraftRequest {
+  clientOperationId: string;
+  overview: string;
+  deadline?: string | null;
+  tags?: string[];
+  parentId?: string | null;
+  useSources?: boolean;
 }
 
 export interface AssistantJob {
@@ -90,7 +156,8 @@ export interface AssistantModelOption {
 }
 
 export interface AssistantMeta {
-  features: { ask: boolean; doc: boolean; image: boolean; remind: boolean; screening: boolean };
+  /** taskdraft is absent from a Bot from before 2026-11-09 (read it as false). */
+  features: { ask: boolean; doc: boolean; image: boolean; remind: boolean; screening: boolean; taskdraft?: boolean };
   models: AssistantModelOption[];
   docTypes: { id: string; label: string }[];
   reminderChannels: AssistantNamed[];

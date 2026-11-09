@@ -4,6 +4,7 @@ import type { TaskContextResponse } from '../../shared/tasks';
 import { TASK_ROLE_LABELS } from '../../shared/tasks';
 import { api, toFailure } from '../api';
 import { useLoader } from '../useLoader';
+import { AccessManagersPanel } from './AccessManagersPanel';
 import { AdminPanel } from './AdminPanel';
 import { DiscordAccountPanel } from './DiscordAccountPanel';
 import { LoadStatus } from './LoadStatus';
@@ -24,7 +25,7 @@ import './payments/payments.css';
  * PC and in place of it on a phone (../docs/ui-guidelines.md §6): before, every part was on one page, some 20,000px
  * long for an access administrator, with five lists of every member one after another.
  */
-export const SETTINGS_SECTIONS = ['account', 'card', 'theme', 'mail', 'line', 'accounting', 'rental', 'dayof', 'login', 'bank', 'rollover', 'directory'] as const;
+export const SETTINGS_SECTIONS = ['account', 'card', 'theme', 'managers', 'mail', 'line', 'accounting', 'rental', 'dayof', 'login', 'bank', 'rollover', 'directory'] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
 export function parseSettingsSection(value: string | undefined): SettingsSection | null {
@@ -117,6 +118,7 @@ export function SettingsView({
     { key: 'theme', group: 'self', label: '画面の色', body: <ThemeSection /> },
     ...(admin
       ? ([
+          ...(discord ? [{ key: 'managers', group: 'grants', label: '権限設定者', body: <AccessManagersPanel onChanged={onChanged} onAvailable={report('managers')} /> } as Part] : []),
           {
             key: 'mail',
             group: 'grants',

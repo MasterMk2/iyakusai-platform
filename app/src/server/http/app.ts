@@ -450,7 +450,14 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     : null;
 
   const taskRoutes = registerTaskRoutes(app, { tasks: options.tasks ?? null, mail: store, mailCases: committeeMail?.cases ?? null, line: options.line, clock, parse, requireUser });
-  registerAssistantRoutes(app, { assistant: options.assistant ?? null, mailDraftBcc: options.mailbox?.config.draftBccAddress ?? null, parse, requireUser });
+  registerAssistantRoutes(app, {
+    assistant: options.assistant ?? null,
+    mailDraftBcc: options.mailbox?.config.draftBccAddress ?? null,
+    parse,
+    requireUser,
+    // Task drafting (2026-11-09): the Bot proposes assignees from the Task service's members and the people's departments.
+    taskDraft: { tasks: options.tasks ?? null, listUsers: () => (discordApi ? discordApi.listUsers() : store.current.users.filter((u) => !u.disabled)), now: () => new Date(clock()) },
+  });
   // The committee calendar (2026-11-03): events, the yearly schedule, the home reminders, the personal iCal feed (see calendar/routes.ts).
   registerCalendarRoutes(app, options.calendar ?? null, {
     requireUser,

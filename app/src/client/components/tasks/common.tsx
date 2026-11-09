@@ -72,11 +72,14 @@ export function DepartmentPicker({
   value,
   onChange,
   disabled,
+  legend,
 }: {
   departments: Department[];
   value: string[];
   onChange: (value: string[]) => void;
   disabled?: boolean;
+  /** Another legend (the task draft's optional hint); by default a task's 1 to tagsMax departments. */
+  legend?: string;
 }) {
   const toggle = (key: string, on: boolean) => {
     const next = on ? [...value, key] : value.filter((k) => k !== key);
@@ -85,7 +88,7 @@ export function DepartmentPicker({
   };
   return (
     <fieldset className="department-picker" disabled={disabled}>
-      <legend>部局（1〜{TASK_LIMITS.tagsMax} つ）</legend>
+      <legend>{legend ?? `部局（1〜${TASK_LIMITS.tagsMax} つ）`}</legend>
       <p className="hint department-hint">課を選ぶと、課と部の両方の一覧に出ます。</p>
       {departments.map((d) => (
         <label key={d.key} className="department-option">

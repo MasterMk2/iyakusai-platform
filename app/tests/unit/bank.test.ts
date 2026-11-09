@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -234,6 +234,53 @@ describe('connecting, renewing, disconnecting', () => {
     clock.now += 11 * 60_000;
     expect(s.status().state).toBe('expired');
     await expect(s.accessToken()).rejects.toMatchObject({ reason: 'expired' });
+  });
+
+  it('sweeps: leaves a valid token, deletes an expired one without refresh, renews one with refresh', async () => {
+    const clock = { now: T0 };
+    const bank = fakeBank([grant(1, { refresh_token: undefined }), grant(2), grant(3)]);
+    const c = config();
+    const s = service(c, bank, clock);
+    expect(await s.sweep()).toBe('none');
+    await s.complete('chair', { state: stateOf(s.start('chair')), code: 'code-1' });
+    clock.now += 59 * 60_000;
+    expect(await s.sweep()).toBe('valid');
+    expect(existsSync(c.tokenFile)).toBe(true);
+    clock.now += 2 * 60_000;
+    expect(await s.sweep()).toBe('deleted');
+    expect(existsSync(c.tokenFile)).toBe(false);
+    expect(s.status()).toMatchObject({ state: 'reconnect_required', lastError: { message: expect.stringContaining('削除しました') } });
+    expect(readFileSync(path.join(dir, 'bank-audit.jsonl'), 'utf8')).toContain('"expired_deleted"');
+
+    // With a refresh token, the expired access token is replaced by a renewed one.
+    await s.complete('chair', { state: stateOf(s.start('chair')), code: 'code-2' });
+    clock.now += 61 * 60_000;
+    expect(await s.sweep()).toBe('renewed');
+    expect(new BankVault(c.tokenFile, c.tokenKey, { environment: 'sunabar', clientId: CLIENT_ID }).read()).toMatchObject({ accessToken: 'synthetic-access-3', refreshToken: 'synthetic-refresh-3' });
+    expect(s.status().state).toBe('connected');
+  });
+
+  it('sweeps: deletes when the bank refuses the refresh token, keeps the tokens on a network failure', async () => {
+    const clock = { now: T0 };
+    const bank = fakeBank([grant(1), { status: 503, body: {} }, { status: 400, body: { error: 'invalid_grant' } }]);
+    const c = config();
+    const s = service(c, bank, clock);
+    await s.complete('chair', { state: stateOf(s.start('chair')), code: 'code-1' });
+    clock.now += 61 * 60_000;
+    expect(await s.sweep()).toBe('failed');
+    expect(existsSync(c.tokenFile)).toBe(true);
+    expect(await s.sweep()).toBe('deleted');
+    expect(existsSync(c.tokenFile)).toBe(false);
+    expect(s.status().state).toBe('reconnect_required');
+  });
+
+  it('sweeps: leaves a file it cannot open for the member to reconnect over', async () => {
+    const clock = { now: T0 };
+    const c = config();
+    new BankVault(c.tokenFile, randomBytes(32), { environment: 'sunabar', clientId: CLIENT_ID }).write({ accessToken: 'synthetic-access-x', refreshToken: null, expiresAt: T0 - 1, scopes: ['private:account'], connectedAt: new Date(T0 - 3_600_000).toISOString(), connectedBy: 'chair', refreshedAt: null });
+    const s = service(c, fakeBank([]), clock);
+    expect(await s.sweep()).toBe('unreadable');
+    expect(existsSync(c.tokenFile)).toBe(true);
   });
 
   it('checks the connection with the accounts and balances, account numbers cut to four digits', async () => {

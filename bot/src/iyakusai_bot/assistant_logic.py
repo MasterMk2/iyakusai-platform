@@ -11,6 +11,7 @@ import re
 from datetime import datetime, timedelta, timezone
 
 from .remind_logic import JST, ParseError, parse_due
+from .task_domain import DEPARTMENTS
 
 ASK_MODELS = ("auto", "sonnet", "opus")          # gemini は選択肢に出さない(未導入)
 ASK_EFFORTS = ("auto", "low", "medium", "high", "xhigh")
@@ -20,6 +21,15 @@ DOC_FORMATS = ("docx", "md", "txt")
 IMAGE_ASPECTS = ("1:1", "16:9", "9:16", "4:3", "3:4")
 REMIND_REPEATS = ("none", "daily", "weekly", "monthly")
 SCREENING_ACTIONS = ("ok", "ng", "undo", "return")
+
+# タスクの起票支援(taskdraft・2026-11-09、契約 §9)。名簿と未完了のタスクは統合アプリのサーバーが足す。
+TASKDRAFT_OVERVIEW_MAX = 2000
+TASKDRAFT_ROSTER_MAX = 80
+TASKDRAFT_OPEN_TASKS_MAX = 40   # 連携口の本文の上限(64 KB)に収める
+TASKDRAFT_TAGS_MAX = 5
+TASKDRAFT_COUNT_MAX = 9999
+_TASK_USER_RE = re.compile(r"[a-z0-9-]{1,64}\Z")
+_DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}\Z")
 
 MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024
 DOWNLOAD_MIMES = {
@@ -151,6 +161,109 @@ def screening_input(action: str, payload: dict) -> dict:
     if action == "return" and not comment:
         raise InputError("差し戻しにはコメントが必要です")
     return {"comment": comment}
+
+
+def _date_only(value, *, field: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not _DATE_RE.fullmatch(value):
+        raise InputError(f"{field} は YYYY-MM-DD で指定してください")
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        raise InputError(f"{field} の日付が正しくありません") from None
+    return value
+
+
+def _department_keys(value, *, field: str, max_len: int) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > max_len:
+        raise InputError(f"{field} の指定が正しくありません")
+    out: list[str] = []
+    for key in value:
+        if not isinstance(key, str) or key not in DEPARTMENTS:
+            raise InputError(f"{field} に知らない部局があります")
+        if key not in out:
+            out.append(key)
+    return out
+
+
+def _task_user(value, *, field: str) -> str:
+    if not isinstance(value, str) or not _TASK_USER_RE.fullmatch(value):
+        raise InputError(f"{field} の形式が正しくありません")
+    return value
+
+
+def _count(value, *, field: str) -> int:
+    if type(value) is not int or not 0 <= value <= TASKDRAFT_COUNT_MAX:
+        raise InputError(f"{field} の件数が正しくありません")
+    return value
+
+
+def taskdraft_input(payload: dict) -> dict:
+    """タスクの起票支援の入力(契約 §9-2)。概略は委員が書き、名簿と未完了のタスクはアプリのサーバーが足す。
+
+    名簿(roster)は担当の案に使ってよい人の一覧。AI の答えに名簿の外の人が出ても使わない(taskdraft_logic)。
+    """
+    _only(payload, {"overview", "deadline", "tags", "parent", "useSources", "roster", "openTasks"})
+    use_sources = payload.get("useSources", False)
+    if type(use_sources) is not bool:
+        raise InputError("資料参照は true / false で指定してください")
+    parent = payload.get("parent")
+    if parent is not None:
+        if not isinstance(parent, dict):
+            raise InputError("親タスクの指定が正しくありません")
+        _only(parent, {"id", "title"})
+        parent = {"id": _task_user(parent.get("id"), field="親タスク"),
+                  "title": clean_text(parent.get("title"), field="親タスクの題", max_len=120, min_len=1)}
+    roster_raw = payload.get("roster", [])
+    if not isinstance(roster_raw, list) or len(roster_raw) > TASKDRAFT_ROSTER_MAX:
+        raise InputError("担当の候補の指定が正しくありません")
+    roster: list[dict] = []
+    seen: set[str] = set()
+    for person in roster_raw:
+        if not isinstance(person, dict):
+            raise InputError("担当の候補の指定が正しくありません")
+        _only(person, {"id", "name", "departments", "lead", "helper", "overdue", "history"})
+        ident = _task_user(person.get("id"), field="担当の候補")
+        if ident in seen:
+            raise InputError("担当の候補が重複しています")
+        seen.add(ident)
+        roster.append({
+            "id": ident,
+            "name": clean_text(person.get("name"), field="候補の名前", max_len=40, min_len=1),
+            "departments": _department_keys(person.get("departments"), field="候補の所属", max_len=10),
+            "lead": _count(person.get("lead", 0), field="主担当"),
+            "helper": _count(person.get("helper", 0), field="副担当"),
+            "overdue": _count(person.get("overdue", 0), field="期限超過"),
+            "history": _department_keys(person.get("history"), field="担当した部局", max_len=10),
+        })
+    tasks_raw = payload.get("openTasks", [])
+    if not isinstance(tasks_raw, list) or len(tasks_raw) > TASKDRAFT_OPEN_TASKS_MAX:
+        raise InputError("未完了のタスクの指定が正しくありません")
+    open_tasks: list[dict] = []
+    for task in tasks_raw:
+        if not isinstance(task, dict):
+            raise InputError("未完了のタスクの指定が正しくありません")
+        _only(task, {"title", "tags", "assigneeId", "deadline"})
+        assignee = task.get("assigneeId")
+        open_tasks.append({
+            "title": clean_text(task.get("title"), field="タスクの題", max_len=120, min_len=1),
+            "tags": _department_keys(task.get("tags"), field="タスクの部局", max_len=TASKDRAFT_TAGS_MAX),
+            "assigneeId": None if assignee is None else _task_user(assignee, field="タスクの担当"),
+            "deadline": _date_only(task.get("deadline"), field="タスクの期限"),
+        })
+    return {
+        "overview": clean_text(payload.get("overview"), field="概略", max_len=TASKDRAFT_OVERVIEW_MAX,
+                               min_len=1, multiline=True),
+        "deadline": _date_only(payload.get("deadline"), field="全体の期限"),
+        "tags": _department_keys(payload.get("tags"), field="部局", max_len=TASKDRAFT_TAGS_MAX),
+        "parent": parent,
+        "useSources": use_sources,
+        "roster": roster,
+        "openTasks": open_tasks,
+    }
 
 
 def client_operation_id(value) -> str:

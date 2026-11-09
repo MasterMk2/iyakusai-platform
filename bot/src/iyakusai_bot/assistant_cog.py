@@ -6,10 +6,12 @@ Pi の連携口(gateway)が受けたジョブを、poll_sec ごとに claim し�
 - remind: ReminderStore を Discord の /remind と同じ権限規則で書き、通知先に確認を出す。
 - screening: TaskScreening のボタン処理(handle / submit_return)をそのまま呼ぶ(TaskCog.authorize を通る)。
 - image: Images の /image 本体(Claude が SVG を書き PNG にする)を WebInteraction 越しに呼ぶ。#bottest に投稿。
+- taskdraft: 概略からタスクの分け方と担当の案を作る(2026-11-09・taskdraft_logic)。Documents と同じ AI を使い、
+  Discord には投稿しない(依頼した本人だけが結果を読む。起票はアプリが既存のタスク作成で行う)。
   [assistant] image_enabled が false か、Images が使えない(未設定・点検失敗)ときは受けて即 IMAGE_DISABLED。
 - reminder_snapshot / capabilities / heartbeat: 連携口が読む写しを 30 秒ごと・変更の直後に書く。
 
-並行数: ask/doc は 2 本まで(Knowledge の同時実行枠と CLI の上限はそのまま効く)。image は 1 本
+並行数: ask/doc/taskdraft は 2 本まで(Knowledge の同時実行枠と CLI の上限はそのまま効く)。image は 1 本
 (1 枚に数十秒〜数分かかり、AI の枠と Pi のメモリを /ask と分け合うため)。remind/screening は軽いので、
 受けたら順に即実行する(使えないときの image の即失敗も同じ列)。
 ログには依頼の中身(質問・名前・内容)を出さない。ジョブ番号と種類、例外の型名だけ。
@@ -33,8 +35,10 @@ from . import access as A
 from . import access_check
 from . import assistant_logic as L
 from . import remind_logic as rl
+from . import taskdraft_logic as TD
 from . import write_guard
 from .assistant_store import AssistantStore, Job
+from .ai_provider import AIError
 from .config import AssistantSettings
 from .notify import routed_channel_id
 from .reminders import _fmt_item
@@ -56,6 +60,8 @@ DOC_TYPE_LABELS = {
     "mail": ("メール文面", "メール文面(件名+本文)"),
     "free": ("自由", "自由形式"),
 }
+TASKDRAFT_SEARCH_SEC = 60   # 資料を探すのに使ってよい時間(超えたら資料なしで下書きする)
+TASKDRAFT_UNAVAILABLE = "タスクの下書き(AI)はいま使えません。少し待ってから、もう一度依頼してください。"
 IMAGE_DISABLED_MESSAGE = "画像の作成はいま使えません(Bot の設定で止めているか、準備ができていません)。"
 
 
@@ -164,7 +170,7 @@ class Assistant(commands.Cog):
                 break
             self._spawn(job, "image")
         while self._lanes["ask_doc"] < ASK_DOC_LANES:
-            job = await asyncio.to_thread(self.store.claim_next, ("ask", "doc"))
+            job = await asyncio.to_thread(self.store.claim_next, ("ask", "doc", "taskdraft"))
             if job is None:
                 break
             self._spawn(job, "ask_doc")
@@ -247,6 +253,8 @@ class Assistant(commands.Cog):
             return await self._do_remind(job)
         if job.kind == "screening":
             return await self._do_screening(job)
+        if job.kind == "taskdraft":
+            return await self._do_taskdraft(job)
         raise JobError("UNSUPPORTED", "未対応の依頼です")
 
     # ---- 共通: 共有先・依頼者 ----
@@ -502,6 +510,70 @@ class Assistant(commands.Cog):
                   "taskNumber": after.task_number if after is not None else None}
         return result, (message.jump_url if message is not None else None)
 
+    # ---- taskdraft(タスクの起票支援・2026-11-09) ----
+
+    def _taskdraft_ai(self):
+        """/doc と同じ AI と記帳(Documents の provider・usage_log)。同時実行の枠も /doc と分け合う。"""
+        documents = self.bot.get_cog("Documents")
+        provider = getattr(documents, "provider", None)
+        return documents, provider
+
+    async def _taskdraft_sources(self, documents, overview: str) -> tuple[str, list[dict]]:
+        """委員会の資料から、段取りの手がかりになる抜粋を探す。失敗・時間切れは資料なしで続ける。"""
+        kb = getattr(documents, "kb", None)
+        if kb is None:
+            return "", []
+        from .knowledge_search import render_context   # Bot の中だけで使う(純ロジックの試験で読み込まない)
+
+        def search():
+            return list(kb.search(overview, 6, use_fields=False).excerpts)
+
+        try:
+            excerpts = await asyncio.wait_for(asyncio.to_thread(search), timeout=TASKDRAFT_SEARCH_SEC)
+        except Exception as error:  # noqa: BLE001  時間切れ・索引の不具合でも下書きは作る
+            log.warning("タスクの下書きの資料検索に失敗(資料なしで続行): %s", type(error).__name__)
+            return "", []
+        context = render_context(excerpts, budget_chars=TD.CONTEXT_MAX)
+        sources = [{"label": str(e.source)[:160], "excerpt": TD.scrub(" ".join(str(e.text).split()))[:160]}
+                   for e in excerpts[:4]]
+        return context, sources
+
+    async def _do_taskdraft(self, job: Job) -> tuple[dict, str | None]:
+        documents, provider = self._taskdraft_ai()
+        if provider is None:
+            raise JobError("UNAVAILABLE", TASKDRAFT_UNAVAILABLE)
+        inp = job.input
+
+        async def progress(phase: str, text: str) -> None:
+            await asyncio.to_thread(self.store.set_progress, job.id, {"phase": phase, "text": text})
+
+        context, sources = "", []
+        if inp.get("useSources"):
+            await progress("search", "委員会の資料から手がかりを探しています…")
+            context, sources = await self._taskdraft_sources(documents, inp["overview"])
+        await progress("think", "Bot がタスクの分け方と担当の案を考えています…")
+        now = rl.now_jst()
+        prompt = TD.build_prompt(inp, now=now, actor_id=job.actor_id, actor_name=job.actor_name, context=context)
+        model = provider.choose_model(inp["overview"])
+        try:
+            res = await provider.complete(prompt, model)
+        except AIError as error:
+            log.warning("依頼 %s のタスクの下書きで AI が失敗: %s", job.id, getattr(error, "kind", "unknown"))
+            raise JobError("AI_ERROR", TASKDRAFT_UNAVAILABLE) from None
+        usage_log = getattr(documents, "usage_log", None)
+        if usage_log is not None:
+            try:   # 記帳は落ちてよい・下書きは落とさない(/doc と同じ)
+                await asyncio.to_thread(usage_log.record, "assistant.taskdraft", job.actor_name, res)
+            except Exception as error:  # noqa: BLE001
+                log.warning("使用量の記帳に失敗(下書きは返す): %s", type(error).__name__)
+        try:
+            draft = TD.parse_result(res.text, inp, now=now)
+        except ValueError:
+            raise JobError("NO_ANSWER", "下書きを作れませんでした。概略をもう少し具体的にして、もう一度依頼してください。") from None
+        draft["sources"] = sources
+        draft["model"] = str(getattr(res, "model", "") or model)
+        return {"text": TD.summary_text(draft), "files": [], "draft": draft}, None
+
     # ---- 写し・生存記録・能力(連携口が読む) ----
 
     def _share_or_none(self):
@@ -591,6 +663,8 @@ class Assistant(commands.Cog):
                 "image": self.image_enabled,   # Claude の SVG 方式(2026-10-14 夜)。Gemini は使わない
                 "remind": True,
                 "screening": self.bot.get_cog("TaskScreening") is not None,
+                # タスクの起票支援は /doc と同じ AI があるときだけ(2026-11-09)
+                "taskdraft": self._taskdraft_ai()[1] is not None,
             },
             # Gemini の依頼は受け付けない(延期中)。連携口はこの値が false のとき gemini を出さない
             "gemini": False,

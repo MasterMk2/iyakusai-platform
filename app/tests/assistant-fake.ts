@@ -46,7 +46,7 @@ const jobIdOf = (seq: number) => `j_${String(seq).padStart(20, '0')}`;
 const error = (code: string, message: string) => ({ error: { code, message } });
 
 export const FAKE_META = {
-  features: { ask: true, doc: true, image: false, remind: true, screening: true },
+  features: { ask: true, doc: true, image: false, remind: true, screening: true, taskdraft: true },
   models: [
     { id: 'auto', label: '自動', ask: true, doc: true },
     { id: 'sonnet', label: 'Claude Sonnet', ask: true, doc: true },

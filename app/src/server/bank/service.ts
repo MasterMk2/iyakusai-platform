@@ -16,6 +16,8 @@ import { BankVault, VaultUnreadable, type BankTokens } from './vault.js';
 //               and the new tokens are saved before they are used (a bank that rotates refresh tokens loses nothing)
 //   refused  -> the bank refused the refresh token: the vault is cleared and the screen says 要再接続
 //   disconnect -> the vault is cleared (the bank has no revoke API; its permission stays until it expires)
+//   sweep    -> every few minutes (2026-11-07): an access token past its expiry is renewed, or deleted when it cannot
+//               be, so no expired token stays on disk (the bank's API checklist, Sec-37)
 // The audit file records who did what and the outcome, never a token, a code or the bank's answer.
 
 const STATE_TTL_MS = 10 * 60_000;
@@ -24,8 +26,13 @@ const STATE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const CODE_PATTERN = /^[\x21-\x7e]{1,2048}$/;
 /** Renew when this little is left whatever the lifetime. */
 const MIN_REMAINING_MS = 60_000;
+/** How often the server looks for expired tokens to renew or delete. */
+export const BANK_SWEEP_INTERVAL_MS = 10 * 60_000;
 
 export const BANK_STATE_FILE = 'bank-state.json';
+
+/** What one sweep did. */
+export type BankSweepOutcome = 'none' | 'valid' | 'unreadable' | 'renewed' | 'deleted' | 'failed';
 
 /** A refusal for the member, with words for the screen (no secret in it). */
 export class BankFlowError extends Error {
@@ -232,6 +239,37 @@ export class BankService {
       lastRefreshedAt: tokens.refreshedAt,
       lastError,
     };
+  }
+
+  /**
+   * Removes tokens that have run out, so none outlives its expiry on disk. Without a refresh token, an expired
+   * access token is deleted. With one, it is renewed (the new tokens replace the file), and a refresh token the bank
+   * no longer takes is deleted by the renewal itself. A network failure keeps the tokens for the next sweep. A file
+   * this server cannot open (another key or client) is left for the member to reconnect over.
+   */
+  async sweep(): Promise<BankSweepOutcome> {
+    let tokens: BankTokens | null;
+    try {
+      tokens = this.#vault.read();
+    } catch (err) {
+      if (err instanceof VaultUnreadable) return 'unreadable';
+      throw err;
+    }
+    if (!tokens) return 'none';
+    if (tokens.expiresAt === null || tokens.expiresAt > this.#deps.now()) return 'valid';
+    if (!tokens.refreshToken) {
+      this.#vault.clear();
+      this.#writeMeta({ version: 1, reconnectRequired: true, lastError: { at: this.#deps.clock(), message: 'トークンの期限が切れたので、保存していたトークンを削除しました。つなぎ直してください。' } });
+      this.#audit('expired_deleted', null, 'ok');
+      return 'deleted';
+    }
+    try {
+      await this.#renew(tokens, true);
+      return 'renewed';
+    } catch (err) {
+      if (err instanceof BankFlowError && err.reason === 'reconnect') return 'deleted';
+      return 'failed';
+    }
   }
 
   // ---- internals

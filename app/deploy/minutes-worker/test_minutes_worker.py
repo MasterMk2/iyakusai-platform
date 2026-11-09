@@ -35,6 +35,34 @@ class Summary(unittest.TestCase):
         self.assertLessEqual(len(p), w.GLOSSARY_CHARS + 2)
         self.assertTrue(p.startswith("医薬祭実行委員会の会議。"))
 
+    def test_summary_is_told_the_committee_words(self):
+        job = {"title": "役員会", "heldOn": "2026-11-07", "glossary": ["協賛", "渉外課", "協賛", " ", "合成 太郎"],
+               "review": {"id": 1, "comment": "直して", "draft": {}, "body": "", "earlier": []}}
+        for prompt in (w.build_prompt(job, ["[00:00:00|0] 共産の依頼"], 1, 1), w.build_revise_prompt(job, ["[00:00:00|0] 共産の依頼"], 1, 1)):
+            rule = next(line for line in prompt.splitlines() if "正しい表記" in line)
+            self.assertTrue(rule.endswith(": 協賛、渉外課、合成 太郎"), rule)
+            self.assertIn("quote だけは文字起こしのまま", rule)
+        # 用語集が無い（古いアプリ）ときは、その行ごと無い。
+        bare = w.build_prompt({**job, "glossary": []}, ["[00:00:00|0] あ"], 1, 1)
+        self.assertNotIn("正しい表記", bare)
+        self.assertIn("unclear に書く。\n- 個人の事情", bare)
+
+    def test_summary_glossary_is_cut_short(self):
+        rule = w.glossary_rule(["名前%d" % i for i in range(1000)])
+        words = rule.rstrip("\n").split(": ", 1)[1].split("、")
+        self.assertLessEqual(sum(len(x) + 1 for x in words), w.SUMMARY_GLOSSARY_CHARS)
+        self.assertEqual(words[0], "名前0")
+
+    def test_a_copy_of_the_glossary_is_not_a_line(self):
+        words = ["医薬祭", "役員会", "協賛", "山田 花子", "医薬祭実行委員会"]
+        prompt = w.glossary_prompt(words)
+        # 2026-11-08 の本物の録音で large-v3 が書いた形（読点が入ったものも）と、用語が続いた形は捨てる。
+        for text in ("医薬祭実行委員会の会議。", "医薬祭、実行委員会の会議。", " 役員会、協賛、山田花子。 "):
+            self.assertTrue(w.echoes_prompt(text, prompt, words), text)
+        # 用語 1 つだけ（長い用語も）・短い返事・プロンプトに無い言葉が付いた文は発言として残す。
+        for text in ("協賛。", "山田 花子", "医薬祭実行委員会。", "会議。", "医薬祭実行委員会の会議です。", "協賛の件です"):
+            self.assertFalse(w.echoes_prompt(text, prompt, words), text)
+
     def test_split_parts_keeps_every_line(self):
         lines = ["あ" * 100 for _ in range(50)]
         parts = w.split_parts(lines, limit=1000)
@@ -166,6 +194,21 @@ class Windows(unittest.TestCase):
         self.assertEqual(r["durationSec"], 14.6)
         self.assertFalse(model.kw["condition_on_previous_text"])
         self.assertIn("協賛", model.kw["initial_prompt"])
+
+    def test_transcribe_drops_the_copies_of_the_glossary(self):
+        class Seg:
+            def __init__(self, start, end, text):
+                self.start, self.end, self.text = start, end, text
+
+        class Model:
+            def transcribe(self, samples, **kw):
+                return iter([Seg(18.0, 52.0, "医薬祭実行委員会の会議。"), Seg(53.0, 54.0, "協賛。"), Seg(55.0, 56.0, "始めます")]), None
+
+        job = {"id": "mt_1", "audio": {"ext": "wav"}, "glossary": ["協賛"]}
+        windows = [(0.0, np.zeros(16000 * 60, dtype=np.float32))]
+        with mock.patch.object(w, "whisper_model", return_value=(Model(), "large-v3")), mock.patch.object(w, "audio_windows", return_value=iter(windows)):
+            r = w.transcribe(mock.Mock(), job)
+        self.assertEqual([x["text"] for x in r["segments"]], ["協賛。", "始めます"])
 
 
 class ProgressReports(unittest.TestCase):
@@ -301,6 +344,106 @@ class Loop(unittest.TestCase):
             d = w.summarize({"id": "mt_1", "title": "t", "heldOn": "2026-11-02", "transcript": {"segments": []}})
         ask.assert_not_called()
         self.assertIn("発言がありませんでした", d["summary"])
+
+
+class Confidence(unittest.TestCase):
+    """文ごとの確からしさ（2026-11-06。画面の「聞き直し」が使う）。"""
+
+    class Word:
+        def __init__(self, start, end, word, probability):
+            self.start, self.end, self.word, self.probability = start, end, word, probability
+
+    class Seg:
+        def __init__(self, start, end, text, words=None, lp=-0.13, ns=0.48, cr=1.5):
+            self.start, self.end, self.text, self.words = start, end, text, words
+            self.avg_logprob, self.no_speech_prob, self.compression_ratio = lp, ns, cr
+
+    def test_keeps_the_weak_words_with_the_window_start(self):
+        W = self.Word
+        words = [W(0.0, 0.4, " 共", 0.31), W(0.4, 0.8, "産", 0.18), W(0.8, 1.2, "の", 0.99), W(1.2, 1.5, "x", float("nan"))]
+        words += [W(2.0 + i, 2.5 + i, f"w{i}", 0.4 - i / 100) for i in range(10)]
+        c = w.confidence_of(self.Seg(0.0, 3.0, "共産の", words), 600.0)
+        self.assertEqual(c["logprob"], -0.13)
+        self.assertEqual(len(c["weak"]), w.WEAK_WORDS_MAX)
+        # The lowest are kept, in the order they were said, with the time in the whole recording.
+        self.assertEqual(c["weak"][0], {"start": 600.0, "end": 600.4, "word": "共", "p": 0.31})
+        self.assertEqual(c["weak"][1]["word"], "産")
+        self.assertEqual([x["start"] for x in c["weak"]], sorted(x["start"] for x in c["weak"]))
+        self.assertNotIn("の", [x["word"] for x in c["weak"]])
+
+    def test_without_numbers_or_word_timings(self):
+        self.assertIsNone(w.confidence_of(self.Seg(0, 1, "x", lp=float("-inf")), 0.0))
+        c = w.confidence_of(self.Seg(0, 1, "x", words=None, lp=-200.0, ns=1.5, cr=5000.0), 0.0)
+        self.assertEqual(c, {"logprob": -100.0, "noSpeech": 1.0, "compression": 1000.0})
+
+    @unittest.skipIf(np is None, "numpy が無い")
+    def test_transcribe_takes_word_timings_unless_turned_off(self):
+        Seg = self.Seg
+
+        class Model:
+            def transcribe(self, samples, **kw):
+                self.kw = kw
+                return iter([Seg(1.0, 2.0, "はい", [Confidence.Word(1.0, 1.5, "は", 0.2)])]), None
+
+        model = Model()
+        job = {"id": "mt_1", "audio": {"ext": "wav"}, "glossary": []}
+
+        def windows():
+            return iter([(0.0, np.zeros(16000 * 3, dtype=np.float32))])
+
+        with mock.patch.object(w, "whisper_model", return_value=(model, "large-v3")), mock.patch.object(w, "audio_windows", return_value=windows()):
+            r = w.transcribe(mock.Mock(), job)
+        self.assertTrue(model.kw["word_timestamps"])
+        self.assertEqual(r["segments"][0]["confidence"]["weak"], [{"start": 1.0, "end": 1.5, "word": "は", "p": 0.2}])
+        with mock.patch.dict("os.environ", {"WHISPER_WORD_TIMESTAMPS": "0"}), mock.patch.object(w, "whisper_model", return_value=(model, "large-v3")), \
+                mock.patch.object(w, "audio_windows", return_value=windows()):
+            w.transcribe(mock.Mock(), job)
+        self.assertFalse(model.kw["word_timestamps"])
+
+
+class SendBack(unittest.TestCase):
+    """差し戻しのコメントに沿った手直し（2026-11-06）。"""
+
+    def job(self, segments=None):
+        return {"id": "mt_0000000000000001", "stage": "summarize", "leaseToken": "t" * 24, "title": "役員会", "heldOn": "2026-11-06",
+                "transcript": {"segments": segments or [{"start": 0, "end": 1, "text": "はい"}, {"start": 300, "end": 306, "text": "協賛の依頼文は総務部が作ります", "checked": True}]},
+                "review": {"id": 7, "comment": "期限を 11/20 と書いて", "draft": {"summary": "前の要点", "decisions": [{"text": "依頼文は総務部"}]},
+                           "body": "# 役員会\n- 出席者: 合成 太郎\n", "earlier": [{"comment": "要点を短く", "reply": "短くしました"}]}}
+
+    def test_the_rework_reads_the_comment_and_answers_it(self):
+        app = mock.Mock()
+        app.post.side_effect = [{"job": self.job()}, {"ok": True}]
+        answer = '{"summary": "要点", "decisions": [{"text": "依頼文は総務部が 11/20 まで", "evidence": []}], "reply": "期限を足しました。"}'
+        with mock.patch.object(w, "ask_claude", return_value=answer) as ask:
+            self.assertTrue(w.run_once(app, ["summarize"]))
+        prompt = ask.call_args.args[0]
+        for text in ("期限を 11/20 と書いて", "前の要点", "- 出席者: 合成 太郎", "要点を短く", "短くしました", "［確認済み］ 協賛の依頼文", '"reply"'):
+            self.assertIn(text, prompt)
+        sent = app.post.call_args_list[1].args[1]
+        self.assertEqual(sent["reviewId"], 7)
+        self.assertEqual(sent["reply"], "期限を足しました。")
+        self.assertEqual(sent["draft"]["decisions"][0]["text"], "依頼文は総務部が 11/20 まで")
+        self.assertNotIn("reply", sent["draft"])
+
+    def test_a_failed_rework_says_so(self):
+        app = mock.Mock()
+        app.post.side_effect = [{"job": self.job()}, {"ok": True}]
+        with mock.patch.object(w, "ask_claude", side_effect=RuntimeError("CLI なし")):
+            w.run_once(app, ["summarize"])
+        sent = app.post.call_args_list[1].args[1]
+        self.assertIn("差し戻しの手直しに失敗しました", sent["error"])
+        self.assertNotIn("reviewId", sent)
+
+    def test_the_answers_of_the_parts_are_numbered(self):
+        long = [{"start": i, "end": i + 1, "text": "あ" * 900} for i in range(150)]
+        with mock.patch.object(w, "ask_claude", side_effect=lambda p: '{"summary": "s", "reply": "直した"}'):
+            draft, reply = w.summarize_with_reply(self.job(long))
+        self.assertTrue(reply.startswith("（第1部分）直した （第2部分）直した"))
+        self.assertIn("（第1部分）s", draft["summary"])
+
+    def test_lines_emptied_by_a_person_are_not_sent(self):
+        lines = w.transcript_lines([{"start": 0, "end": 1, "text": ""}, {"start": 2, "end": 3, "text": "はい", "checked": True}])
+        self.assertEqual(lines, ["[00:00:02|2]［確認済み］ はい"])
 
 
 if __name__ == "__main__":

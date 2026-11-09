@@ -69,6 +69,7 @@ COMMAND_KINDS: dict[str, str] = {
     "neta_video.cancel": "write",
     "assistant.remind": "write",
     "assistant.screening": "write",
+    "assistant.taskdraft": "write",   # タスクの起票支援（2026-11-09）。起票の下ごしらえなので todo の作成と同じ「書く」
     # 投稿・配布・起草（委員全体へ出す・配る文書を作る）
     "doc": "send",
     "mail": "send",
@@ -90,6 +91,7 @@ WEB_JOB_KEYS = {
     "image": "assistant.image",
     "remind": "assistant.remind",
     "screening": "assistant.screening",
+    "taskdraft": "assistant.taskdraft",
 }
 
 # admin_roles は既存の設定（config の admin_role_names）。この モジュールは読まないが、同じ節にあるので通す。

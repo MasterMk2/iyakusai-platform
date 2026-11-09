@@ -121,7 +121,7 @@ services:
   "bootstrapDiscordUserId": "100000000000000002",
   "excludedSharedDiscordUserIds": ["100000000000000003"],
   "adminDiscordUserIds": [],
-  "adminRoleIds": ["100000000000000010"],
+  "adminRoleIds": [],
   "departmentRoleIds": { "100000000000000020": "総務部" },
   "registrationAudience": "https://app.example.org",
   "memberUrl": "https://bot-host.example.internal:8444/v1/discord/member",
@@ -134,7 +134,8 @@ services:
 }
 ```
 
-- `bootstrapDiscordUserId` は最初のアカウント（いつも権限の管理者）。`excludedSharedDiscordUserIds` は共用の PC などの個人でない Discord アカウントで、登録させない。
+- `bootstrapDiscordUserId` は最初のマスター管理者（委員長）。マスター管理者は、設定 →「権限設定者」で権限設定者（権限の管理者）とほかのマスター管理者を選ぶ。選んだ内容は `stateFile` に保存され、一度変えたあとは `bootstrapDiscordUserId` の人も画面から外せる（マスター管理者は 0 人にできない）。`excludedSharedDiscordUserIds` は共用の PC などの個人でない Discord アカウントで、登録させない。
+- `adminDiscordUserIds`・`adminRoleIds` に書いた人・ロールも権限設定者になる。画面からは外せないので、画面で選ぶ運用にするときは空にする。
 - 知らない項目があると起動を断ります。ほかに `sessionDays`・`memberGraceHours`・`memberCacheMinutes` で、ログインの期間・Bot ホストに届かないときの猶予・参加の確認を使い回す時間を変えられます。
 
 会計のマスターシート（[app/docs/books.md](../app/docs/books.md) §3）を使うとき：

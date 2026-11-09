@@ -37,9 +37,10 @@ JST = timezone(timedelta(hours=9))
 BUSY_TIMEOUT_MS = 5000
 SCHEMA_VERSION = "1"
 
-KINDS = ("ask", "doc", "image", "remind", "screening")
+# taskdraft(2026-11-09): タスクの起票支援。概略からタスクの分け方と担当の案を作る(本人だけが読む)。
+KINDS = ("ask", "doc", "image", "remind", "screening", "taskdraft")
 # 利用者ごとの同時受付上限(max_active_per_user)の対象。remind/screening は即時処理なので数えない。
-ACTIVE_KINDS = ("ask", "doc", "image")
+ACTIVE_KINDS = ("ask", "doc", "image", "taskdraft")
 STATES = ("queued", "running", "done", "failed", "canceled")
 ACTIVE_STATES = ("queued", "running")
 JOB_ID_RE = re.compile(r"j_[a-z0-9]{20}\Z")
@@ -52,15 +53,11 @@ SIMILAR_SCAN = 1000        # 比較するのは直近この件数の完了した
 INTERRUPTED_CODE = "INTERRUPTED"
 INTERRUPTED_MESSAGE = "処理の途中で Bot が止まったため中断しました。少し待ってから、もう一度依頼してください。"
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS meta(
-  key TEXT PRIMARY KEY,
-  value TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS jobs(
+# jobs の列の定義。2026-11-09 に kind の CHECK へ taskdraft を足した(古い表は _widen_kinds で作り直す)。
+_JOBS_COLUMNS_SQL = """
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
   id TEXT NOT NULL UNIQUE,
-  kind TEXT NOT NULL CHECK (kind IN ('ask','doc','image','remind','screening')),
+  kind TEXT NOT NULL CHECK (kind IN ('ask','doc','image','remind','screening','taskdraft')),
   op TEXT,
   actor_id TEXT NOT NULL,
   actor_name TEXT NOT NULL,
@@ -78,9 +75,19 @@ CREATE TABLE IF NOT EXISTS jobs(
   updated_at TEXT NOT NULL,
   attempts INTEGER NOT NULL DEFAULT 0,
   UNIQUE (actor_id, client_operation_id)
-);
+"""
+_JOBS_INDEXES_SQL = """
 CREATE INDEX IF NOT EXISTS jobs_by_state ON jobs(state, seq);
 CREATE INDEX IF NOT EXISTS jobs_by_kind ON jobs(kind, seq);
+"""
+
+_SCHEMA = f"""
+CREATE TABLE IF NOT EXISTS meta(
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS jobs({_JOBS_COLUMNS_SQL});
+{_JOBS_INDEXES_SQL}
 CREATE TABLE IF NOT EXISTS job_files(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   job_id TEXT NOT NULL REFERENCES jobs(id),
@@ -223,7 +230,49 @@ class AssistantStore:
             version = con.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()[0]
         if version != SCHEMA_VERSION:
             raise AssistantStoreError("ジョブ表の版が対応外です")
+        store._widen_kinds()
         return store
+
+    def _widen_kinds(self) -> None:
+        """古い表の kind の CHECK に taskdraft を足す(2026-11-09)。
+
+        SQLite は CHECK を変えられないので、同じ列の新しい表に写して入れ替える。版番号(schema_version)は
+        "1" のまま: 古い Bot・連携口もこの表を開けて今までどおり動く(taskdraft は受け付けないだけ)ので、
+        切り戻しでジョブ表を戻す必要がない。Bot と連携口が同時に開いても、BEGIN IMMEDIATE の中で
+        もう一度確かめるので、作り直すのは 1 回だけ。
+        """
+        def widened(con) -> bool:
+            row = con.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'jobs'").fetchone()
+            return row is not None and "'taskdraft'" in row[0]
+
+        with self._connect() as con:
+            if widened(con):
+                return
+            # 外部キーの切り替えはトランザクションの外でしかできない。job_files は jobs(id) を指すので、
+            # 入れ替えの間だけ止め、終わったら食い違いが無いことを確かめる。
+            con.execute("PRAGMA foreign_keys = OFF")
+            try:
+                con.execute("BEGIN IMMEDIATE")
+                try:
+                    if not widened(con):
+                        last = con.execute("SELECT seq FROM sqlite_sequence WHERE name = 'jobs'").fetchone()
+                        con.execute(f"CREATE TABLE jobs_widen({_JOBS_COLUMNS_SQL})")
+                        con.execute(f"INSERT INTO jobs_widen({_JOB_COLUMNS}) SELECT {_JOB_COLUMNS} FROM jobs")
+                        con.execute("DROP TABLE jobs")
+                        con.execute("ALTER TABLE jobs_widen RENAME TO jobs")
+                        for statement in _JOBS_INDEXES_SQL.strip().splitlines():
+                            con.execute(statement)
+                        if last is not None:
+                            # 番号(seq)を前の続きから振る(消した行の番号を使い回さない)
+                            con.execute("UPDATE sqlite_sequence SET seq = MAX(seq, ?) WHERE name = 'jobs'", (last[0],))
+                        if con.execute("PRAGMA foreign_key_check").fetchall():
+                            raise AssistantStoreError("ジョブ表の作り直しで生成物の記録が食い違いました")
+                    con.execute("COMMIT")
+                except BaseException:
+                    con.execute("ROLLBACK")
+                    raise
+            finally:
+                con.execute("PRAGMA foreign_keys = ON")
 
     @contextmanager
     def _connect(self):
