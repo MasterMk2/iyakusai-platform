@@ -28,6 +28,8 @@ Bot のトークンは、トークンのファイルから読みます（場所�
 
 統合アプリのメールの画面も、同じ受け口の `/export` を読んで LINE の会話を出します（[docs/architecture.md](../docs/architecture.md) §3）。
 
+受け口をコンテナで動かすときは、`pull_allowed_clients` に取り込み役と統合アプリの接続元を入れます。ホストで動く取り込み役は Docker のブリッジのゲートウェイの番地から来るので、ネットワークの範囲に入っていなければ /32 で足します。足りないと、取り込み役には 401 と出て、受け口のログには「pull 403 許可外の接続元」と出ます（[`oa_server/oa_server.py`](line-oa/oa_server/oa_server.py) の冒頭）。
+
 ## LINE 公式アカウントから Discord への転送（`line-oa-relay/`）
 
 受け口に届いた LINE 公式アカウントの新しいメッセージを、Discord のフォーラムのスレッドへ転送します。

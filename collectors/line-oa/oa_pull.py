@@ -155,7 +155,9 @@ def fetch_batch(cfg: dict, after: str, limit: int) -> list[dict]:
             body = res.read().decode("utf-8")
     except urllib.error.HTTPError as e:
         if e.code == 401:
-            sys.exit("[ERROR] 401 unauthorized — PULL_TOKEN が Worker 側と一致していません")
+            # 受け口は、トークンの不一致・許可外の接続元・連続失敗による一時的な拒否を、どれも 401 で返す。
+            sys.exit("[ERROR] 401 unauthorized — PULL_TOKEN が受け口と一致していないか、この接続元が受け口の "
+                     "pull_allowed_clients に入っていません(どちらかは受け口のログで分かる)")
         sys.exit(f"[ERROR] /export が {e.code} を返しました: {e.reason}")
     except urllib.error.URLError as e:
         # ここで詰まるいちばん多い原因は「受け口は動いていて受信も保管されているのに、
