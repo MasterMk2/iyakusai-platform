@@ -9,6 +9,7 @@ import { MAX_PHOTO_BYTES, MAX_PHOTOS, RentalError } from './validate.js';
 import { IssuerManagement } from './issuer-management.js';
 import { CardHistory } from './card-history.js';
 import { RentalAccess } from './access.js';
+import { RentalSwitch } from './switch.js';
 import { IrregularCards } from './irregular-cards.js';
 import { ItemEditor } from './item-editor.js';
 import { OperationCorrections } from './corrections.js';
@@ -52,6 +53,8 @@ const RENTAL_PERMISSIONS_POLICY = 'camera=(self), microphone=(), geolocation=(),
 const STORAGE_FAILURE = { error: '保存を完了できませんでした。同じ処理を再送してください。', code: 'storage_unavailable' };
 const READ: readonly RentalPermission[] = ['rental.loan', 'rental.issue'];
 const PRINT_RULES_FILE = 'print-rules.json';
+// 503, as for a storage failure: a phone's queued loan stays unsent and goes out once rental is started again.
+const PAUSED_MESSAGE = '物品貸出は停止中です。再開するときは、権限管理者が 設定 › 使う機能 で切り替えます。';
 
 /**
  * The return-place rules the print sheet starts from (print.js). They name the lenders and the places on campus,
@@ -113,14 +116,20 @@ export async function registerRentalRoutes(app: FastifyInstance, ctx: RentalRout
   const cards = rental ? new CardHistory(rental.store) : null;
   const issuer = rental ? new IssuerManagement(rental.store, rental.itemOrigin) : null;
   const rentalAccess = rental ? new RentalAccess(rental.store, rental.allMembersAdmin === true) : null;
+  const rentalSwitch = rental ? new RentalSwitch(rental.store) : null;
   const irregular = rental ? new IrregularCards(rental.store, rental.itemOrigin, () => issuer!.snapshot().revision) : null;
   const canAdministerRental = (user: User): boolean => rentalAccess?.isAdmin(user) === true;
 
-  /** The signed-in account, its rental permissions, and a check that it holds one of `needed`. */
-  function access(request: FastifyRequest, needed: readonly RentalPermission[] | null): { user: User; actor: Actor; permissions: RentalPermission[]; store: RentalStore } {
+  /**
+   * The signed-in account, its rental permissions, and a check that it holds one of `needed`. While rental is stopped
+   * only `whilePaused` callers pass: /me (the screens learn it is stopped) and the settings of access administrators
+   * (the switch itself, and permissions prepared before starting again).
+   */
+  function access(request: FastifyRequest, needed: readonly RentalPermission[] | null, whilePaused = false): { user: User; actor: Actor; permissions: RentalPermission[]; store: RentalStore } {
     if (!rental) throw new RentalError(404, '物品貸出はこのサーバーでは設定されていません。', 'not_found');
     const user = ctx.requireUser(request);
     if (user.disabled) throw new DomainError('forbidden', 'このアカウントは利用できません。');
+    if (!whilePaused && !rentalSwitch!.enabled()) throw new RentalError(503, PAUSED_MESSAGE, 'rental_paused');
     const permissions = rentalAccess!.permissions(user.id);
     if (needed && !needed.some((p) => permissions.includes(p))) {
       throw new RentalError(403, needed.includes('rental.issue') && !needed.includes('rental.loan') ? '物品の発行・事前登録の権限がありません。管理者に依頼してください。' : '物品の貸出権限がありません。管理者に依頼してください。', 'forbidden');
@@ -132,8 +141,8 @@ export async function registerRentalRoutes(app: FastifyInstance, ctx: RentalRout
 
   app.get(`${PREFIX}/me`, async (request, reply) =>
     respond(reply, () => {
-      const { actor, permissions, user } = access(request, null);
-      return [200, { staff: actor, permissions, temporary_staff: isTemporaryStaffLoginId(user.id), mode: rental!.store.mode, ledger_generation:rental!.store.ledgerGeneration(), item_origin: rental!.itemOrigin, trial_short_codes: false, can_edit_items: READ.some((p) => permissions.includes(p)), can_correct: READ.some((p) => permissions.includes(p)), capabilities: ['operation_corrections_v1', 'item_edit_v1', 'irregular_cards_v1', 'item_metadata_v1', 'issuer_management_v1', 'issuer_force_reset_v1', 'issuer_numbering_reset_v1','issuer_reset_code_v1','card_history_v1'], issuer_reset_allowed: canAdministerRental(user), can_manage_permissions: user.canManageAccess }];
+      const { actor, permissions, user } = access(request, null, true);
+      return [200, { staff: actor, permissions, enabled: rentalSwitch!.enabled(), temporary_staff: isTemporaryStaffLoginId(user.id), mode: rental!.store.mode, ledger_generation:rental!.store.ledgerGeneration(), item_origin: rental!.itemOrigin, trial_short_codes: false, can_edit_items: READ.some((p) => permissions.includes(p)), can_correct: READ.some((p) => permissions.includes(p)), capabilities: ['operation_corrections_v1', 'item_edit_v1', 'irregular_cards_v1', 'item_metadata_v1', 'issuer_management_v1', 'issuer_force_reset_v1', 'issuer_numbering_reset_v1','issuer_reset_code_v1','card_history_v1'], issuer_reset_allowed: canAdministerRental(user), can_manage_permissions: user.canManageAccess }];
     }),
   );
 
@@ -262,7 +271,7 @@ export async function registerRentalRoutes(app: FastifyInstance, ctx: RentalRout
   }));
 
   function permissionsAdmin(request: FastifyRequest): { user: User; actor: Actor } {
-    const { user, actor } = access(request, null);
+    const { user, actor } = access(request, null, true);
     if (!user.canManageAccess) throw new RentalError(403, '物品の権限を変更できるのは共通システムの権限管理者だけです。', 'forbidden');
     return { user, actor };
   }
@@ -282,6 +291,17 @@ export async function registerRentalRoutes(app: FastifyInstance, ctx: RentalRout
       rentalAccess!.updateAccount(target.id, body.permissions, body.expectedRevision, actor);
     } else throw new RentalError(400, '変更する設定を指定してください。');
     return [200, accessSnapshot()];
+  }));
+  // Whether rental is in use (settings › 使う機能), with what is out now; access administrators only, like the grants.
+  const switchSnapshot = () => rentalSwitch!.snapshot((id) => ctx.lookupUser(id)?.displayName);
+  app.get(`${PREFIX}/admin/switch`, async (request, reply) => respond(reply, () => {
+    permissionsAdmin(request);
+    return [200, switchSnapshot()];
+  }));
+  app.put(`${PREFIX}/admin/switch`, async (request, reply) => respond(reply, () => {
+    const { actor } = permissionsAdmin(request);
+    rentalSwitch!.set(jsonObject(request.body).enabled, actor);
+    return [200, switchSnapshot()];
   }));
   app.get(`${PREFIX}/admin/permissions`, async (request, reply) => respond(reply, () => {
     permissionsAdmin(request);

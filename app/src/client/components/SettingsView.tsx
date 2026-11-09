@@ -7,6 +7,7 @@ import { useLoader } from '../useLoader';
 import { AccessManagersPanel } from './AccessManagersPanel';
 import { AdminPanel } from './AdminPanel';
 import { DiscordAccountPanel } from './DiscordAccountPanel';
+import { FeaturesPanel } from './FeaturesPanel';
 import { LoadStatus } from './LoadStatus';
 import { LoginActivityPanel } from './LoginActivityPanel';
 import { MailAccessPanel } from './MailAccessPanel';
@@ -25,7 +26,7 @@ import './payments/payments.css';
  * PC and in place of it on a phone (../docs/ui-guidelines.md §6): before, every part was on one page, some 20,000px
  * long for an access administrator, with five lists of every member one after another.
  */
-export const SETTINGS_SECTIONS = ['account', 'card', 'theme', 'managers', 'mail', 'line', 'accounting', 'rental', 'dayof', 'login', 'bank', 'rollover', 'directory'] as const;
+export const SETTINGS_SECTIONS = ['account', 'card', 'theme', 'managers', 'mail', 'line', 'accounting', 'rental', 'features', 'dayof', 'login', 'bank', 'rollover', 'directory'] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
 export function parseSettingsSection(value: string | undefined): SettingsSection | null {
@@ -128,6 +129,8 @@ export function SettingsView({
           ...(committeeMail && committeeLine ? [{ key: 'line', group: 'grants', label: '公式LINE の権限', body: <MailAccessPanel variant="line" /> } as Part] : []),
           { key: 'accounting', group: 'grants', label: '会計の権限', body: <AccountingAccessPanel onAvailable={report('accounting')} /> },
           { key: 'rental', group: 'grants', label: '物品の権限', body: <RentalAccessPanel onChanged={onChanged} onAvailable={report('rental')} /> },
+          // Stopping a feature for a while (2026-11-09: rental); first of the committee's settings.
+          { key: 'features', group: 'ops', label: '使う機能', body: <FeaturesPanel onChanged={onChanged} onAvailable={report('features')} /> },
           { key: 'dayof', group: 'ops', label: '当日の欄', body: <DayOfSettingsPanel onAvailable={report('dayof')} /> },
           ...(discord ? [{ key: 'login', group: 'ops', label: 'ログインの記録', body: <LoginActivityPanel /> } as Part] : []),
         ] as Part[])

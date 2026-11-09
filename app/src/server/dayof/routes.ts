@@ -30,6 +30,7 @@ import type { DecisionsStore } from '../decisions/store.js';
 import { isTemporaryStaffLoginId } from '../discord-auth/temporary-staff.js';
 import { DomainError, notFound, type User } from '../domain/types.js';
 import { RentalAccess } from '../rental/access.js';
+import { RentalSwitch } from '../rental/switch.js';
 import type { RentalRuntime } from '../rental/routes.js';
 import { SupplyStore } from '../rental/supplies/store.js';
 import { DayOfStore, type DayOfPostRow, type PostOutcome, type StatusChange } from './store.js';
@@ -131,6 +132,7 @@ export function registerDayOfRoutes(app: FastifyInstance, store: DayOfStore | nu
   if (!store) return;
   const supplies = deps.rental ? new SupplyStore(deps.rental.store) : null;
   const rentalAccess = deps.rental ? new RentalAccess(deps.rental.store, deps.rental.allMembersAdmin === true) : null;
+  const rentalSwitch = deps.rental ? new RentalSwitch(deps.rental.store) : null;
 
   /** A committee member (temporary staff and others are refused). */
   function member(request: FastifyRequest): User {
@@ -240,10 +242,11 @@ export function registerDayOfRoutes(app: FastifyInstance, store: DayOfStore | nu
     }
   }
 
-  /** Cards and units out and the groups not collected yet, for a person with a rental permission. */
+  /** Cards and units out and the groups not collected yet, for a person with a rental permission, while rental is in use. */
   function suppliesOf(user: User): DayOfSupplies | null {
-    if (!supplies || !rentalAccess) return null;
+    if (!supplies || !rentalAccess || !rentalSwitch) return null;
     try {
+      if (!rentalSwitch.enabled()) return null;
       const permissions = rentalAccess.permissions(user.id);
       if (!permissions.includes('rental.loan') && !permissions.includes('rental.issue')) return null;
       const groups = supplies.collection();

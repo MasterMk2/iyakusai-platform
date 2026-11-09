@@ -21,3 +21,12 @@ export interface RentalAccessResponse {
     after: boolean | RentalAccessPermission[];
   }[];
 }
+
+/** GET/PUT /api/rental/admin/switch (src/server/rental/switch.ts): whether rental is in use, for access administrators. */
+export interface RentalSwitchResponse {
+  enabled: boolean;
+  /** Items with a group now and items back with a problem: what stopping would leave unattended. */
+  loaned: number;
+  review: number;
+  history: { id: number; at: string; actorName: string; enabled: boolean }[];
+}
