@@ -469,6 +469,8 @@ describe('HTTP safety headers and attachment handling', () => {
   it('sends a restrictive CSP and related headers on API responses', async () => {
     const res = await t.call(EDITOR_A, 'GET', '/api/mailboxes');
     expect(res.headers['content-security-policy']).toMatch(/default-src 'self'.*form-action 'none'.*object-src 'none'/);
+    // The recorder's check player plays a blob: URL; default-src 'self' alone refused it (2026-11-10).
+    expect(res.headers['content-security-policy']).toContain("media-src 'self' blob:");
     expect(res.headers['referrer-policy']).toBe('no-referrer');
     expect(res.headers['x-content-type-options']).toBe('nosniff');
     expect(res.headers['cache-control']).toBe('no-store');

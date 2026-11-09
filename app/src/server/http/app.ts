@@ -112,6 +112,8 @@ export const APP_CSP = [
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data:",
   "font-src 'self'",
+  // blob: for the minutes recorder's own check player, which plays the recording from memory before it is sent (2026-11-10).
+  "media-src 'self' blob:",
   "connect-src 'self' http://127.0.0.1:48731",
   "frame-src 'self'",
   "form-action 'none'",
