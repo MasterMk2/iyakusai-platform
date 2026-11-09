@@ -197,3 +197,38 @@ test('on a phone the form works with taps only: open from above the list, tap a 
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: '.tmp/line-send-mobile.png', fullPage: true });
 });
+
+test('the committee\'s short signature is at the end from the start; the signature alone is not a message', async ({ page }) => {
+  // The demo has no committee mailbox (no signature settings): the person's signature is answered here.
+  await page.route('**/api/signature', (route) =>
+    route.fulfill({
+      json: {
+        organization: '合成 医学薬学祭実行委員会', name: '合成 次郎', title: '内務部', address: '', contactEmail: '', personalEmail: '',
+        defaultTitle: '内務部', own: { title: '', personalEmail: '' }, canEditCommittee: false, updatedAt: null, committeeUpdatedAt: null,
+      },
+    }),
+  );
+  await loginAs(page, 'u-editor-c');
+  const form = await openSend(page);
+  const body = form.getByRole('textbox', { name: '本文' });
+  const signature = 'ーーー\n合成 医学薬学祭実行委員会\n内務部 合成 次郎';
+  await expect(body).toHaveValue(`\n\n${signature}`);
+
+  const to = form.getByRole('combobox', { name: '宛先' });
+  await to.fill('サンプルL1');
+  await to.press('ArrowDown');
+  await to.press('Enter');
+  await form.getByRole('button', { name: '送信内容を確認' }).click();
+  await expect(form.locator('#line-send-body-error')).toHaveText('本文を入力してください。');
+
+  await body.fill(`2026年11月13日（金）の搬入は 9 時からです。\n\n${signature}`);
+  await form.getByRole('button', { name: '送信内容を確認' }).click();
+  const preview = form.getByTestId('broadcast-preview');
+  await expect(preview.getByTestId('broadcast-body')).toContainText('内務部 合成 次郎');
+  await expect(preview.getByTestId('line-screen')).toContainText('気になる点は見つかりませんでした');
+  await preview.getByTestId('broadcast-confirm').check();
+  await preview.getByRole('button', { name: '1 人に模擬送信する' }).click();
+  await expect(form.getByTestId('broadcast-message')).toContainText('1 人');
+  // The next message starts with the signature again.
+  await expect(body).toHaveValue(`\n\n${signature}`);
+});

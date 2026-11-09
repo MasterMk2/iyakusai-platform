@@ -37,6 +37,8 @@ import type { MailboxConfig, MailSendConfig } from './config.js';
 import { fetchPublicImage, type RemoteImageFetch } from './images.js';
 import { attachMailIngest } from './ingest.js';
 import { MailSender } from './send.js';
+import { registerSignatureRoutes, SignatureStore } from './signature.js';
+import { DEFAULT_ORGANIZATION } from '../../shared/signature.js';
 import { MailboxService, type People } from './service.js';
 import { smtpTransport, type MailTransport } from './smtp.js';
 import type { MailboxStore } from './store.js';
@@ -57,6 +59,8 @@ export interface MailboxRuntime {
   contacts?: ContactsStore;
   /** Replaces the minutes file in the mail folder (tests). */
   minutes?: MinutesStore;
+  /** Replaces signatures.json in the mail folder (tests). */
+  signatures?: SignatureStore;
   /** Replaces fetching images on other servers for a mail's HTML (tests). */
   remoteImages?: RemoteImageFetch;
   /** Replaces the organizations file next to mail.sqlite3 (tests). */
@@ -216,6 +220,20 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
     }
   }
   registerContactRoutes(app, contacts, { requireUser: deps.requireUser, session: deps.session, people: deps.people, discordUserIdOf: deps.discordUserIdOf, clock: deps.clock, parse: deps.parse });
+
+  // The signature's settings (2026-11-10): signatures.json in the mail folder. A file that cannot be read turns off
+  // the settings only (503); the forms then sign with the name alone.
+  let signatures: SignatureStore | null = rt.signatures ?? null;
+  if (!signatures) {
+    try {
+      signatures = SignatureStore.open(rt.config.dataDir);
+    } catch (err) {
+      console.error(`署名の設定: ${(err as Error).message} 署名の設定は使えません（ファイルは変更していません）。`);
+      signatures = null;
+    }
+  }
+  const organization = sendConfig?.fromName ?? DEFAULT_ORGANIZATION;
+  registerSignatureRoutes(app, signatures, { signedIn: (request) => signedIn(request).user, parse: deps.parse, clock: deps.clock, organization });
 
   // Organizations (団体の台帳, 2026-11-03): their own file next to contacts.sqlite3. A batch mail goes through the same
   // sending service and the same sign-in gate as the mail screens (mailGate). A file that cannot be opened turns off
@@ -579,7 +597,9 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
   app.get('/api/mail/send/options', async (request): Promise<MailSendOptions> => {
     const user = reader(request, false);
     if (!sender) return { enabled: false, from: [], fromName: '', bcc: null, maxAttachmentBytes: 0, maxRecipients: 0, senderName: user.displayName };
-    return sender.options(user);
+    // The committee's signature (2026-11-10); without its settings file, the name alone.
+    const signature = signatures?.parts(user, organization) ?? { organization, name: user.displayName, title: '', address: '', contactEmail: '', personalEmail: '' };
+    return { ...sender.options(user), signature };
   });
 
   // One message: the "message" part (JSON, MailSendRequest) and up to ten "attachments" files.

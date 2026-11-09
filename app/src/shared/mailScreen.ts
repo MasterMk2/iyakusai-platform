@@ -4,6 +4,8 @@
 // who gets the mail sees it), an empty body, a reply-to address outside the committee. The screen
 // shows what it finds before sending; nothing here blocks a send (the person decides).
 
+import { isSignatureRule } from './signature.js';
+
 export interface ScreenInput {
   subject: string;
   body: string;
@@ -37,10 +39,10 @@ export function ownText(body: string): string {
     .join('\n');
 }
 
-/** The text above the signature separator ("--" on its own line), if there is one. */
+/** The text above the signature separator ("--", or the committee's rule of ー), if there is one. */
 function aboveSignature(text: string): string {
   const lines = text.split('\n');
-  const at = lines.findIndex((l) => /^\s*--\s*$/.test(l));
+  const at = lines.findIndex((l) => isSignatureRule(l));
   return (at >= 0 ? lines.slice(0, at) : lines).join('\n');
 }
 

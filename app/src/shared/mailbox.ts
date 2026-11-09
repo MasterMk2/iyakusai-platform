@@ -1,6 +1,7 @@
 // Committee mailbox API contract (Discord login with SMM_MAIL_DIR): the parts the synthetic test
 // version does not have. Thread, message and handling views are the shared ones in api.ts.
 import type { Persona } from './api.js';
+import type { SignatureParts } from './signature.js';
 
 /** GET /api/mail/status: whether the mailbox exists here and whether this device must type the password again. */
 export interface MailStatusResponse {
@@ -65,6 +66,8 @@ export interface MailSendOptions {
   maxRecipients: number;
   /** The signed-in person's name (for the signature). */
   senderName: string;
+  /** What the committee's signature is made of (2026-11-10); absent on an older server: the old signature. */
+  signature?: SignatureParts;
 }
 
 /** The "message" part of POST /api/mail/send (multipart/form-data; files are the "attachments" parts). */
