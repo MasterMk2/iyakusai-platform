@@ -63,7 +63,8 @@ function nearestYear(month: number, day: number, now: Date): number {
   return best;
 }
 
-function dateFindings(text: string, now: Date): ScreenFinding[] {
+/** Dates written with a weekday that is wrong or impossible (shared with the official LINE checks). */
+export function dateFindings(text: string, now: Date): ScreenFinding[] {
   const out: ScreenFinding[] = [];
   const seen = new Set<string>();
   const patterns = [
@@ -93,7 +94,8 @@ function dateFindings(text: string, now: Date): ScreenFinding[] {
   return out;
 }
 
-function placeholders(text: string): string[] {
+/** Half-written places (【…】, 〇〇, XX) left in the text (shared with the official LINE checks). */
+export function placeholders(text: string): string[] {
   const found: string[] = [];
   for (const line of text.split('\n')) {
     for (const m of line.matchAll(/【([^】]{0,30})】/g)) {

@@ -301,12 +301,8 @@ html { scroll-padding-top: 64px; }
 .line-msg.mine { align-self: flex-end; background: var(--mint-bg); }
 .line-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; }
 .line-placeholder { color: var(--muted); font-size: 14px; font-style: italic; }
-.line-reply, .line-outbox { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; margin: 10px 0; display: flex; flex-direction: column; gap: 6px; }
-.line-reply h4, .line-outbox h4 { font-size: 14px; margin: 0; }
-.line-preview { border: 2px solid var(--accent); border-radius: 6px; padding: 8px; }
-.line-preview h5 { margin: 0 0 4px; font-size: 14px; }
-.line-preview dl { display: grid; grid-template-columns: 80px 1fr; gap: 2px 8px; font-size: 14px; margin: 0; }
-.line-preview dd { margin: 0; }
+.line-outbox { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; margin: 10px 0; display: flex; flex-direction: column; gap: 6px; }
+.line-outbox h4 { font-size: 14px; margin: 0; }
 /* Official LINE sending additions (2026-11-02): history rows, images, broadcast. */
 .history-badge { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); font-size: 12px; }
 .line-image-picker { display: flex; flex-direction: column; gap: 4px; }
@@ -314,11 +310,8 @@ html { scroll-padding-top: 64px; }
 .line-image-picker input[type='file'] { max-width: 100%; }
 .line-image { margin: 0; display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
 .line-image img, .line-image-thumb { max-width: min(240px, 100%); max-height: 240px; border-radius: 6px; border: 1px solid var(--border); object-fit: contain; }
-.broadcast-recipients { border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; margin: 8px 0; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .broadcast-list { list-style: none; padding: 0; margin: 0; max-height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; font-size: 14px; }
 .broadcast-list label { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
-.line-broadcast textarea { width: 100%; box-sizing: border-box; }
-.line-broadcast .line-preview dl { grid-template-columns: 7.5em 1fr; }
 .notices { font-size: 14px; color: var(--amber); margin: 6px 0; padding-left: 18px; }
 .confirm-check { display: flex; gap: 6px; align-items: center; font-size: 14px; font-weight: 600; }
 .line-outbox ul { list-style: none; padding: 0; margin: 0; }
@@ -1402,6 +1395,25 @@ button.task-tree-toggle:focus-visible { outline-offset: -3px; }
 .suggestion-org { font-weight: 400; color: var(--muted); }
 .suggestion-address { display: flex; flex-wrap: wrap; gap: 6px; font-size: 14px; color: var(--muted); overflow-wrap: anywhere; }
 .suggestion-label { border: 1px solid var(--line); border-radius: 10px; padding: 0 6px; }
+/* The official LINE send forms, shaped like the mail form (2026-11-09): a fixed From / target line, the 宛先
+   chips with the people picked, everyone in one tick, and the whole list folded below. */
+.compose-form > .compose-label { font-size: 14px; font-weight: 700; margin-top: 6px; }
+.compose-form > .compose-static { margin: 0; font-size: 15px; overflow-wrap: anywhere; }
+.line-compose .compose-head h3 { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.line-compose .counter { justify-self: end; margin: 0; }
+.line-reply-title { margin: 0; font-size: 18px; color: var(--navy); }
+.line-to { display: grid; gap: 6px; min-width: 0; }
+.line-to-all { margin: 0; padding: 8px 12px; border: 1px solid var(--field); border-radius: 6px; background: var(--info-bg); font-weight: 700; }
+.line-chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.line-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 0 0 0 12px; border: 1px solid var(--blue); border-radius: 22px; background: var(--info-bg); color: var(--navy); font-size: 15px; font-weight: 700; }
+.line-chip.unconfirmed { border-style: dashed; }
+.line-chip-name { overflow-wrap: anywhere; }
+.line-chip-note { font-size: 13px; font-weight: 400; color: var(--amber); }
+.line-chip-remove { min-width: 44px; min-height: 44px; padding: 0; border: none; border-radius: 22px; background: transparent; color: var(--muted); font-size: 18px; line-height: 1; }
+.line-chip-remove:hover:not(:disabled) { background: var(--hover-strong); color: var(--fg); }
+.line-to-list summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; font-weight: 700; color: var(--blue); }
+.line-to-list > input { margin: 0 0 6px; }
+.line-to-list .broadcast-list label { min-height: 36px; align-items: center; }
 @media (min-width: 901px) and (max-width: 1199px) {
   .contacts-layout { grid-template-columns: minmax(340px, 1fr) minmax(0, 1fr); }
 }
