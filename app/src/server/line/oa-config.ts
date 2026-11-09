@@ -29,6 +29,8 @@ export interface LineOaConfig {
   dataFile: string;
   /** Images for sending (line-media/ in the mail folder). */
   mediaDir: string;
+  /** Files sent as links (line-files/ in the mail folder), 2026-11-10. */
+  filesDir: string;
   /** Copies of received images (line-inbound-media/ in the mail folder; never served publicly). */
   inboundMediaDir: string;
   /** The official account's own chat history (JSONL, contract A of 2026-11-02), or null. */
@@ -173,6 +175,7 @@ export function validateLineConfig(raw: unknown, dataDir: string, secrets: { pul
     send,
     dataFile: join(dataDir, 'line-state.json'),
     mediaDir: join(dataDir, 'line-media'),
+    filesDir: join(dataDir, 'line-files'),
     inboundMediaDir: join(dataDir, 'line-inbound-media'),
     history,
     discord,

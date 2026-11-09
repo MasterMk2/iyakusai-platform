@@ -1,11 +1,13 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { LINE_LIMITS, type LineDraftView, type LinePreviewResponse, type LineTargetView, type OutboxView } from '../../shared/line.js';
+import { LINE_ATTACH_LIMITS, LINE_LIMITS, type LineDraftView, type LinePreviewResponse, type LinePublicDays, type LineTargetView, type OutboxView } from '../../shared/line.js';
+import { japaneseDay, jstDay } from '../../shared/mailDue.js';
 import { DomainError, notFound, type User } from '../domain/types.js';
 import { readableConversation, replyableConversation } from './access.js';
 import type { LinePushOutcome, LinePushRequest } from './connector.js';
-import { MEDIA_PATH, publicImage, usableMedia } from './media.js';
+import { composeText, fileView, markFilesSent, publicFile, publicUntil, sentFileView, usableAttachment } from './files.js';
+import { extendMedia, MEDIA_PATH, publicImage, usableMedia } from './media.js';
 import { sha256 } from './normalize.js';
-import { nextLineId, type AttemptOutcome, type LineAccount, type LineConversation, type LineState, type OutboxImage, type OutboxIntent, type SendChannel } from './types.js';
+import { nextLineId, type AttemptOutcome, type LineAccount, type LineConversation, type LineState, type OutboxFile, type OutboxImage, type OutboxIntent, type SendChannel } from './types.js';
 
 // Manual reply state machine (the mock connector, or the Messaging API since 2026-10-28).
 //
@@ -132,6 +134,8 @@ export function checkLineQuota(quota: PreviewQuota | null, billable: number): vo
 /** Where sent images are fetched from (send.publicBaseUrl or SMM_PUBLIC_ORIGIN); null: images cannot be sent. */
 export interface SendContext {
   imageBaseUrl: string | null;
+  /** Files can be uploaded and linked (a file folder is set), 2026-11-10. */
+  filesEnabled?: boolean;
   via?: SendChannel;
 }
 
@@ -144,6 +148,56 @@ export function imageOf(state: LineState, user: User, accountId: string, imageId
   if (!ctx?.imageBaseUrl) throw new DomainError('validation', 'このサーバーでは画像を送れません（公開 URL が設定されていません）。', { field: 'image' });
   return publicImage(usableMedia(state, user, accountId, imageId, nowMs), ctx.imageBaseUrl);
 }
+
+// Several images and files (2026-11-10): a draft, a confirmation and a send record name up to four images and
+// three files. Older records name one image (imageId / image) and are read as a list of that one.
+export const draftImageIds = (d: { imageId?: string | null | undefined; imageIds?: string[] | undefined }): string[] => d.imageIds ?? (d.imageId ? [d.imageId] : []);
+export const draftFileIds = (d: { fileIds?: string[] | undefined }): string[] => d.fileIds ?? [];
+export const sameIds = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((x, i) => x === b[i]);
+export const intentImages = (o: { image?: OutboxImage | null | undefined; images?: OutboxImage[] | undefined }): OutboxImage[] => o.images ?? (o.image ? [o.image] : []);
+
+function checkIds(ids: readonly string[], max: number, what: string, unit: string, field: string): void {
+  if (ids.length > max) throw new DomainError('validation', `${what}は ${max} ${unit}までです。`, { field });
+  if (new Set(ids).size !== ids.length) throw new DomainError('validation', `同じ${what}が 2 回選ばれています。`, { field });
+}
+
+/** The images a draft names, in order: the sender's own uploads, still public. */
+export function imagesOf(state: LineState, user: User, accountId: string, ids: readonly string[], nowMs: number, ctx: SendContext | undefined): OutboxImage[] {
+  checkIds(ids, LINE_ATTACH_LIMITS.imagesMax, '画像', '枚', 'image');
+  return ids.map((id) => imageOf(state, user, accountId, id, nowMs, ctx)!);
+}
+
+/** The files a draft names, in order: the sender's own uploads, still kept, and a server that can publish them. */
+export function filesOf(state: LineState, user: User, accountId: string, ids: readonly string[], nowMs: number, ctx: SendContext | undefined): OutboxFile[] {
+  if (ids.length === 0) return [];
+  checkIds(ids, LINE_ATTACH_LIMITS.filesMax, 'ファイル', '個', 'file');
+  const base = ctx?.imageBaseUrl;
+  if (!base) throw new DomainError('validation', 'このサーバーではファイルを送れません（公開 URL が設定されていません）。', { field: 'file' });
+  return ids.map((id) => publicFile(usableAttachment(state, user, accountId, id, nowMs), base));
+}
+
+/** The full text with the file links, and until when the images and links are public (null: nothing attached). */
+export function attachedText(body: string, images: readonly OutboxImage[], files: readonly OutboxFile[], days: LinePublicDays, nowMs: number): { text: string; until: string | null } {
+  const until = images.length > 0 || files.length > 0 ? publicUntil(nowMs, days) : null;
+  const text = composeText(body, files, until, nowMs);
+  if (text.length > LINE_LIMITS.replyMaxLength) {
+    throw new DomainError('validation', `ファイルのリンクを足すと ${LINE_LIMITS.replyMaxLength} 文字を超えます（${text.length} 文字）。本文を短くするか、ファイルを減らしてください。`, { field: 'body' });
+  }
+  return { text, until };
+}
+
+/** What the confirmation says about the images and the file links. */
+export function attachmentNotices(images: number, files: number, until: string | null, nowMs: number): string[] {
+  if (!until) return [];
+  const day = japaneseDay(jstDay(until), jstDay(nowMs));
+  const out: string[] = [];
+  if (images > 0) out.push(`文字のあとに画像を ${images} 枚送ります（1 回の送信なので通数は 1 人 1 通です）。画像は推測できない URL で、少なくとも${day}まで公開されます（アップロードから 7 日より短くはなりません）。`);
+  if (files > 0) out.push(`LINE はファイルをそのまま送れないため、本文の末尾にファイルのリンク（${files} 個）を付けます。リンクを知っている人は誰でも（転送された先の人も）${day}まで開けます。`);
+  return out;
+}
+
+/** "・画像 2 枚・ファイル 1 個" for the history. */
+export const attachedLabel = (images: number, files: number) => `${images > 0 ? `・画像 ${images} 枚` : ''}${files > 0 ? `・ファイル ${files} 個` : ''}`;
 
 /** A member count read from LINE: the account is in the group or room now (2026-10-28). */
 /** What LINE said about a 1:1 user's profile just before a preview (see Eligibility.profile). */
@@ -186,8 +240,17 @@ function pruneConsents(state: LineState, nowMs: number): void {
   state.consents = state.consents.filter((c) => Date.parse(c.expiresAt) > nowMs);
 }
 
-function draftView(d: { id: string; version: number; body: string; updatedAt: string; imageId?: string | null | undefined }): LineDraftView {
-  return { id: d.id, version: d.version, body: d.body, updatedAt: d.updatedAt, imageId: d.imageId ?? null };
+function draftView(
+  state: LineState,
+  d: { id: string; version: number; body: string; updatedAt: string; imageId?: string | null | undefined; imageIds?: string[] | undefined; fileIds?: string[] | undefined },
+): LineDraftView {
+  const images = draftImageIds(d)
+    .map((id) => (state.media ?? []).find((m) => m.id === id))
+    .flatMap((m) => (m ? [{ id: m.id, previewUrl: `${MEDIA_PATH}/${m.preview.file}` }] : []));
+  const files = draftFileIds(d)
+    .map((id) => (state.attachments ?? []).find((a) => a.id === id))
+    .flatMap((a) => (a ? [fileView(a)] : []));
+  return { id: d.id, version: d.version, body: d.body, updatedAt: d.updatedAt, imageId: d.imageId ?? null, images, files };
 }
 
 /** The image as the browser shows it (the same server, so a relative path). */
@@ -199,7 +262,7 @@ export function saveDraft(
   state: LineState,
   user: User,
   conversationId: string,
-  input: { body: string; expectedVersion: number | null; imageId?: string | null | undefined },
+  input: { body: string; expectedVersion: number | null; imageId?: string | null | undefined; imageIds?: string[] | undefined; fileIds?: string[] | undefined },
   now: string,
   ctx?: SendContext,
 ): LineDraftView {
@@ -208,22 +271,28 @@ export function saveDraft(
   // A group's member count is read just before the preview, so a draft may be written before it is known.
   if (!check.ok && !check.countPending) throw new DomainError('validation', check.reason);
   const body = normalizeReplyBody(input.body);
-  const imageId = input.imageId ?? null;
-  imageOf(state, user, conv.accountId, imageId, Date.parse(now), ctx);
+  const imageIds = input.imageIds ?? (input.imageId ? [input.imageId] : []);
+  const fileIds = input.fileIds ?? [];
+  imagesOf(state, user, conv.accountId, imageIds, Date.parse(now), ctx);
+  filesOf(state, user, conv.accountId, fileIds, Date.parse(now), ctx);
+  // The first image is also kept as imageId, so an older app (a rollback) still reads the draft.
+  const imageId = imageIds[0] ?? null;
   const via = channelOf(ctx);
   const existing = state.drafts.find((d) => d.conversationId === conv.id && d.authorId === user.id && sameChannel(d, via));
   if ((existing?.version ?? null) !== input.expectedVersion) {
-    throw new DomainError('conflict', '下書きが別の画面で更新されています。最新の下書きを確認してください。', existing ? { draft: draftView(existing) } : undefined);
+    throw new DomainError('conflict', '下書きが別の画面で更新されています。最新の下書きを確認してください。', existing ? { draft: draftView(state, existing) } : undefined);
   }
   if (existing) {
-    if (existing.body === body && (existing.imageId ?? null) === imageId) return draftView(existing);
+    if (existing.body === body && sameIds(draftImageIds(existing), imageIds) && sameIds(draftFileIds(existing), fileIds)) return draftView(state, existing);
     existing.body = body;
     existing.imageId = imageId;
+    existing.imageIds = imageIds;
+    existing.fileIds = fileIds;
     existing.version += 1;
     existing.updatedAt = now;
     // Any confirmation of the previous version is void.
     state.consents = state.consents.filter((c) => c.draftId !== existing.id || c.consumedByIntentId !== null);
-    return draftView(existing);
+    return draftView(state, existing);
   }
   const draft = {
     id: `ld_${randomBytes(8).toString('hex')}`,
@@ -234,10 +303,12 @@ export function saveDraft(
     version: 1,
     updatedAt: now,
     imageId,
+    imageIds,
+    fileIds,
     ...(via !== 'app' ? { via } : {}),
   };
   state.drafts.push(draft);
-  return draftView(draft);
+  return draftView(state, draft);
 }
 
 export function discardDraft(state: LineState, user: User, conversationId: string): void {
@@ -254,7 +325,7 @@ export function previewReply(
   state: LineState,
   user: User,
   conversationId: string,
-  input: { draftId: string; draftVersion: number },
+  input: { draftId: string; draftVersion: number; publicDays?: LinePublicDays | undefined },
   now: string,
   quota: PreviewQuota | null = null,
   ctx?: SendContext,
@@ -268,7 +339,10 @@ export function previewReply(
   const check = evaluateTarget(state, conv, nowMs);
   if (!check.ok) throw new DomainError('validation', check.reason);
   const account = accountOf(state, conv);
-  const image = imageOf(state, user, account.id, draft.imageId, nowMs, ctx);
+  const images = imagesOf(state, user, account.id, draftImageIds(draft), nowMs, ctx);
+  const files = filesOf(state, user, account.id, draftFileIds(draft), nowMs, ctx);
+  const days = input.publicDays ?? LINE_ATTACH_LIMITS.defaultPublicDays;
+  const { text, until } = attachedText(draft.body, images, files, days, nowMs);
   checkMonthlyLimit(state, account, check.billableRecipients, nowMs);
   checkLineQuota(quota, check.billableRecipients);
 
@@ -290,11 +364,14 @@ export function previewReply(
     accountId: account.id,
     conversationId: conv.id,
     targetFingerprint: targetFingerprint(account, conv),
-    bodyHash: sha256(draft.body),
+    bodyHash: sha256(text),
     createdAt: now,
     expiresAt,
     consumedByIntentId: null,
-    imageId: draft.imageId ?? null,
+    imageId: images[0]?.mediaId ?? null,
+    imageIds: images.map((i) => i.mediaId),
+    fileIds: files.map((f) => f.fileId),
+    publicUntil: until,
     ...(via !== 'app' ? { via } : {}),
   });
 
@@ -315,7 +392,7 @@ export function previewReply(
           ? `LINE 側の今月の通数：${quota.used} 通${quota.limit !== null ? `／上限 ${quota.limit} 通` : '（上限なしのプラン）'}。公式アカウントの管理画面から送った分も含みます。`
           : 'LINE 側の今月の残り通数は読み取れませんでした。',
       ];
-  if (image) notices.push('文字のあとに画像を 1 枚送ります（1 回の送信なので通数は 1 人 1 通です）。画像は 7 日間、推測できない URL で公開されます。');
+  notices.push(...attachmentNotices(images.length, files.length, until, nowMs));
   if (check.unconfirmed) {
     notices.unshift('この相手が友だちかどうかは確かめられません（友だち追加がこのアプリの受け取りより前で、最後の 1:1 メッセージから 7 日を過ぎています）。友だちでなければ、LINE は「受付済み」と返しても相手には届きません。');
   }
@@ -329,12 +406,16 @@ export function previewReply(
     draftVersion: draft.version,
     account: { id: account.id, name: account.name },
     target: { ...targetView(conv), title: conv.title },
-    body: draft.body,
+    body: text,
     method: 'push',
     mock,
     billableRecipients: check.billableRecipients,
     notices,
-    image: imageView(image),
+    image: imageView(images[0]),
+    images: images.flatMap((i) => imageView(i) ?? []),
+    files: files.map(sentFileView),
+    publicUntil: until,
+    publicDays: until ? days : null,
     monthUsed: used,
     monthlyLimit: account.monthlyLimit ?? null,
     lineUsage: quota?.used ?? null,
@@ -385,10 +466,18 @@ export function beginSend(state: LineState, user: User, conversationId: string, 
     throw new DomainError('conflict', INVALID_CONSENT);
   }
   const draft = state.drafts.find((d) => d.id === consent.draftId && d.authorId === user.id);
-  if (!draft || draft.version !== consent.draftVersion || draft.body !== body || consent.bodyHash !== bodyHash || (draft.imageId ?? null) !== (consent.imageId ?? null)) {
+  const imageIds = draftImageIds(consent);
+  const fileIds = draftFileIds(consent);
+  if (!draft || draft.version !== consent.draftVersion || consent.bodyHash !== bodyHash || !sameIds(draftImageIds(draft), imageIds) || !sameIds(draftFileIds(draft), fileIds)) {
     throw new DomainError('conflict', '確認した後に本文が変更されています。もう一度内容を確認してください。');
   }
-  const image = imageOf(state, user, account.id, consent.imageId, nowMs, ctx);
+  const images = imagesOf(state, user, account.id, imageIds, nowMs, ctx);
+  const files = filesOf(state, user, account.id, fileIds, nowMs, ctx);
+  const until = consent.publicUntil ?? null;
+  // The text sent is the draft with the file links as confirmed (the dates written as on the confirmation).
+  if (composeText(draft.body, files, until, Date.parse(consent.createdAt)) !== body) {
+    throw new DomainError('conflict', '確認した後に本文が変更されています。もう一度内容を確認してください。');
+  }
   const check = evaluateTarget(state, conv, nowMs);
   if (!check.ok) throw new DomainError('validation', check.reason);
   if (targetFingerprint(account, conv) !== consent.targetFingerprint || conv.target.kind !== 'messaging_api') {
@@ -417,25 +506,33 @@ export function beginSend(state: LineState, user: User, conversationId: string, 
     statusReason: null,
     retryNotBefore: null,
     attempts: [{ n: 1, actorId: user.id, startedAt: now, finishedAt: null, outcome: null, requestId: null, httpStatus: null, retryAfterSeconds: null }],
-    image,
+    image: images[0] ?? null,
+    images,
+    files,
+    publicUntil: until,
     ...(via !== 'app' ? { via } : {}),
   };
   state.outbox.push(intent);
   consent.consumedByIntentId = intent.id;
   state.drafts = state.drafts.filter((d) => d.id !== draft.id);
-  const how = `${live ? 'プッシュ' : 'プッシュ（模擬）'}${image ? '・画像あり' : ''}${via === 'discord' ? '・Discord から' : ''}`;
+  if (until) {
+    extendMedia(state, imageIds, until);
+    markFilesSent(state, fileIds, until);
+  }
+  const how = `${live ? 'プッシュ' : 'プッシュ（模擬）'}${attachedLabel(images.length, files.length)}${via === 'discord' ? '・Discord から' : ''}`;
   conv.history.push({ id: nextLineId(state, 'lhist'), at: now, actorId: user.id, action: 'reply_started', from: null, to: `${how}・操作 ${input.operationId.slice(0, 8)}` });
   return { intentId: intent.id, attemptNo: 1, replay: false };
 }
 
 export function pushRequestOf(intent: OutboxIntent): LinePushRequest {
+  const images = intentImages(intent);
   return {
     retryKey: intent.retryKey,
     accountId: intent.accountId,
     to: intent.target.id,
     targetType: intent.target.type,
     text: intent.body,
-    ...(intent.image ? { image: { originalUrl: intent.image.originalUrl, previewUrl: intent.image.previewUrl } } : {}),
+    ...(images.length > 0 ? { images: images.map((i) => ({ originalUrl: i.originalUrl, previewUrl: i.previewUrl })) } : {}),
   };
 }
 
@@ -627,6 +724,9 @@ export function outboxView(intent: OutboxIntent, names: (id: string) => string, 
     billableRecipients: intent.billableRecipients,
     via: intent.via ?? 'app',
     broadcastId: intent.broadcastId ?? null,
-    image: imageView(intent.image),
+    image: imageView(intentImages(intent)[0]),
+    images: intentImages(intent).flatMap((i) => imageView(i) ?? []),
+    files: (intent.files ?? []).map(sentFileView),
+    publicUntil: intent.publicUntil ?? null,
   };
 }

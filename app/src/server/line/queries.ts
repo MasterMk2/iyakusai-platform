@@ -5,8 +5,9 @@ import type { AppState, User } from '../domain/types.js';
 import { canEditLine, canReadLine, canReplyLine, canTriageLine, lineGrant, permittedConversations, readableConversation } from './access.js';
 import { shadowedHistory } from './history.js';
 import { isInboundImage } from './inbound-media.js';
+import { fileView } from './files.js';
 import { MEDIA_PATH } from './media.js';
-import { evaluateTarget, outboxView, targetView } from './reply.js';
+import { draftFileIds, draftImageIds, evaluateTarget, outboxView, targetView } from './reply.js';
 import type { LineAccount, LineConversation, LineMessage, LineState } from './types.js';
 
 export const sendingOf = (account: LineAccount): LineSending => (account.outbound === 'push' ? 'live' : account.outbound === 'push_mock' ? 'mock' : 'none');
@@ -177,6 +178,7 @@ export function lineConversationDetail(
   inFlight: ReadonlySet<string>,
   imagesEnabled = false,
   inboundImages = false,
+  filesEnabled = false,
 ): LineConversationDetail {
   const conv = readableConversation(state, user, conversationId);
   const account = accountOf(state, conv.accountId);
@@ -214,9 +216,18 @@ export function lineConversationDetail(
               updatedAt: draft.updatedAt,
               imageId: draft.imageId ?? null,
               imagePreviewUrl: draftImage ? `${MEDIA_PATH}/${draftImage.preview.file}` : null,
+              images: draftImageIds(draft).flatMap((id) => {
+                const m = (state.media ?? []).find((x) => x.id === id);
+                return m ? [{ id: m.id, previewUrl: `${MEDIA_PATH}/${m.preview.file}` }] : [];
+              }),
+              files: draftFileIds(draft).flatMap((id) => {
+                const a = (state.attachments ?? []).find((x) => x.id === id);
+                return a ? [fileView(a)] : [];
+              }),
             }
           : null,
       imagesEnabled: canReply && imagesEnabled,
+      filesEnabled: canReply && imagesEnabled && filesEnabled,
     },
     outbox: state.outbox
       .filter((o) => o.conversationId === conv.id)

@@ -23,6 +23,9 @@ const HISTORY_LABEL: Record<LineHistoryView['action'], string> = {
   reply_result: '返信の結果',
 };
 
+/** The images a send record carries (several since 2026-11-10; older records have the one `image`). */
+const sentImages = (o: OutboxView) => o.images ?? (o.image ? [o.image] : []);
+
 /** A received image; if it cannot be read (not kept by the receiver), the placeholder instead. */
 function ReceivedImage({ url, mediaType }: { url: string; mediaType: string }) {
   const [failed, setFailed] = useState(false);
@@ -89,7 +92,8 @@ function OutboxItem({ item, canRetry, onChanged }: { item: OutboxView; canRetry:
       <span className="note-meta">
         {fmtDate(item.createdAt)} ・ {item.actorName} ・ {item.broadcastId ? '一斉送信' : item.mock ? 'プッシュ（模擬）' : 'プッシュ'}・ {item.billableRecipients ?? '?'} 人宛て
         {item.via === 'discord' ? ' ・ Discord から' : ''}
-        {item.image ? ' ・ 画像あり' : ''}
+        {sentImages(item).length > 0 ? ` ・ 画像 ${sentImages(item).length} 枚` : ''}
+        {(item.files?.length ?? 0) > 0 ? ` ・ ファイル ${item.files!.length} 個` : ''}
       </span>
       <strong className="outbox-status" data-testid="outbox-status">
         {item.statusLabel}
@@ -233,7 +237,9 @@ export function LineConversation({
                     {e.o.via === 'discord' ? ' ・ Discord から' : ''}
                   </span>
                   <span className="line-text">{e.o.body}</span>
-                  {e.o.image && <img className="line-image-thumb" src={e.o.image.previewUrl} alt="送った画像" />}
+                  {sentImages(e.o).map((img, i) => (
+                    <img key={img.previewUrl} className="line-image-thumb" src={img.previewUrl} alt={`送った画像 ${i + 1}`} />
+                  ))}
                 </li>
               ),
             )}

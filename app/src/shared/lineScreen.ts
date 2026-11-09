@@ -11,7 +11,8 @@ export interface LineScreenInput {
   body: string;
   /** Whom it goes to: the conversation's name, and whether the person is a known friend (false: not confirmed). */
   recipients: { title: string; friend?: boolean }[];
-  hasImage: boolean;
+  /** Images or files go with the text. */
+  attached: boolean;
   now?: Date;
 }
 
@@ -27,7 +28,7 @@ export function screenLine(input: LineScreenInput): ScreenFinding[] {
   const holes = placeholders(text);
   if (holes.length > 0) out.push({ level: 'warning', text: `書きかけの箇所が残っているようです：${holes.slice(0, 5).join('、')}` });
   out.push(...dateFindings(text, now));
-  if (/画像|写真|添付/.test(text) && !input.hasImage) out.push({ level: 'warning', text: '本文に「画像」「写真」「添付」とありますが、画像が付いていません。' });
+  if (/画像|写真|添付/.test(text) && !input.attached) out.push({ level: 'warning', text: '本文に「画像」「写真」「添付」とありますが、画像もファイルも付いていません。' });
 
   if (input.recipients.length > 1) {
     // Each person gets the same text: a name of one of them, or a personal greeting, is seen by all.

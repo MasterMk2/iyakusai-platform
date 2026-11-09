@@ -123,8 +123,16 @@ export class LineMediaFiles {
   }
 }
 
-export const mediaExpired = (m: LineMedia, nowMs: number) => nowMs - Date.parse(m.createdAt) >= MEDIA_TTL_MS;
-export const mediaExpiresAt = (m: LineMedia) => new Date(Date.parse(m.createdAt) + MEDIA_TTL_MS).toISOString();
+/** Until when an image is public: 7 days after the upload, or later when a send chose a longer period (2026-11-10). */
+export const mediaExpiresAt = (m: LineMedia) => m.expiresAt ?? new Date(Date.parse(m.createdAt) + MEDIA_TTL_MS).toISOString();
+export const mediaExpired = (m: LineMedia, nowMs: number) => nowMs >= Date.parse(mediaExpiresAt(m));
+
+/** A send keeps its images public at least until `until` (never shortens an earlier choice). */
+export function extendMedia(state: LineState, ids: readonly string[], until: string): void {
+  for (const m of state.media ?? []) {
+    if (ids.includes(m.id) && Date.parse(until) > Date.parse(mediaExpiresAt(m))) m.expiresAt = until;
+  }
+}
 
 /** Checks both files and keeps them; the caller records the result in the state (registerMedia). */
 export function storeUpload(files: LineMediaFiles, original: Buffer, preview: Buffer): { original: LineMedia['original']; preview: LineMedia['preview'] } {
@@ -140,7 +148,7 @@ export function checkUploader(state: LineState, user: User, accountId: string, n
   const account = state.accounts.find((a) => a.id === accountId && a.kind === 'official_account');
   if (!account || !canReplyLine(state, user, account.id)) throw new DomainError('forbidden', 'この LINE アカウントで送る権限がありません。権限管理者に、LINE の送信権限を依頼してください。');
   const live = (state.media ?? []).filter((m) => !mediaExpired(m, nowMs));
-  if (live.filter((m) => m.uploaderId === user.id).length >= MAX_MEDIA_PER_USER) throw new DomainError('conflict', `送信用の画像が多すぎます（1 人 ${MAX_MEDIA_PER_USER} 枚まで・7 日で消えます）。`);
+  if (live.filter((m) => m.uploaderId === user.id).length >= MAX_MEDIA_PER_USER) throw new DomainError('conflict', `送信用の画像が多すぎます（1 人 ${MAX_MEDIA_PER_USER} 枚まで・公開期間が過ぎると消えます）。`);
   if (live.length >= MAX_MEDIA) throw new DomainError('conflict', '送信用の画像が多すぎます。しばらくしてからやり直してください。');
 }
 
@@ -155,7 +163,7 @@ export function registerMedia(state: LineState, user: User, accountId: string, s
 export function usableMedia(state: LineState, user: User, accountId: string, mediaId: string, nowMs: number): LineMedia {
   const media = (state.media ?? []).find((m) => m.id === mediaId && m.uploaderId === user.id && m.accountId === accountId);
   if (!media) throw notFound();
-  if (mediaExpired(media, nowMs)) throw new DomainError('validation', '画像の公開期間（7 日）が過ぎています。画像を選び直してください。', { field: 'image' });
+  if (mediaExpired(media, nowMs)) throw new DomainError('validation', '画像の公開期間が過ぎています。画像を選び直してください。', { field: 'image' });
   return media;
 }
 

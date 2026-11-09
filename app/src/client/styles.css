@@ -1414,6 +1414,14 @@ button.task-tree-toggle:focus-visible { outline-offset: -3px; }
 .line-to-list summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; font-weight: 700; color: var(--blue); }
 .line-to-list > input { margin: 0 0 6px; }
 .line-to-list .broadcast-list label { min-height: 36px; align-items: center; }
+/* Images (up to four) and files sent as links with an official LINE message (2026-11-10). */
+.line-attach-images, .compose-files .line-attach-images { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.line-attach-images li { display: grid; gap: 2px; justify-items: start; }
+.line-attach-images .line-image-thumb { width: 120px; height: 120px; object-fit: cover; }
+.compose-file-button.disabled { opacity: 0.6; pointer-events: none; }
+.line-attach-days { display: grid; gap: 4px; margin-top: 8px; }
+.line-attach-days > label { font-size: 14px; font-weight: 700; }
+.line-attach-days select { justify-self: start; width: auto; min-width: 16em; font-size: 16px; }
 @media (min-width: 901px) and (max-width: 1199px) {
   .contacts-layout { grid-template-columns: minmax(340px, 1fr) minmax(0, 1fr); }
 }

@@ -2,7 +2,7 @@ import multipart from '@fastify/multipart';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { HANDLING_STATUSES, LIMITS, type ApiError } from '../../shared/api.js';
-import { MOCK_PUSH_OUTCOMES, type BroadcastSendResponse, type LineIngestReport, type LineMediaResponse, type LineSendResponse, type OutboxView } from '../../shared/line.js';
+import { LINE_ATTACH_LIMITS, MOCK_PUSH_OUTCOMES, type BroadcastSendResponse, type LineFileResponse, type LineIngestReport, type LineMediaResponse, type LineSendResponse, type OutboxView } from '../../shared/line.js';
 import { DomainError, type User } from '../domain/types.js';
 import { readableConversation, replyableConversation } from '../line/access.js';
 import { beginBroadcast, broadcastOptions, broadcastSummary, previewBroadcast, recordBroadcastAttempt } from '../line/broadcast.js';
@@ -10,7 +10,22 @@ import { lineCommitteeAccess, setLineCommitteeGrant } from '../line/committee.js
 import { MockLinePushConnector, type LinePushConnector, type LinePushOutcome } from '../line/connector.js';
 import { registerDiscordLineRoutes, type DiscordLineOptions } from '../line/discord.js';
 import { MAX_LINE_BATCH } from '../line/fixtures.js';
+import {
+  attachmentGone,
+  attachmentOfFile,
+  attachmentPublic,
+  checkFileUploader,
+  expireAttachments,
+  FILE_MAX_BYTES,
+  FILE_NAME,
+  FILES_PATH,
+  fileView,
+  registerAttachment,
+  storeAttachment,
+  type LineAttachmentFiles,
+} from '../line/files.js';
 import { isInboundImage, type InboundImageSource } from '../line/inbound-media.js';
+import { attachmentDisposition } from './content-disposition.js';
 import { expireMedia, MEDIA_FILE, MEDIA_PATH, mediaExpired, mediaExpiresAt, mediaOfFile, ORIGINAL_MAX_BYTES, registerMedia, checkUploader, storeUpload, type LineMediaFiles } from '../line/media.js';
 import { sha256 } from '../line/normalize.js';
 import { lineAccountSummaries, lineConversationDetail, type LinePeople } from '../line/queries.js';
@@ -52,6 +67,8 @@ export interface LineRouteContext {
     imageBaseUrl?: string | null;
     /** The image files (line-media/ in the mail folder). Absent: no images. */
     media?: LineMediaFiles;
+    /** The files sent as links (line-files/ in the mail folder), 2026-11-10. Absent: no files. */
+    files?: LineAttachmentFiles;
     /** Replies from Discord threads through the Bot (contract C). Absent: no internal routes. */
     discord?: DiscordLineOptions | null;
   };
@@ -74,7 +91,7 @@ const triageBody = z
   })
   .refine((b) => b.status !== undefined || b.assigneeId !== undefined || b.labels !== undefined, { message: '変更内容がありません' });
 const noteBody = z.strictObject({ body: z.string().max(LIMITS.noteMaxLength * 2) });
-const previewBody = z.strictObject({ draftId, draftVersion: version });
+const previewBody = z.strictObject({ draftId, draftVersion: version, publicDays: z.union([z.literal(1), z.literal(7), z.literal(30)]).optional() });
 // No recipient, method or "confirmed" flag is accepted from the client: strict schemas reject them.
 const sendBody = z.strictObject({
   consentId: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
@@ -85,13 +102,27 @@ const sendBody = z.strictObject({
 });
 const retryBody = z.strictObject({ expectedAttempts: z.number().int().min(1).max(100) });
 const mediaId = z.string().regex(/^lmd_[0-9a-f]{16}$/);
-const draftBodyWithImage = z.strictObject({ body: bodyText, expectedVersion: version.nullable(), imageId: mediaId.nullable().optional() });
+const fileId = z.string().regex(/^lfl_[0-9a-f]{16}$/);
+const imageIds = z.array(mediaId).max(LINE_ATTACH_LIMITS.imagesMax);
+const fileIds = z.array(fileId).max(LINE_ATTACH_LIMITS.filesMax);
+const publicDays = z.union([z.literal(1), z.literal(7), z.literal(30)]);
+const draftBodyWithImage = z.strictObject({
+  body: bodyText,
+  expectedVersion: version.nullable(),
+  imageId: mediaId.nullable().optional(),
+  imageIds: imageIds.optional(),
+  fileIds: fileIds.optional(),
+});
 const accountParams = z.strictObject({ accountId: shortId });
 const mediaParams = z.strictObject({ file: z.string().regex(MEDIA_FILE) });
+const fileParams = z.strictObject({ file: z.string().regex(FILE_NAME) });
 const broadcastPreviewBody = z.strictObject({
   recipients: z.union([z.literal('all'), z.array(z.string().regex(/^lc_[0-9a-f]{16}$/)).min(1).max(5000)]),
   body: bodyText,
-  imageId: mediaId.nullable(),
+  imageId: mediaId.nullable().optional(),
+  imageIds: imageIds.optional(),
+  fileIds: fileIds.optional(),
+  publicDays: publicDays.optional(),
 });
 const broadcastSendBody = z.strictObject({ consentId: z.string().regex(/^[A-Za-z0-9_-]{43}$/), operationId: z.uuid(), body: bodyText });
 const lineGrantBody = z.strictObject({
@@ -124,7 +155,8 @@ export function registerLineRoutes(app: FastifyInstance, ctx: LineRouteContext):
   // Intents whose connector call is running in this process.
   const inFlight = new Set<string>();
   const imageBaseUrl = ctx.committee?.media ? (ctx.committee.imageBaseUrl ?? null) : null;
-  const sendContext = (via: SendContext['via'] = 'app'): SendContext => ({ imageBaseUrl, via });
+  const attachmentFiles = imageBaseUrl ? (ctx.committee?.files ?? null) : null;
+  const sendContext = (via: SendContext['via'] = 'app'): SendContext => ({ imageBaseUrl, filesEnabled: attachmentFiles !== null, via });
 
   const view = (user: User, intentId: string) => getOutbox(store.current, mail.current, user, intentId, clock(), inFlight.has(intentId));
 
@@ -170,7 +202,7 @@ export function registerLineRoutes(app: FastifyInstance, ctx: LineRouteContext):
   app.get('/api/line/conversations/:conversationId', async (request) => {
     const user = requireUser(request);
     const { conversationId } = parse(convParams, request.params);
-    return lineConversationDetail(store.current, mail.current, user, conversationId, clock(), inFlight, imageBaseUrl !== null, line.inboundImages !== undefined);
+    return lineConversationDetail(store.current, mail.current, user, conversationId, clock(), inFlight, imageBaseUrl !== null, line.inboundImages !== undefined, attachmentFiles !== null);
   });
 
   // A received image, for those who may read the conversation (never public; see inbound-media.ts).
@@ -297,7 +329,8 @@ export function registerLineRoutes(app: FastifyInstance, ctx: LineRouteContext):
       try {
         let result: LinePushOutcome;
         try {
-          result = await multicast({ retryKey: r.retryKey, accountId: b.accountId, to: r.to, text: b.body, ...(b.image ? { image: { originalUrl: b.image.originalUrl, previewUrl: b.image.previewUrl } } : {}) });
+          const images = b.images ?? (b.image ? [b.image] : []);
+          result = await multicast({ retryKey: r.retryKey, accountId: b.accountId, to: r.to, text: b.body, ...(images.length > 0 ? { images: images.map((i) => ({ originalUrl: i.originalUrl, previewUrl: i.previewUrl })) } : {}) });
         } catch {
           result = { kind: 'unknown', reason: 'server_error' };
         }
@@ -327,6 +360,7 @@ export function registerLineRoutes(app: FastifyInstance, ctx: LineRouteContext):
 
   const mediaFiles = ctx.committee?.media ?? null;
   function sweepMedia(): void {
+    sweepFiles();
     if (!mediaFiles) return;
     const nowMs = Date.parse(clock());
     let gone: string[] = [];
@@ -339,6 +373,87 @@ export function registerLineRoutes(app: FastifyInstance, ctx: LineRouteContext):
     }
     mediaFiles.remove(gone);
     mediaFiles.sweep(new Set((store.current.media ?? []).flatMap((m) => [m.original.file, m.preview.file])), nowMs);
+  }
+
+  // ---- files (2026-11-10): sent as links in the text; answered without sign-in only after a send, until its date
+  function sweepFiles(): void {
+    if (!attachmentFiles) return;
+    const nowMs = Date.parse(clock());
+    let gone: string[] = [];
+    if ((store.current.attachments ?? []).some((a) => attachmentGone(a, nowMs))) {
+      try {
+        gone = store.transact((s) => expireAttachments(s, nowMs));
+      } catch {
+        return;
+      }
+    }
+    attachmentFiles.remove(gone);
+    attachmentFiles.sweep(new Set((store.current.attachments ?? []).map((a) => a.file)), nowMs);
+  }
+
+  if (attachmentFiles) {
+    const files = attachmentFiles;
+    void app.register(async (scope) => {
+      await scope.register(multipart, { limits: { fileSize: FILE_MAX_BYTES, files: 1, fields: 1, fieldSize: 100, parts: 2 } });
+      // One file ("file") and the account ("accountId").
+      scope.post('/api/line/files', { bodyLimit: FILE_MAX_BYTES + 1024 * 1024 }, async (request, reply) => {
+        const user = requireUser(request);
+        if (!request.isMultipart()) throw new DomainError('validation', 'multipart/form-data 形式で送信してください。');
+        let accountId: string | null = null;
+        let upload: { name: string; data: Buffer } | null = null;
+        try {
+          for await (const part of request.parts()) {
+            if (part.type === 'field' && part.fieldname === 'accountId' && typeof part.value === 'string') accountId = part.value;
+            else if (part.type === 'file' && part.fieldname === 'file' && !upload) upload = { name: part.filename ?? '', data: await part.toBuffer() };
+            else if (part.type === 'file') await part.toBuffer();
+          }
+        } catch (err) {
+          const code = (err as { code?: unknown } | null)?.code;
+          if (code === 'FST_REQ_FILE_TOO_LARGE' || code === 'FST_FILES_LIMIT' || code === 'FST_PARTS_LIMIT') {
+            throw new DomainError('validation', `ファイルが大きすぎます（${Math.round(FILE_MAX_BYTES / 1024 / 1024)} MB まで）。`, { field: 'file' });
+          }
+          throw new DomainError('validation', 'ファイルを読み取れませんでした。もう一度選んでください。', { field: 'file' });
+        }
+        const account = parse(shortId, accountId);
+        // The sender's right first, so a stranger cannot fill the disk; the file is kept only after the checks.
+        checkFileUploader(store.current, user, account, Date.parse(clock()), upload?.data.length ?? 0);
+        const stored = storeAttachment(files, upload?.data ?? Buffer.alloc(0), upload?.name ?? '');
+        let attachment;
+        try {
+          attachment = store.transact((s) => registerAttachment(s, user, account, stored, clock()));
+        } catch (err) {
+          files.remove([stored.file]);
+          throw err;
+        }
+        return reply.code(201).send({ ...fileView(attachment), expiresAt: attachment.keepUntil } satisfies LineFileResponse);
+      });
+    });
+
+    // Public: the people the message went to open the link with no sign-in. The name is the secret; the link
+    // answers only after the file was sent and until the date the sender chose. Always a download in a sandbox.
+    app.get(`${FILES_PATH}/:file`, async (request, reply) => {
+      const parsed = fileParams.safeParse(request.params);
+      const notFoundReply = () => reply.code(404).header('Cache-Control', 'no-store').type('text/plain; charset=utf-8').send('Not Found');
+      if (!parsed.success) return notFoundReply();
+      const attachment = attachmentOfFile(store.current, parsed.data.file);
+      const nowMs = Date.parse(clock());
+      if (!attachment || !attachmentPublic(attachment, nowMs)) {
+        if (attachment && attachmentGone(attachment, nowMs)) sweepFiles();
+        return notFoundReply();
+      }
+      const data = files.read(attachment.file);
+      if (!data) return notFoundReply();
+      const left = Math.max(0, Math.floor((Date.parse(attachment.sentUntil!) - nowMs) / 1000));
+      return reply
+        .header('Content-Type', attachment.type)
+        .header('X-Content-Type-Options', 'nosniff')
+        .header('Content-Security-Policy', "default-src 'none'; sandbox")
+        .header('Content-Disposition', attachmentDisposition(attachment.name, `file.${attachment.file.split('.').pop()}`))
+        .header('Cache-Control', `private, max-age=${Math.min(left, 3600)}`)
+        .header('X-Robots-Tag', 'noindex, nofollow')
+        .header('Referrer-Policy', 'no-referrer')
+        .send(data);
+    });
   }
 
   if (mediaFiles && imageBaseUrl) {

@@ -1,11 +1,12 @@
 import { useCallback, useRef, useState } from 'react';
-import { LINE_LIMITS, type BroadcastOptionsResponse, type BroadcastPreviewResponse, type BroadcastSendResponse } from '../../shared/line';
+import { LINE_ATTACH_LIMITS, LINE_LIMITS, type BroadcastOptionsResponse, type BroadcastPreviewResponse, type BroadcastSendResponse, type LinePublicDays } from '../../shared/line';
 import { composeLineReviewRequest } from '../../shared/lineReview';
 import { screenLine } from '../../shared/lineScreen';
 import { api, fmtDate, toFailure } from '../api';
 import { useLoader } from '../useLoader';
 import { BotReview } from './BotReview';
-import { LineImagePicker, type PickedImage } from './LineImagePicker';
+import { LineAttachPicker, PreviewAttachments, type PickedFile } from './LineAttachPicker';
+import type { PickedImage } from './LineImagePicker';
 import { LineRecipientField } from './LineRecipientField';
 import { LineScreenChecks } from './LineScreenChecks';
 import { LoadStatus } from './LoadStatus';
@@ -28,7 +29,9 @@ export function LineBroadcast({ accountId, refresh, onSent, onClose }: { account
   const [all, setAll] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const [body, setBody] = useState('');
-  const [image, setImage] = useState<PickedImage | null>(null);
+  const [images, setImages] = useState<PickedImage[]>([]);
+  const [files, setFiles] = useState<PickedFile[]>([]);
+  const [publicDays, setPublicDays] = useState<LinePublicDays>(LINE_ATTACH_LIMITS.defaultPublicDays);
   const [preview, setPreview] = useState<BroadcastPreviewResponse | null>(null);
   const [operationId, setOperationId] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState(false);
@@ -65,7 +68,9 @@ export function LineBroadcast({ accountId, refresh, onSent, onClose }: { account
       const p = await api<BroadcastPreviewResponse>('POST', `/api/line/accounts/${encodeURIComponent(accountId)}/broadcast/preview`, {
         recipients: all ? 'all' : selected,
         body,
-        imageId: image?.id ?? null,
+        imageIds: images.map((i) => i.id),
+        fileIds: files.map((f) => f.id),
+        publicDays,
       });
       setPreview(p);
       setOperationId(crypto.randomUUID());
@@ -86,7 +91,8 @@ export function LineBroadcast({ accountId, refresh, onSent, onClose }: { account
       const res = await api<BroadcastSendResponse>('POST', '/api/line/broadcast/send', { consentId: preview.consentId, operationId, body: preview.body });
       changed();
       setBody('');
-      setImage(null);
+      setImages([]);
+      setFiles([]);
       setSelected([]);
       setAll(false);
       setMessage({ kind: 'ok', text: res.message });
@@ -102,7 +108,7 @@ export function LineBroadcast({ accountId, refresh, onSent, onClose }: { account
     }
   }
 
-  const findings = preview ? screenLine({ body: preview.body, recipients: preview.recipients.map((r) => ({ title: r.title, friend: friendOf.get(r.conversationId) })), hasImage: !!preview.image }) : [];
+  const findings = preview ? screenLine({ body: preview.body, recipients: preview.recipients.map((r) => ({ title: r.title, friend: friendOf.get(r.conversationId) })), attached: (preview.images?.length ?? 0) + (preview.files?.length ?? 0) > 0 }) : [];
   const warnings = findings.filter((f) => f.level === 'warning').length;
   const field = (name: keyof typeof errors) => (errors[name] ? { 'aria-invalid': true as const, 'aria-describedby': `line-send-${name}-error` } : {});
   const errorOf = (name: keyof typeof errors) =>
@@ -184,22 +190,27 @@ export function LineBroadcast({ accountId, refresh, onSent, onClose }: { account
               {length} / {LINE_LIMITS.replyMaxLength}
             </span>
             {errorOf('body')}
-            <div className="compose-files">
-              <span className="compose-files-label">画像（任意）</span>
-              {o.imagesEnabled ? (
-                <LineImagePicker
-                  accountId={o.account.id}
-                  image={image}
-                  onChange={(next) => {
-                    setImage(next);
-                    changed();
-                  }}
-                  disabled={busy}
-                />
-              ) : (
-                <p className="hint">このサーバーでは画像を送れません（公開 URL が設定されていません）。</p>
-              )}
-            </div>
+            <LineAttachPicker
+              accountId={o.account.id}
+              images={images}
+              onImages={(next) => {
+                setImages(next);
+                changed();
+              }}
+              files={files}
+              onFiles={(next) => {
+                setFiles(next);
+                changed();
+              }}
+              publicDays={publicDays}
+              onPublicDays={(next) => {
+                setPublicDays(next);
+                changed();
+              }}
+              imagesEnabled={o.imagesEnabled}
+              filesEnabled={o.filesEnabled === true}
+              disabled={busy}
+            />
             <p className="hint">
               月の通数は 1 人 1 通ずつ数えます（今月このアプリから {o.monthUsed} 通{o.monthlyLimit !== null ? `／上限 ${o.monthlyLimit} 通` : ''}）。
             </p>
@@ -231,14 +242,7 @@ export function LineBroadcast({ accountId, refresh, onSent, onClose }: { account
               <dd data-testid="broadcast-line">
                 {preview.lineUsage === null ? '読み取れませんでした' : `${preview.lineUsage} 通${preview.lineLimit !== null ? `／上限 ${preview.lineLimit} 通` : ''}`}
               </dd>
-              {preview.image && (
-                <>
-                  <dt>画像</dt>
-                  <dd>
-                    <img className="line-image-thumb" src={preview.image.previewUrl} alt="送る画像" />
-                  </dd>
-                </>
-              )}
+              <PreviewAttachments images={preview.images ?? (preview.image ? [preview.image] : [])} files={preview.files ?? []} publicUntil={preview.publicUntil ?? null} />
               <dt>期限</dt>
               <dd>この確認は {fmtDate(preview.expiresAt)} まで有効です</dd>
             </dl>
