@@ -11,15 +11,21 @@ import {
   DOC_TYPES,
   IMAGE_ASPECTS,
   REMINDER_REPEATS,
+  TASK_DRAFT_LIMITS,
   type AssistantCandidate,
   type AssistantJob,
   type AssistantJobResult,
 } from '../../shared/assistant.js';
+import { TASK_LIMITS, type TaskView } from '../../shared/tasks.js';
+import { todayInTimeZone } from '../../task-service/shared/dates.js';
 import { DomainError, type User } from '../domain/types.js';
 import { attachmentDisposition } from '../http/content-disposition.js';
 import { HttpError } from '../http/http-error.js';
 import type { TaskIdentityBridge } from '../tasks/bridge.js';
+import { TaskServiceError } from '../tasks/client.js';
+import type { TaskRuntime } from '../tasks/routes.js';
 import { ALLOWED_FILE_TYPES, AssistantServiceError, type AssistantAnswer, type AssistantServiceClient } from './client.js';
+import { browserDraft, buildRoster, departmentKeysByLabel, openTasksFor } from './taskdraft.js';
 
 // Browser API of the Bot tab (contract §4). Identity comes only from the server-verified session; the
 // task bridge maps it to the Discord actor (discord-<ID>); the Bot host decides committee membership
@@ -37,6 +43,11 @@ export interface AssistantRouteContext {
   mailDraftBcc: string | null;
   parse: <T>(schema: z.ZodType<T>, value: unknown) => T;
   requireUser: (request: FastifyRequest) => User;
+  /**
+   * Task drafting (2026-11-09, contract §9): the Task service and the committee's people, read to build who the Bot
+   * may propose as assignees. Without the Task service the drafting route answers 404.
+   */
+  taskDraft?: { tasks: TaskRuntime | null; listUsers: () => User[]; now?: () => Date } | null;
 }
 
 const jobId = z.string().regex(/^j_[a-z0-9]{20}$/);
@@ -89,8 +100,16 @@ const reminderBody = z.strictObject({
 const operationOnly = z.strictObject({ clientOperationId: operationId });
 const candidatePlainBody = z.strictObject({ clientOperationId: operationId, comment: text(ASSISTANT_LIMITS.returnCommentMax, 0).optional() });
 const candidateReturnBody = z.strictObject({ clientOperationId: operationId, comment: text(ASSISTANT_LIMITS.returnCommentMax) });
+const taskDraftBody = z.strictObject({
+  clientOperationId: operationId,
+  overview: z.string().max(TASK_DRAFT_LIMITS.overviewMax * 4).transform(cleanText).pipe(z.string().min(1).max(TASK_DRAFT_LIMITS.overviewMax)),
+  deadline: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  tags: z.array(z.string().regex(/^[a-z]{2,16}$/)).max(TASK_LIMITS.tagsMax).optional(),
+  parentId: z.string().regex(/^[a-z0-9-]{1,64}$/).nullable().optional(),
+  useSources: z.boolean().optional(),
+});
 const jobsQuery = z.strictObject({
-  kind: z.enum(['ask', 'doc', 'image']).optional(),
+  kind: z.enum(['ask', 'doc', 'image', 'taskdraft']).optional(),
   mine: z.enum(['0', '1']).optional(),
   limit: z.string().regex(/^\d{1,2}$/).optional(),
   before: jobId.optional(),
@@ -130,7 +149,10 @@ export function browserResult(job: AssistantJob): AssistantJobResult | null {
       return { name: file.name, mime, size: file.size, url: `/api/assistant/files/${encodeURIComponent(job.id)}/${encodeURIComponent(file.name)}` };
     })
     .filter((file): file is NonNullable<typeof file> => file !== null);
-  return { ...job.result, files };
+  const { draft, ...rest } = job.result;
+  // A task draft passes only in the expected shape (it fills the task form); anything else is dropped.
+  const checked = job.kind === 'taskdraft' && draft !== undefined ? browserDraft(draft) : null;
+  return { ...rest, files, ...(checked ? { draft: checked } : {}) };
 }
 
 /** A job as the browser may see it. */
@@ -186,6 +208,52 @@ export function registerAssistantRoutes(app: FastifyInstance, ctx: AssistantRout
     const answer = await rt.client
       .createJob(actor, { clientOperationId: `ui-${body.clientOperationId}`, kind: body.kind, input: body.input })
       .catch(toHttp);
+    return sendJob(reply, answer);
+  });
+
+  // Task drafting (2026-11-09, contract §9). The browser sends the outline; the roster and the open tasks are read
+  // here from the Task service as this person, so the Bot can only propose people who can take a task on.
+  app.post('/api/assistant/taskdraft', async (request, reply) => {
+    const { actor, rt } = actorOf(request);
+    const tasks = ctx.taskDraft?.tasks;
+    if (!ctx.taskDraft || !tasks) throw new HttpError(404, { error: 'TASKDRAFT_DISABLED', message: 'タスクの下書きはこのサーバーでは使えません。' });
+    const body = parse(taskDraftBody, request.body);
+    const taskActor = tasks.bridge.taskUserFor(requireUser(request).id);
+    if (!taskActor) throw new DomainError('forbidden', 'タスク機能を利用する権限がありません。');
+    const failed = (err: unknown): never => {
+      if (err instanceof TaskServiceError && err.kind === 'definitive' && err.status === 403) throw new DomainError('forbidden', 'タスク機能を利用する権限がありません。');
+      throw new HttpError(503, { error: 'task_service_unavailable', message: 'タスクサービスに接続できないため、担当の候補を集められませんでした。しばらくしてから再試行してください。' });
+    };
+    const me = await tasks.client.me(taskActor).catch(failed);
+    const first = me.memberships[0];
+    if (!first || (first.role !== 'editor' && first.role !== 'admin')) throw new DomainError('forbidden', 'タスクを登録できる人だけが使えます。');
+    const [all, members] = await Promise.all([
+      // A Task service without department tags has no list of everything: then the first department's list.
+      tasks.client.listAllTasks(taskActor).catch(() => tasks.client.listTasks(taskActor, first.workspace.id, {})),
+      tasks.client.members(taskActor, first.workspace.id),
+    ]).catch(failed);
+    const labels = departmentKeysByLabel(me.memberships);
+    const known = new Set(labels.values());
+    let parent: TaskView | null = null;
+    if (body.parentId) {
+      parent = all.find((t) => t.id === body.parentId) ?? null;
+      if (!parent) throw new HttpError(400, { error: 'VALIDATION', message: '親タスクが見つかりません。' });
+      if (parent.parentId) throw new HttpError(400, { error: 'VALIDATION', message: '子タスクの下には作れません（親子は 1 段までです）。' });
+    }
+    const chosen = (body.tags ?? []).filter((k) => known.has(k));
+    const hint = chosen.length > 0 ? chosen : (parent?.tags ?? []).filter((k) => known.has(k));
+    const now = ctx.taskDraft.now?.() ?? new Date();
+    const roster = buildRoster({ members, tasks: all, people: ctx.taskDraft.listUsers(), taskUserFor: (p) => tasks.bridge.taskUserFor(p), labels, today: todayInTimeZone(now) });
+    const input = {
+      overview: body.overview,
+      deadline: body.deadline ?? null,
+      tags: hint.slice(0, TASK_LIMITS.tagsMax),
+      parent: parent ? { id: parent.id, title: parent.title.slice(0, TASK_LIMITS.titleMax) } : null,
+      useSources: body.useSources ?? true,
+      roster,
+      openTasks: openTasksFor(all, hint, new Set(roster.map((r) => r.id))),
+    };
+    const answer = await rt.client.createJob(actor, { clientOperationId: `ui-${body.clientOperationId}`, kind: 'taskdraft', input }).catch(toHttp);
     return sendJob(reply, answer);
   });
 

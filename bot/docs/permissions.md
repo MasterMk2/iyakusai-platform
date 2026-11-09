@@ -22,7 +22,7 @@
 | 種類 | 命令（Discord の名前 → 命令） |
 |---|---|
 | 読む（read） | `/ask`・`/usage`・`/remind list`・`/haiku check`・`/haiku list`・`/haiku ranking`・`/persona show`・`/todo list`・`/todo show`・`/todo history`・統合アプリの ask |
-| 書く（write） | `/remind add`・`/remind done`・`/remind delete`・`/haiku optout`・`/haiku optin`・`/todo`（作成・変更の命令）・週1回のタスク一覧の「引き受ける」ボタン（`todo.weekly_assign`）・候補の承認・却下・取り消し・差し戻し・`/ネタ動画キャンセル`・統合アプリの remind と screening |
+| 書く（write） | `/remind add`・`/remind done`・`/remind delete`・`/haiku optout`・`/haiku optin`・`/todo`（作成・変更の命令）・週1回のタスク一覧の「引き受ける」ボタン（`todo.weekly_assign`）・候補の承認・却下・取り消し・差し戻し・`/ネタ動画キャンセル`・統合アプリの remind・screening・taskdraft（タスクの起票支援） |
 | 投稿・配布・起草（send） | `/doc`・`/mail`・`/image`・`/ネタ動画`・統合アプリの doc と image |
 | 管理（admin） | `/persona set`・`/persona off`・`/haiku scan` |
 
@@ -108,7 +108,7 @@ audit = true                             # 監査ログを書く（既定 true�
 | 読む（read） | 残さない | 残す | 残さない |
 | 書く・投稿・配布・起草・管理 | 残す | 残す | 残す |
 
-- 完了・失敗を残す命令：`/doc`・`/mail`・`/image`・`/ネタ動画`・`/ネタ動画キャンセル`・`/remind add`・`/remind done`・`/remind delete`・`/persona set`・`/persona off`・`/haiku optout`・`/haiku optin`・`/todo` の変更の命令・週1回のタスク一覧の「引き受ける」ボタン・候補のボタン（承認・却下・取り消し・差し戻し）・統合アプリの依頼（remind・screening・doc・image）。
+- 完了・失敗を残す命令：`/doc`・`/mail`・`/image`・`/ネタ動画`・`/ネタ動画キャンセル`・`/remind add`・`/remind done`・`/remind delete`・`/persona set`・`/persona off`・`/haiku optout`・`/haiku optin`・`/todo` の変更の命令・週1回のタスク一覧の「引き受ける」ボタン・候補のボタン（承認・却下・取り消し・差し戻し）・統合アプリの依頼（remind・screening・taskdraft・doc・image）。
 - `code` は失敗の理由の記号（例：`NOT_FOUND`・`VALIDATION`・`FORBIDDEN`・`AI_ERROR`・`INTERNAL`）。本文や例外の文面は書かない。
 - 統合アプリの依頼が拒否されたときは、`denied` の 1 行だけを残す（完了の失敗は重ねない）。依頼の失敗の理由は、依頼の結果（ジョブ）に残る。
 - 残さないもの：Bot が自分で行う処理（候補の自動起票・リマインドの通知と催促・俳句の検出と投稿・共有チャンネルへの定期の投稿）。委員の命令ではないため、監査の対象外（§7）。
