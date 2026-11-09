@@ -381,6 +381,7 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
         people: () => deps.people.list(),
         imageBaseUrl,
         media: opened.media,
+        files: opened.files,
         discord: lineConfig.discord
           ? { auth: lineConfig.discord.auth, threadMapFile: lineConfig.discord.threadMapFile, memberByDiscordId, fromTrustedProxy: deps.fromTrustedProxy ?? (() => false), ...(deps.now ? { now: deps.now } : {}) }
           : null,

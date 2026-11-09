@@ -14,6 +14,8 @@ export interface LinePushRequest {
   text: string;
   /** An image after the text (2026-11-02): public HTTPS URLs LINE fetches. One request, one message per recipient. */
   image?: { originalUrl: string; previewUrl: string } | null;
+  /** Up to four images after the text (2026-11-10); takes the place of `image`. */
+  images?: { originalUrl: string; previewUrl: string }[];
 }
 
 /** A multicast (2026-11-02): the same messages to at most 500 users, one retry key per request. */
@@ -24,9 +26,14 @@ export interface LineMulticastRequest {
   to: string[];
   text: string;
   image?: { originalUrl: string; previewUrl: string } | null;
+  images?: { originalUrl: string; previewUrl: string }[];
 }
 
 export const MULTICAST_MAX = 500;
+
+/** The images of a request, in order (`images`, or the one `image` of an older caller). */
+export const requestImages = (r: { image?: { originalUrl: string; previewUrl: string } | null | undefined; images?: { originalUrl: string; previewUrl: string }[] | undefined }) =>
+  r.images ?? (r.image ? [r.image] : []);
 
 /**
  * Result classes mirror the documented push semantics:
@@ -106,7 +113,7 @@ export class MockLinePushConnector implements LinePushConnector {
 
   async push(request: LinePushRequest): Promise<LinePushOutcome> {
     await Promise.resolve();
-    const textHash = createHash('sha256').update(`${request.text}|${request.image?.originalUrl ?? ''}`).digest('hex');
+    const textHash = createHash('sha256').update(`${request.text}|${requestImages(request).map((i) => i.originalUrl).join('|')}`).digest('hex');
     const fingerprint = `${request.accountId}|${request.targetType}|${request.to}|${textHash}`;
     const outcome = this.decide(request.retryKey, fingerprint);
     this.calls.push({ retryKey: request.retryKey, to: request.to, textHash, outcome: outcome.kind });
@@ -115,7 +122,7 @@ export class MockLinePushConnector implements LinePushConnector {
 
   async multicast(request: LineMulticastRequest): Promise<LinePushOutcome> {
     await Promise.resolve();
-    const textHash = createHash('sha256').update(`${request.text}|${request.image?.originalUrl ?? ''}`).digest('hex');
+    const textHash = createHash('sha256').update(`${request.text}|${requestImages(request).map((i) => i.originalUrl).join('|')}`).digest('hex');
     const to = request.to.join(',');
     const outcome = this.decide(request.retryKey, `${request.accountId}|multicast|${to}|${textHash}`);
     this.calls.push({ retryKey: request.retryKey, to, textHash, outcome: outcome.kind });

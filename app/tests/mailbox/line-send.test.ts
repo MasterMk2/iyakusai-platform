@@ -564,8 +564,13 @@ describe('images', () => {
     await grantSend(chair, member.id);
     expect((await call('PUT', `/api/line/conversations/${conversationId}/reply/draft`, { cookie: member.cookie, body: { body: 'x', expectedVersion: null, imageId: up.json.id } })).status).toBe(404);
 
-    // After 7 days: not served, and the files are gone.
-    ctx.clock.now += MEDIA_TTL_MS + 1000;
+    // After the period chosen at the send (7 days by default, through the end of that day in Japan, 2026-11-10):
+    // not served, and the files are gone. Never shorter than 7 days from the upload.
+    const until = Date.parse(sent.sent!.json.outbox.publicUntil as string);
+    expect(until).toBeGreaterThanOrEqual(ctx.clock.now + MEDIA_TTL_MS - 1000);
+    ctx.clock.now = until - 1000;
+    expect((await app.inject({ method: 'GET', url: up.json.previewUrl, headers: { host: TEST_HOST } })).statusCode).toBe(200);
+    ctx.clock.now = until + 1000;
     expect((await app.inject({ method: 'GET', url: up.json.previewUrl, headers: { host: TEST_HOST } })).statusCode).toBe(404);
     expect(readdirSync(config.line!.mediaDir)).toEqual([]);
   });
@@ -581,7 +586,7 @@ describe('images', () => {
     const cookie = cookieOf(again.headers['set-cookie']);
     const preview = await call('POST', `/api/line/conversations/${conversationId}/reply/preview`, { cookie, body: { draftId: draft.json.id, draftVersion: 1 } });
     expect(preview.status).toBe(422);
-    expect(preview.json.message).toMatch(/7 日/);
+    expect(preview.json.message).toMatch(/公開期間が過ぎています/);
     expect(pushes).toHaveLength(0);
   });
 
@@ -817,5 +822,199 @@ describe('replies from Discord (contract C)', () => {
     records = [record(ctx.clock.now, 600)];
     await build({});
     expect((await bot('/internal/line/discord/preview', { threadId: THREAD, discordUserId: CHAIR, text: '合成' })).status).toBe(404);
+  });
+});
+
+// ---- several images and files sent as links (2026-11-10)
+
+const PDF = Buffer.from('%PDF-1.4\n%synthetic\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n');
+/** Not a real document: the ZIP header and the names an Office package carries (enough for the byte check). */
+const DOCX = Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.from('synthetic[Content_Types].xml word/document.xml'), Buffer.alloc(64)]);
+
+async function uploadFile(cookie: string, data: Buffer, filename: string, accountId = 'oa') {
+  const boundary = '----synthetic-boundary-0002';
+  const payload = Buffer.concat([
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="accountId"\r\n\r\n${accountId}\r\n`),
+    // Declared as a PDF whatever the bytes are: the server looks at the bytes.
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: application/pdf\r\n\r\n`),
+    data,
+    Buffer.from(`\r\n--${boundary}--\r\n`),
+  ]);
+  const res = await app.inject({
+    method: 'POST',
+    url: '/api/line/files',
+    headers: { host: TEST_HOST, origin: ORIGIN, 'x-smm-csrf': '1', cookie, 'content-type': `multipart/form-data; boundary=${boundary}` },
+    payload,
+  });
+  return { status: res.statusCode, json: res.json() as Json };
+}
+
+async function relogin(studentId = '21000001') {
+  const res = await app.inject({ method: 'POST', url: '/api/auth/login', headers: { host: TEST_HOST, origin: ORIGIN, 'x-smm-csrf': '1', 'content-type': 'application/json' }, payload: JSON.stringify({ loginId: studentId, password: PASSWORD }) });
+  return cookieOf(res.headers['set-cookie']);
+}
+
+const getPublic = (url: string) => app.inject({ method: 'GET', url: new URL(url, 'https://x.invalid').pathname, headers: { host: TEST_HOST } });
+
+describe('several images and files sent as links', () => {
+  async function ready() {
+    const now = ctx.clock.now;
+    records = [record(now, 600)];
+    const config = await build({ send: { publicBaseUrl: 'https://media.example.invalid' } });
+    const chair = await signIn(CHAIR, '21000001');
+    const member = await signIn(MEMBER, '21000002', [ROLE_PLANNING]);
+    await grantSend(chair, chair.id);
+    const [item] = await lineItems(chair.cookie, 1);
+    return { chair, member, conversationId: item!.conversationId, config };
+  }
+
+  it('keeps only PDF and Office files checked by their bytes, from senders, with a cleaned name', async () => {
+    const { chair, member, conversationId } = await ready();
+    expect((await uploadFile(member.cookie, PDF, 'a.pdf')).status).toBe(403);
+    const html = await uploadFile(chair.cookie, Buffer.from('<html><script>alert(1)</script></html>'), '案内.pdf');
+    expect(html.status).toBe(422);
+    expect(html.json.message).toMatch(/PDF・Word・Excel・PowerPoint/);
+    // A Word package named .pdf is refused: the name may only choose among kinds the bytes allow.
+    expect((await uploadFile(chair.cookie, DOCX, '案内.pdf')).status).toBe(422);
+    const pdf = await uploadFile(chair.cookie, PDF, '../出展要項\u202e.pdf');
+    expect(pdf.status).toBe(201);
+    // The folder part is dropped (by the upload parser), the direction character removed.
+    expect(pdf.json).toMatchObject({ name: '出展要項.pdf', kindLabel: 'PDF', bytes: PDF.length });
+    const docx = await uploadFile(chair.cookie, DOCX, '申込書');
+    expect(docx.json).toMatchObject({ name: '申込書.docx', kindLabel: 'Word' });
+    // The draft shows them; the conversation says files can be linked.
+    const detail = (await call('GET', `/api/line/conversations/${conversationId}`, { cookie: chair.cookie })).json;
+    expect(detail.reply).toMatchObject({ imagesEnabled: true, filesEnabled: true });
+    const draft = await call('PUT', `/api/line/conversations/${conversationId}/reply/draft`, { cookie: chair.cookie, body: { body: '合成', expectedVersion: null, fileIds: [pdf.json.id, docx.json.id] } });
+    expect(draft.json.files.map((f: Json) => f.name)).toEqual(['出展要項.pdf', '申込書.docx']);
+    // Someone else's file cannot be attached.
+    await grantSend(chair, member.id);
+    expect((await call('PUT', `/api/line/conversations/${conversationId}/reply/draft`, { cookie: member.cookie, body: { body: 'x', expectedVersion: null, fileIds: [pdf.json.id] } })).status).toBe(404);
+  });
+
+  it('sends the text with the file links and up to four images; the links open only after the send and until the chosen day', async () => {
+    const { chair, conversationId, config } = await ready();
+    const images: Json[] = [];
+    for (let i = 0; i < 2; i += 1) images.push((await upload(chair.cookie, { original: jpeg(800 + i, 600), preview: jpeg(400, 300) })).json);
+    const file = (await uploadFile(chair.cookie, PDF, '出展要項.pdf')).json;
+    // Five images are refused (LINE takes the text and four images in one request).
+    expect((await call('PUT', `/api/line/conversations/${conversationId}/reply/draft`, { cookie: chair.cookie, body: { body: 'x', expectedVersion: null, imageIds: Array(5).fill(images[0].id) } })).status).toBe(400);
+    const draft = await call('PUT', `/api/line/conversations/${conversationId}/reply/draft`, {
+      cookie: chair.cookie,
+      body: { body: '合成の案内です。', expectedVersion: null, imageIds: images.map((i) => i.id), fileIds: [file.id] },
+    });
+    expect(draft.status).toBe(200);
+    const preview = await call('POST', `/api/line/conversations/${conversationId}/reply/preview`, { cookie: chair.cookie, body: { draftId: draft.json.id, draftVersion: 1, publicDays: 30 } });
+    expect(preview.status).toBe(200);
+    const link = preview.json.files[0].url as string;
+    expect(link).toMatch(/^https:\/\/media\.example\.invalid\/line-files\/[0-9a-f]{64}\.pdf$/);
+    // Before the send the link answers nothing.
+    expect((await getPublic(link)).statusCode).toBe(404);
+    expect(preview.json.body).toMatch(/^合成の案内です。\n\n📎 添付ファイル（\d+月\d+日（.）まで開けます）\n出展要項\.pdf（PDF・1 KB）\n/);
+    expect(preview.json.body.endsWith(link)).toBe(true);
+    expect(preview.json).toMatchObject({ publicDays: 30, images: [{ previewUrl: images[0].previewUrl }, { previewUrl: images[1].previewUrl }] });
+    expect(preview.json.notices.join('\n')).toMatch(/リンクを知っている人は誰でも/);
+
+    // The text must be the confirmed one with the links.
+    const send = (body: string) =>
+      call('POST', `/api/line/conversations/${conversationId}/reply/send`, { cookie: chair.cookie, body: { consentId: preview.json.consentId, operationId: crypto.randomUUID(), draftId: draft.json.id, draftVersion: 1, body } });
+    expect((await send('合成の案内です。')).status).toBe(409);
+    const sent = await send(preview.json.body);
+    expect(sent.status).toBe(200);
+    expect(pushes).toHaveLength(1);
+    expect(pushes[0]!.messages).toHaveLength(3);
+    expect(pushes[0]!.messages[0]).toEqual({ type: 'text', text: preview.json.body });
+    expect(pushes[0]!.messages.slice(1).map((m: Json) => m.type)).toEqual(['image', 'image']);
+    expect(sent.json.outbox).toMatchObject({ files: [{ name: '出展要項.pdf', url: link }], images: [{}, {}], publicUntil: preview.json.publicUntil });
+
+    // After the send: a download in a sandbox, typed by the checked bytes.
+    const got = await getPublic(link);
+    expect(got.statusCode).toBe(200);
+    expect(got.headers['content-type']).toBe('application/pdf');
+    expect(String(got.headers['content-disposition'])).toMatch(/^attachment;/);
+    expect(String(got.headers['content-disposition'])).toContain(`filename*=UTF-8''${encodeURIComponent('出展要項.pdf')}`);
+    expect(got.headers['content-security-policy']).toBe("default-src 'none'; sandbox");
+    expect(got.headers['x-content-type-options']).toBe('nosniff');
+    expect(got.rawPayload.equals(PDF)).toBe(true);
+
+    // The images follow the longer period; everything stops after the chosen day, and the files go.
+    const until = Date.parse(preview.json.publicUntil);
+    ctx.clock.now = until - 1000;
+    expect((await getPublic(link)).statusCode).toBe(200);
+    expect((await getPublic(images[0].previewUrl)).statusCode).toBe(200);
+    ctx.clock.now = until + 1000;
+    expect((await getPublic(link)).statusCode).toBe(404);
+    expect((await getPublic(images[0].previewUrl)).statusCode).toBe(404);
+    expect(readdirSync(config.line!.filesDir)).toEqual([]);
+  });
+
+  it('a short period closes the links sooner but never the images before 7 days; a later send cannot shorten an earlier one', async () => {
+    const { chair, conversationId } = await ready();
+    const image = (await upload(chair.cookie, { original: jpeg(800, 600), preview: jpeg(400, 300) })).json;
+    const file = (await uploadFile(chair.cookie, PDF, 'a.pdf')).json;
+    const sendWith = async (cookie: string, publicDays: number, text: string) => {
+      const draft = await call('PUT', `/api/line/conversations/${conversationId}/reply/draft`, { cookie, body: { body: text, expectedVersion: null, imageIds: [image.id], fileIds: [file.id] } });
+      expect(draft.status).toBe(200);
+      const preview = await call('POST', `/api/line/conversations/${conversationId}/reply/preview`, { cookie, body: { draftId: draft.json.id, draftVersion: draft.json.version, publicDays } });
+      expect(preview.status).toBe(200);
+      const sent = await call('POST', `/api/line/conversations/${conversationId}/reply/send`, {
+        cookie,
+        body: { consentId: preview.json.consentId, operationId: crypto.randomUUID(), draftId: draft.json.id, draftVersion: draft.json.version, body: preview.json.body },
+      });
+      expect(sent.status).toBe(200);
+      return preview.json;
+    };
+    const first = await sendWith(chair.cookie, 1, '一日だけ');
+    const link = first.files[0].url as string;
+    ctx.clock.now = Date.parse(first.publicUntil) + 1000;
+    expect((await getPublic(link)).statusCode).toBe(404);
+    expect((await getPublic(image.previewUrl)).statusCode).toBe(200);
+    // Sent again for 7 days: open again until then; a 1-day send afterwards does not shorten it.
+    const cookie = await relogin();
+    const second = await sendWith(cookie, 7, '七日');
+    await sendWith(cookie, 1, 'もう一度一日');
+    ctx.clock.now = Date.parse(second.publicUntil) - 1000;
+    expect((await getPublic(link)).statusCode).toBe(200);
+  });
+
+  it('refuses a text that the links would make too long, and a confirmation whose files changed', async () => {
+    const { chair, conversationId } = await ready();
+    const file = (await uploadFile(chair.cookie, PDF, 'a.pdf')).json;
+    const long = await call('PUT', `/api/line/conversations/${conversationId}/reply/draft`, { cookie: chair.cookie, body: { body: 'あ'.repeat(4990), expectedVersion: null, fileIds: [file.id] } });
+    const tooLong = await call('POST', `/api/line/conversations/${conversationId}/reply/preview`, { cookie: chair.cookie, body: { draftId: long.json.id, draftVersion: long.json.version } });
+    expect(tooLong.status).toBe(422);
+    expect(tooLong.json.message).toMatch(/ファイルのリンクを足すと 5000 文字を超えます/);
+
+    const draft = await call('PUT', `/api/line/conversations/${conversationId}/reply/draft`, { cookie: chair.cookie, body: { body: '合成', expectedVersion: long.json.version, fileIds: [file.id] } });
+    const preview = await call('POST', `/api/line/conversations/${conversationId}/reply/preview`, { cookie: chair.cookie, body: { draftId: draft.json.id, draftVersion: draft.json.version } });
+    expect(preview.status).toBe(200);
+    // The draft loses the file after the confirmation: the confirmation is void.
+    const changed = await call('PUT', `/api/line/conversations/${conversationId}/reply/draft`, { cookie: chair.cookie, body: { body: '合成', expectedVersion: draft.json.version, fileIds: [] } });
+    expect(changed.status).toBe(200);
+    const sent = await call('POST', `/api/line/conversations/${conversationId}/reply/send`, {
+      cookie: chair.cookie,
+      body: { consentId: preview.json.consentId, operationId: crypto.randomUUID(), draftId: draft.json.id, draftVersion: draft.json.version, body: preview.json.body },
+    });
+    expect(sent.status).toBe(409);
+    expect(pushes).toHaveLength(0);
+  });
+
+  it('a broadcast carries the links and the images to everyone, and each record names them', async () => {
+    const { chair, conversationId } = await ready();
+    const image = (await upload(chair.cookie, { original: jpeg(800, 600), preview: jpeg(400, 300) })).json;
+    const file = (await uploadFile(chair.cookie, DOCX, '申込書.docx')).json;
+    const options = (await call('GET', '/api/line/accounts/oa/broadcast', { cookie: chair.cookie })).json;
+    expect(options).toMatchObject({ imagesEnabled: true, filesEnabled: true });
+    const preview = await call('POST', '/api/line/accounts/oa/broadcast/preview', { cookie: chair.cookie, body: { recipients: 'all', body: '合成の一斉連絡', imageIds: [image.id], fileIds: [file.id], publicDays: 7 } });
+    expect(preview.status).toBe(200);
+    expect(preview.json.body).toContain('申込書.docx（Word・1 KB）');
+    const sent = await call('POST', '/api/line/broadcast/send', { cookie: chair.cookie, body: { consentId: preview.json.consentId, operationId: crypto.randomUUID(), body: preview.json.body } });
+    expect(sent.status).toBe(200);
+    expect(multicasts).toHaveLength(1);
+    expect(multicasts[0]!.messages.map((m: Json) => m.type)).toEqual(['text', 'image']);
+    expect((multicasts[0]!.messages[0] as Json).text).toBe(preview.json.body);
+    const detail = (await call('GET', `/api/line/conversations/${conversationId}`, { cookie: chair.cookie })).json;
+    expect(detail.outbox[0]).toMatchObject({ files: [{ name: '申込書.docx', kindLabel: 'Word' }], images: [{ previewUrl: image.previewUrl }] });
+    expect((await getPublic(preview.json.files[0].url)).statusCode).toBe(200);
   });
 });

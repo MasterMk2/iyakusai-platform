@@ -1,15 +1,23 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import type { BroadcastOptionsResponse, BroadcastPreviewResponse, OutboxStatus } from '../../shared/line.js';
+import { LINE_ATTACH_LIMITS, type BroadcastOptionsResponse, type BroadcastPreviewResponse, type LinePublicDays, type OutboxStatus } from '../../shared/line.js';
 import { DomainError, notFound, type User } from '../domain/types.js';
 import { canReadLine, canReplyLine } from './access.js';
 import { MULTICAST_MAX } from './connector.js';
+import { markFilesSent, sentFileView } from './files.js';
+import { extendMedia } from './media.js';
 import { sha256 } from './normalize.js';
 import { messagesOf } from './queries.js';
 import {
+  attachedLabel,
+  attachedText,
+  attachmentNotices,
   checkLineQuota,
   checkMonthlyLimit,
   CONSENT_TTL_MS,
-  imageOf,
+  draftFileIds,
+  draftImageIds,
+  filesOf,
+  imagesOf,
   imageView,
   MAX_CONSENTS,
   MAX_CONSENTS_PER_ACTOR,
@@ -71,6 +79,7 @@ export function broadcastOptions(state: LineState, user: User, accountId: string
     monthUsed: monthlyUsage(state, a.id, nowMs),
     monthlyLimit: a.monthlyLimit ?? null,
     imagesEnabled: ctx.imageBaseUrl !== null,
+    filesEnabled: ctx.imageBaseUrl !== null && ctx.filesEnabled === true,
     mock: a.outbound === 'push_mock',
   };
 }
@@ -79,7 +88,11 @@ export interface BroadcastInput {
   /** 'all': every conversation it can be sent to now; else the chosen conversation IDs. */
   recipients: 'all' | string[];
   body: string;
-  imageId: string | null;
+  /** One image (before 2026-11-10); imageIds takes its place. */
+  imageId?: string | null | undefined;
+  imageIds?: string[] | undefined;
+  fileIds?: string[] | undefined;
+  publicDays?: LinePublicDays | undefined;
 }
 
 function chosen(state: LineState, accountId: string, recipients: BroadcastInput['recipients']): LineConversation[] {
@@ -104,7 +117,10 @@ export function previewBroadcast(state: LineState, user: User, accountId: string
   const nowMs = Date.parse(now);
   const a = account(state, user, accountId);
   const body = normalizeReplyBody(input.body);
-  const image = imageOf(state, user, a.id, input.imageId, nowMs, ctx);
+  const images = imagesOf(state, user, a.id, draftImageIds(input), nowMs, ctx);
+  const files = filesOf(state, user, a.id, draftFileIds(input), nowMs, ctx);
+  const days = input.publicDays ?? LINE_ATTACH_LIMITS.defaultPublicDays;
+  const { text, until } = attachedText(body, images, files, days, nowMs);
   const list = chosen(state, a.id, input.recipients);
   checkMonthlyLimit(state, a, list.length, nowMs);
   checkLineQuota(quota, list.length);
@@ -121,8 +137,11 @@ export function previewBroadcast(state: LineState, user: User, accountId: string
     actorId: user.id,
     accountId: a.id,
     conversationIds: list.map((c) => c.id),
-    bodyHash: sha256(body),
-    imageId: input.imageId,
+    bodyHash: sha256(text),
+    imageId: images[0]?.mediaId ?? null,
+    imageIds: images.map((i) => i.mediaId),
+    fileIds: files.map((f) => f.fileId),
+    publicUntil: until,
     createdAt: now,
     expiresAt,
     consumedByBroadcastId: null,
@@ -141,15 +160,19 @@ export function previewBroadcast(state: LineState, user: User, accountId: string
       : 'LINE 側の今月の残り通数は読み取れませんでした。',
     '友だちでない相手（友だち登録が確認できていない相手を含む）には LINE が届けません。届いたか・読まれたかはこのアプリでは分かりません。',
   ];
-  if (image) notices.push('文字のあとに画像を 1 枚送ります（1 回の送信なので通数は 1 人 1 通です）。画像は 7 日間、推測できない URL で公開されます。');
+  notices.push(...attachmentNotices(images.length, files.length, until, nowMs));
   return {
     consentId: token,
     expiresAt,
     account: { id: a.id, name: a.name },
     recipients: list.map((c) => ({ conversationId: c.id, title: c.title, maskedId: masked(c) })),
     count: list.length,
-    body,
-    image: imageView(image),
+    body: text,
+    image: imageView(images[0]),
+    images: images.flatMap((i) => imageView(i) ?? []),
+    files: files.map(sentFileView),
+    publicUntil: until,
+    publicDays: until ? days : null,
     monthUsed: used,
     monthlyLimit: a.monthlyLimit ?? null,
     lineUsage: quota?.used ?? null,
@@ -182,14 +205,19 @@ export function beginBroadcast(state: LineState, user: User, input: { consentId:
   const a = account(state, user, consent.accountId);
   const body = normalizeReplyBody(input.body);
   if (sha256(body) !== consent.bodyHash) throw new DomainError('conflict', '確認した後に本文が変更されています。もう一度内容を確認してください。');
-  const image = imageOf(state, user, a.id, consent.imageId, nowMs, ctx);
+  const imageIds = draftImageIds(consent);
+  const fileIds = draftFileIds(consent);
+  const images = imagesOf(state, user, a.id, imageIds, nowMs, ctx);
+  const files = filesOf(state, user, a.id, fileIds, nowMs, ctx);
+  const until = consent.publicUntil ?? null;
   const targets = new Map(broadcastTargets(state, a.id).map((c) => [c.id, c]));
   const list = consent.conversationIds.map((id) => targets.get(id));
   if (list.some((c) => !c)) throw new DomainError('conflict', '確認した後に宛先の状態が変わりました（友だち解除など）。もう一度内容を確認してください。');
   // Re-checked here: someone else may have sent in the five minutes since the preview.
   checkMonthlyLimit(state, a, list.length, nowMs);
 
-  const broadcast: LineBroadcast = { id: `lb_${randomBytes(8).toString('hex')}`, operationId: input.operationId, actorId: user.id, accountId: a.id, createdAt: now, body, image, intentIds: [] };
+  const image = images[0] ?? null;
+  const broadcast: LineBroadcast = { id: `lb_${randomBytes(8).toString('hex')}`, operationId: input.operationId, actorId: user.id, accountId: a.id, createdAt: now, body, image, images, files, intentIds: [] };
   const live = a.outbound === 'push';
   const requests: BroadcastStart['requests'] = [];
   list.forEach((conv, i) => {
@@ -217,16 +245,23 @@ export function beginBroadcast(state: LineState, user: User, input: { consentId:
       retryNotBefore: null,
       attempts: [{ n: 1, actorId: user.id, startedAt: now, finishedAt: null, outcome: null, requestId: null, httpStatus: null, retryAfterSeconds: null }],
       image,
+      images,
+      files,
+      publicUntil: until,
       broadcastId: broadcast.id,
     };
     state.outbox.push(intent);
     broadcast.intentIds.push(intent.id);
     request.intentIds.push(intent.id);
     request.to.push(c.target.id);
-    c.history.push({ id: nextLineId(state, 'lhist'), at: now, actorId: user.id, action: 'reply_started', from: null, to: `一斉送信（${list.length} 人）${image ? '・画像あり' : ''}・操作 ${input.operationId.slice(0, 8)}` });
+    c.history.push({ id: nextLineId(state, 'lhist'), at: now, actorId: user.id, action: 'reply_started', from: null, to: `一斉送信（${list.length} 人）${attachedLabel(images.length, files.length)}・操作 ${input.operationId.slice(0, 8)}` });
   });
   state.broadcasts = [...(state.broadcasts ?? []), broadcast];
   consent.consumedByBroadcastId = broadcast.id;
+  if (until) {
+    extendMedia(state, imageIds, until);
+    markFilesSent(state, fileIds, until);
+  }
   return { broadcastId: broadcast.id, replay: false, requests };
 }
 

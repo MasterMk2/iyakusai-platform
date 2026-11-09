@@ -1,10 +1,11 @@
 import { useRef, useState } from 'react';
-import { LINE_LIMITS, type LineConversationDetail, type LineDraftView, type LinePreviewResponse, type LineSendResponse } from '../../shared/line';
+import { LINE_ATTACH_LIMITS, LINE_LIMITS, type LineConversationDetail, type LineDraftView, type LinePreviewResponse, type LinePublicDays, type LineSendResponse } from '../../shared/line';
 import { composeLineReviewRequest } from '../../shared/lineReview';
 import { screenLine } from '../../shared/lineScreen';
 import { api, fmtDate, toFailure } from '../api';
 import { BotReview } from './BotReview';
-import { LineImagePicker, type PickedImage } from './LineImagePicker';
+import { LineAttachPicker, PreviewAttachments, type PickedFile } from './LineAttachPicker';
+import type { PickedImage } from './LineImagePicker';
 import { LineScreenChecks } from './LineScreenChecks';
 
 /**
@@ -16,8 +17,16 @@ import { LineScreenChecks } from './LineScreenChecks';
 export function LineReplyPanel({ detail, onSent }: { detail: LineConversationDetail; onSent: () => void }) {
   const [saved, setSaved] = useState<LineDraftView | null>(detail.reply.draft);
   const [body, setBody] = useState(detail.reply.draft?.body ?? '');
-  const initialImage = detail.reply.draft?.imageId && detail.reply.draft.imagePreviewUrl ? { id: detail.reply.draft.imageId, previewUrl: detail.reply.draft.imagePreviewUrl, expiresAt: '' } : null;
-  const [image, setImage] = useState<PickedImage | null>(initialImage);
+  const draft0 = detail.reply.draft;
+  // A draft saved before 2026-11-10 names one image (imageId); newer ones list them.
+  const initialImages: PickedImage[] = draft0?.images
+    ? draft0.images.map((i) => ({ ...i, expiresAt: '' }))
+    : draft0?.imageId && draft0.imagePreviewUrl
+      ? [{ id: draft0.imageId, previewUrl: draft0.imagePreviewUrl, expiresAt: '' }]
+      : [];
+  const [images, setImages] = useState<PickedImage[]>(initialImages);
+  const [files, setFiles] = useState<PickedFile[]>(draft0?.files ?? []);
+  const [publicDays, setPublicDays] = useState<LinePublicDays>(LINE_ATTACH_LIMITS.defaultPublicDays);
   const [preview, setPreview] = useState<LinePreviewResponse | null>(null);
   const [operationId, setOperationId] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState(false);
@@ -54,16 +63,21 @@ export function LineReplyPanel({ detail, onSent }: { detail: LineConversationDet
     setMessage(null);
     try {
       let draft = saved;
-      if (!draft || draft.body !== body.trim() || (draft.imageId ?? null) !== (image?.id ?? null)) {
+      const imageIds = images.map((i) => i.id);
+      const fileIds = files.map((f) => f.id);
+      const savedImages = saved?.images?.map((i) => i.id) ?? (saved?.imageId ? [saved.imageId] : []);
+      const savedFiles = saved?.files?.map((f) => f.id) ?? [];
+      if (!draft || draft.body !== body.trim() || savedImages.join() !== imageIds.join() || savedFiles.join() !== fileIds.join()) {
         draft = await api<LineDraftView>('PUT', `/api/line/conversations/${detail.conversationId}/reply/draft`, {
           body,
           expectedVersion: saved?.version ?? null,
-          ...(detail.reply.imagesEnabled || image ? { imageId: image?.id ?? null } : {}),
+          ...(detail.reply.imagesEnabled || imageIds.length > 0 ? { imageIds } : {}),
+          ...(detail.reply.filesEnabled || fileIds.length > 0 ? { fileIds } : {}),
         });
         setSaved(draft);
         setBody(draft.body);
       }
-      const p = await api<LinePreviewResponse>('POST', `/api/line/conversations/${detail.conversationId}/reply/preview`, { draftId: draft.id, draftVersion: draft.version });
+      const p = await api<LinePreviewResponse>('POST', `/api/line/conversations/${detail.conversationId}/reply/preview`, { draftId: draft.id, draftVersion: draft.version, publicDays });
       setPreview(p);
       setOperationId(crypto.randomUUID());
       setConfirmed(false);
@@ -90,7 +104,8 @@ export function LineReplyPanel({ detail, onSent }: { detail: LineConversationDet
       discardPreview();
       setSaved(null);
       setBody('');
-      setImage(null);
+      setImages([]);
+      setFiles([]);
       setMessage({ kind: 'ok', text: `${res.outbox.mock ? '模擬送信の結果' : '送信の結果'}: ${res.outbox.statusLabel}。${res.outbox.statusNote}` });
       onSent();
     } catch (err) {
@@ -109,7 +124,7 @@ export function LineReplyPanel({ detail, onSent }: { detail: LineConversationDet
   const people = target.type === 'user' ? null : target.memberCount;
   const targetText = `${detail.title}（${target.typeLabel}${people ? `・${people} 人` : ''}${target.maskedId ? `・ID ${target.maskedId}` : ''}）`;
   // One conversation: a name or a greeting in it is meant (in a group, calling one member by name is ordinary).
-  const findings = preview ? screenLine({ body: preview.body, recipients: [{ title: detail.title }], hasImage: !!preview.image }) : [];
+  const findings = preview ? screenLine({ body: preview.body, recipients: [{ title: detail.title }], attached: (preview.images?.length ?? 0) + (preview.files?.length ?? 0) > 0 }) : [];
   const warnings = findings.filter((f) => f.level === 'warning').length;
   const audience = target.type === 'user' ? '1:1 の相手 1 人' : `${target.typeLabel}${people ? `（${people} 人）` : ''}の全員`;
 
@@ -157,14 +172,18 @@ export function LineReplyPanel({ detail, onSent }: { detail: LineConversationDet
             </p>
           )}
           {(detail.reply.imagesEnabled || detail.sending === 'live') && (
-            <div className="compose-files">
-              <span className="compose-files-label">画像（任意）</span>
-              {detail.reply.imagesEnabled ? (
-                <LineImagePicker accountId={detail.account.id} image={image} onChange={setImage} disabled={busy} />
-              ) : (
-                <p className="hint">このサーバーでは画像を送れません（公開 URL が設定されていません）。</p>
-              )}
-            </div>
+            <LineAttachPicker
+              accountId={detail.account.id}
+              images={images}
+              onImages={setImages}
+              files={files}
+              onFiles={setFiles}
+              publicDays={publicDays}
+              onPublicDays={setPublicDays}
+              imagesEnabled={detail.reply.imagesEnabled === true}
+              filesEnabled={detail.reply.filesEnabled === true}
+              disabled={busy}
+            />
           )}
           <div className="actions">
             <button type="submit" disabled={busy} data-testid="line-reply-prepare">
@@ -188,14 +207,7 @@ export function LineReplyPanel({ detail, onSent }: { detail: LineConversationDet
             <dd data-testid="preview-recipients">{preview.billableRecipients} 人（通数として {preview.billableRecipients} 通）</dd>
             <dt>送信方法</dt>
             <dd data-testid="preview-method">{preview.mock ? 'プッシュメッセージ（模擬）' : 'プッシュメッセージ（公式アカウントから送信）'}</dd>
-            {preview.image && (
-              <>
-                <dt>画像</dt>
-                <dd>
-                  <img className="line-image-thumb" src={preview.image.previewUrl} alt="送る画像" data-testid="preview-image" />
-                </dd>
-              </>
-            )}
+            <PreviewAttachments images={preview.images ?? (preview.image ? [preview.image] : [])} files={preview.files ?? []} publicUntil={preview.publicUntil ?? null} />
             <dt>期限</dt>
             <dd>この確認は {fmtDate(preview.expiresAt)} まで有効です</dd>
           </dl>

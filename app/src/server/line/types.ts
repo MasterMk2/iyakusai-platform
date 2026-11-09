@@ -144,8 +144,11 @@ export interface ReplyDraft {
   body: string;
   version: number;
   updatedAt: string;
-  /** An uploaded image sent after the text (2026-11-02). */
+  /** An uploaded image sent after the text (2026-11-02). Since 2026-11-10 the first of imageIds (kept for an older app). */
   imageId?: string | null;
+  /** Up to four images and three files (2026-11-10). Absent: [imageId] and no files. */
+  imageIds?: string[];
+  fileIds?: string[];
   /** Absent: 'app'. A Discord draft never replaces the same person's draft on the screen. */
   via?: SendChannel;
 }
@@ -164,6 +167,10 @@ export interface ReplyConsent {
   expiresAt: string;
   consumedByIntentId: string | null;
   imageId?: string | null;
+  /** The images and files confirmed (2026-11-10) and until when they are made public. bodyHash covers the links. */
+  imageIds?: string[];
+  fileIds?: string[];
+  publicUntil?: string | null;
   via?: SendChannel;
 }
 
@@ -211,8 +218,12 @@ export interface OutboxIntent {
   statusReason: string | null;
   retryNotBefore: string | null;
   attempts: OutboxAttempt[];
-  /** The image sent after the text: its public URLs (fixed at creation, as the body). */
+  /** The image sent after the text: its public URLs (fixed at creation, as the body). Since 2026-11-10 the first of images. */
   image?: OutboxImage | null;
+  /** All images (2026-11-10), the files whose links are in the body, and until when they are public. */
+  images?: OutboxImage[];
+  files?: OutboxFile[];
+  publicUntil?: string | null;
   /** Absent: 'app'. */
   via?: SendChannel;
   /** One of the intents of a broadcast (multicast): one intent per recipient, the retry key per request. */
@@ -225,7 +236,16 @@ export interface OutboxImage {
   previewUrl: string;
 }
 
-/** An image uploaded for sending (original + preview), public for 7 days under unguessable names. */
+/** A file linked in a sent text (2026-11-10). */
+export interface OutboxFile {
+  fileId: string;
+  name: string;
+  bytes: number;
+  type: string;
+  url: string;
+}
+
+/** An image uploaded for sending (original + preview), public under unguessable names until expiresAt. */
 export interface LineMedia {
   id: string;
   uploaderId: string;
@@ -233,6 +253,29 @@ export interface LineMedia {
   createdAt: string;
   original: { file: string; type: 'image/jpeg' | 'image/png'; bytes: number };
   preview: { file: string; type: 'image/jpeg' | 'image/png'; bytes: number };
+  /** Absent: createdAt + 7 days. A send makes it later (never earlier), 2026-11-10. */
+  expiresAt?: string;
+}
+
+/**
+ * A file uploaded for sending as a link (2026-11-10), kept in its own folder (line-files/) so an older app
+ * never reads or sweeps it. The link answers only after the file was sent, until sentUntil (the latest send).
+ */
+export interface LineAttachment {
+  id: string;
+  uploaderId: string;
+  accountId: string;
+  createdAt: string;
+  /** The stored file: 64 hex characters and the checked extension. */
+  file: string;
+  /** The name shown in the text and the download (cleaned). */
+  name: string;
+  type: string;
+  bytes: number;
+  /** Until when the record is kept while not sent (createdAt + 7 days). */
+  keepUntil: string;
+  /** Until when the link answers (the latest send's choice), or absent: not sent yet. */
+  sentUntil?: string;
 }
 
 /** One broadcast (multicast) to several 1:1 conversations (2026-11-02). */
@@ -244,6 +287,8 @@ export interface LineBroadcast {
   createdAt: string;
   body: string;
   image: OutboxImage | null;
+  images?: OutboxImage[];
+  files?: OutboxFile[];
   /** The intents, one per recipient, in request order; requests of at most 500 each share a retry key. */
   intentIds: string[];
 }
@@ -256,6 +301,9 @@ export interface BroadcastConsent {
   conversationIds: string[];
   bodyHash: string;
   imageId: string | null;
+  imageIds?: string[];
+  fileIds?: string[];
+  publicUntil?: string | null;
   createdAt: string;
   expiresAt: string;
   consumedByBroadcastId: string | null;
@@ -302,6 +350,8 @@ export interface LineState {
   seq: number;
   /** Images for sending (2026-11-02). Absent in older files. */
   media?: LineMedia[];
+  /** Files for sending as links (2026-11-10). Absent in older files. */
+  attachments?: LineAttachment[];
   broadcasts?: LineBroadcast[];
   broadcastConsents?: BroadcastConsent[];
   /** The official account's history file: the modification time last imported (ms), to skip unchanged files. */

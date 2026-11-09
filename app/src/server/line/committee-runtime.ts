@@ -3,6 +3,7 @@ import type { LinePushConnector } from './connector.js';
 import { LineFeed } from './feed.js';
 import { LineHistoryImporter } from './history.js';
 import { ReceiverImages, type InboundImageSource } from './inbound-media.js';
+import { LineAttachmentFiles } from './files.js';
 import { LineMediaFiles } from './media.js';
 import { MessagingApiConnector, type Fetch } from './messaging-api.js';
 import type { LineOaConfig } from './oa-config.js';
@@ -19,6 +20,7 @@ export interface CommitteeLine {
   history: LineHistoryImporter | null;
   /** Images for sending (2026-11-02). */
   media: LineMediaFiles;
+  files: LineAttachmentFiles;
   /** Received images, read from the receiver (2026-11-04). */
   inboundImages: InboundImageSource;
 }
@@ -55,5 +57,5 @@ export function openCommitteeLine(cfg: LineOaConfig, opts: { fetch?: Fetch; conn
     ? new LineHistoryImporter({ store, accountId: account.id, file: cfg.history.file, pollSeconds: cfg.receiver.pollSeconds, ...(opts.now ? { now: opts.now } : {}) })
     : null;
   const inboundImages = new ReceiverImages(cfg.receiver, cfg.inboundMediaDir, opts.fetch, opts.now);
-  return { store, connector, feed, history, media: new LineMediaFiles(cfg.mediaDir), inboundImages };
+  return { store, connector, feed, history, media: new LineMediaFiles(cfg.mediaDir), files: new LineAttachmentFiles(cfg.filesDir), inboundImages };
 }

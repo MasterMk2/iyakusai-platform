@@ -9,7 +9,7 @@ const NOW = new Date('2026-11-09T03:00:00Z');
 const base: LineScreenInput = {
   body: '医薬祭実行委員会です。\n11月13日（金）の搬入は 9 時からです。よろしくお願いします。',
   recipients: [{ title: '合成サンプル1', friend: true }],
-  hasImage: false,
+  attached: false,
   now: NOW,
 };
 const texts = (i: Partial<LineScreenInput>) => screenLine({ ...base, ...i }).map((f) => `${f.level}:${f.text}`);
@@ -33,8 +33,8 @@ describe('checks before sending an official LINE message', () => {
   });
 
   it('says when an image is named but not attached', () => {
-    expect(texts({ body: '当日の地図を画像で送ります。' })).toEqual(['warning:本文に「画像」「写真」「添付」とありますが、画像が付いていません。']);
-    expect(texts({ body: '当日の地図を画像で送ります。', hasImage: true })).toEqual([]);
+    expect(texts({ body: '当日の地図を画像で送ります。' })).toEqual(['warning:本文に「画像」「写真」「添付」とありますが、画像もファイルも付いていません。']);
+    expect(texts({ body: '当日の地図を画像で送ります。', attached: true })).toEqual([]);
   });
 
   it('points out one person’s name or a personal greeting in a message to several people', () => {

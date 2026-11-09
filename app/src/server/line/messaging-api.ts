@@ -1,4 +1,4 @@
-import { MULTICAST_MAX, type LineMulticastRequest, type LinePushConnector, type LinePushOutcome, type LinePushRequest, type LineQuota } from './connector.js';
+import { MULTICAST_MAX, requestImages, type LineMulticastRequest, type LinePushConnector, type LinePushOutcome, type LinePushRequest, type LineQuota } from './connector.js';
 
 // The Messaging API push adapter (2026-10-28). One text message per request, with the intent's retry key as
 // X-Line-Retry-Key so an explicit retry of the same intent is answered 409 (accepted earlier) instead of a
@@ -31,10 +31,10 @@ async function messageOf(res: Response): Promise<string> {
   }
 }
 
-/** The text, then the image (LINE counts the request once per recipient, up to 5 bubbles). */
-function messagesOf(request: { text: string; image?: { originalUrl: string; previewUrl: string } | null }): unknown[] {
+/** The text, then the images (LINE counts the request once per recipient, up to 5 bubbles: the text and 4 images). */
+function messagesOf(request: LinePushRequest | LineMulticastRequest): unknown[] {
   const messages: unknown[] = [{ type: 'text', text: request.text }];
-  if (request.image) messages.push({ type: 'image', originalContentUrl: request.image.originalUrl, previewImageUrl: request.image.previewUrl });
+  for (const image of requestImages(request).slice(0, 4)) messages.push({ type: 'image', originalContentUrl: image.originalUrl, previewImageUrl: image.previewUrl });
   return messages;
 }
 

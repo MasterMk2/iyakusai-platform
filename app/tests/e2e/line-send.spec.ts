@@ -57,7 +57,7 @@ test('the official LINE is sent like a mail: pick by name, check, go back to edi
   await expect(preview.getByTestId('broadcast-body')).toContainText('2026年11月13日（木）の搬入');
   const screen = preview.getByTestId('line-screen');
   await expect(screen).toContainText('「2026年11月13日(木)」の曜日が違います');
-  await expect(screen).toContainText('画像が付いていません');
+  await expect(screen).toContainText('画像もファイルも付いていません');
   await expect(preview.getByTestId('broadcast-confirm').locator('xpath=..')).toContainText('注意 2 件を確かめたうえで、上記の 1 人に、この内容で送ります');
   await expect(preview.getByTestId('broadcast-send')).toBeDisabled();
   await page.screenshot({ path: '.tmp/line-send-checks.png', fullPage: true });

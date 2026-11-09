@@ -140,6 +140,11 @@ export interface OutboxView {
   broadcastId?: string | null;
   /** The image sent after the text (the preview, from this server), or null. */
   image?: { previewUrl: string } | null;
+  /** All images sent after the text (2026-11-10; `image` is the first), and the files linked in the text. */
+  images?: { previewUrl: string }[];
+  files?: LineSentFileView[];
+  /** Until when the images and file links were made public by this send, or null. */
+  publicUntil?: string | null;
 }
 
 export interface LineDraftView {
@@ -150,6 +155,9 @@ export interface LineDraftView {
   /** An uploaded image to send after the text (2026-11-02), and its preview on this server. */
   imageId?: string | null;
   imagePreviewUrl?: string | null;
+  /** Up to four images and three files (2026-11-10). */
+  images?: { id: string; previewUrl: string }[];
+  files?: LineFileView[];
 }
 
 export interface LineReplyState {
@@ -163,6 +171,8 @@ export interface LineReplyState {
   draft: LineDraftView | null;
   /** An image can be attached (the server has a public URL for it), 2026-11-02. */
   imagesEnabled?: boolean;
+  /** A file can be linked (2026-11-10). */
+  filesEnabled?: boolean;
 }
 
 export interface LineConversationDetail {
@@ -200,6 +210,11 @@ export interface LinePreviewResponse {
   notices: string[];
   /** The image sent after the text, or null (2026-11-02). */
   image?: { previewUrl: string } | null;
+  /** All images and the linked files (2026-11-10), and until when they are public (null: none attached). */
+  images?: { previewUrl: string }[];
+  files?: LineSentFileView[];
+  publicUntil?: string | null;
+  publicDays?: number | null;
   /** This month's messages from this app and its limit, and LINE's own count (null: not read). */
   monthUsed?: number;
   monthlyLimit?: number | null;
@@ -261,6 +276,41 @@ export interface LineMediaResponse {
   expiresAt: string;
 }
 
+/**
+ * Images and files with a message (2026-11-10). LINE has no file message, so a file goes as a link in the text:
+ * the app publishes it under a name nobody can guess until the date the sender chose (1, 7 or 30 days). A message
+ * is the text and up to four images (LINE takes five messages per request).
+ */
+export const LINE_ATTACH_LIMITS = {
+  imagesMax: 4,
+  filesMax: 3,
+  fileMaxBytes: 15 * 1024 * 1024,
+  publicDays: [1, 7, 30],
+  defaultPublicDays: 7,
+} as const;
+
+export type LinePublicDays = (typeof LINE_ATTACH_LIMITS.publicDays)[number];
+
+/** A file kept for sending: its display name, size and kind ("PDF", "Word" …). */
+export interface LineFileView {
+  id: string;
+  name: string;
+  bytes: number;
+  kindLabel: string;
+}
+
+export interface LineFileResponse extends LineFileView {
+  expiresAt: string;
+}
+
+/** A file as sent: the link in the text. */
+export interface LineSentFileView {
+  name: string;
+  bytes: number;
+  kindLabel: string;
+  url: string;
+}
+
 export interface BroadcastRecipientView {
   conversationId: string;
   title: string;
@@ -277,6 +327,8 @@ export interface BroadcastOptionsResponse {
   monthUsed: number;
   monthlyLimit: number | null;
   imagesEnabled: boolean;
+  /** Files can be linked (2026-11-10). */
+  filesEnabled?: boolean;
   /** Mock connector (synthetic version). */
   mock: boolean;
 }
@@ -289,6 +341,10 @@ export interface BroadcastPreviewResponse {
   count: number;
   body: string;
   image: { previewUrl: string } | null;
+  images?: { previewUrl: string }[];
+  files?: LineSentFileView[];
+  publicUntil?: string | null;
+  publicDays?: number | null;
   monthUsed: number;
   monthlyLimit: number | null;
   lineUsage: number | null;
