@@ -1,7 +1,7 @@
 // Checks before a committee mail goes out (is the signature there, and the like).
 // Fixed rules, no AI: the signature and the addressee line, half-written places, attachments named but not
-// attached, a date whose weekday is wrong, the From address among the recipients, an empty body, a reply-to
-// address outside the committee. The screen
+// attached, a date whose weekday is wrong, the From address among the recipients, any address in CC (everyone
+// who gets the mail sees it), an empty body, a reply-to address outside the committee. The screen
 // shows what it finds before sending; nothing here blocks a send (the person decides).
 
 export interface ScreenInput {
@@ -128,6 +128,10 @@ export function screenMail(input: ScreenInput): ScreenFinding[] {
   out.push(...dateFindings(`${input.subject}\n${own}`, now));
   const self = input.fromAddress.toLowerCase();
   if ([...input.to, ...input.cc].some((a) => a.address.toLowerCase() === self)) out.push({ level: 'warning', text: '宛先か CC に、差出人と同じアドレスがあります。' });
+  // CC is easy to fill (a reply to all brings it) and shows every address to every recipient; BCC does not.
+  if (input.cc.length > 0) {
+    out.push({ level: 'warning', text: `CC にアドレスが ${input.cc.length} 件入っています。このままでよいですか？ 宛先・CC のアドレスは、受け取った人どうしでお互いに見えます。ほかの相手にアドレスを知られたくない人は、BCC に移してください。` });
+  }
   // Answers to an address on another domain do not come back into the committee's mailboxes.
   const domain = (address: string) => address.slice(address.lastIndexOf('@') + 1).toLowerCase();
   if (input.replyTo && domain(input.replyTo.address) !== domain(input.fromAddress)) {
