@@ -476,6 +476,9 @@ html { scroll-padding-top: 64px; }
 .minutes-done audio, .minutes-audio { width: 100%; max-width: 640px; }
 .minutes-columns { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; align-items: start; }
 @media (max-width: 860px) { .minutes-columns { grid-template-columns: minmax(0, 1fr); } }
+/* Side by side, the AI's items scroll inside a column no taller than the window and stay in view: a long list (dozens of
+   items to check) no longer pushes the transcript far below the editor (2026-11-10). */
+@media (min-width: 861px) { .minutes-columns > .minutes-ai { position: sticky; top: 61px; max-height: calc(100dvh - 77px); overflow: auto; overscroll-behavior: contain; } }
 .minutes-columns .panel { padding: 12px 14px; }
 .minutes-columns h3 { margin: 0 0 8px; font-size: 16px; }
 .minutes-columns h4 { margin: 12px 0 4px; font-size: 15px; }
