@@ -5,6 +5,7 @@ import type { InboxItem, InboxResponse } from '../../shared/line';
 import { REAUTH_REQUIRED } from '../../shared/mailbox';
 import { api, fmtListDate } from '../api';
 import { useLoader } from '../useLoader';
+import { LineLabelEditor } from './LineLabelEditor';
 import { LoadStatus } from './LoadStatus';
 import { ThreadStatusButtons } from './ThreadStatusButtons';
 
@@ -176,6 +177,8 @@ export function ThreadList(props: {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(savedPageSize);
   const [formError, setFormError] = useState<string | null>(null);
+  // The LINE conversation whose labels are open under its row (2026-11-10), one at a time.
+  const [labelsOpen, setLabelsOpen] = useState<string | null>(null);
 
   const scope = useCallback(() => {
     const params = new URLSearchParams();
@@ -212,6 +215,11 @@ export function ThreadList(props: {
     [scope, refresh],
   );
   const labels = useLoader(loadLabels);
+
+  function closeLabels(conversationId: string) {
+    setLabelsOpen(null);
+    document.getElementById(`line-labels-toggle-${conversationId}`)?.focus();
+  }
 
   function submit(e: FormEvent) {
     e.preventDefault();
@@ -392,12 +400,28 @@ export function ThreadList(props: {
             {data.items.map((t) => {
               const withButtons = t.canSetStatus === true;
               const id = t.source === 'email' ? t.threadId : t.conversationId;
+              // A LINE conversation's labels are set from its row (2026-11-10); the labels show in the editor while it is open.
+              const labelEditable = t.source === 'line' && withButtons;
+              const editing = labelEditable && labelsOpen === id;
               return (
                 <li key={id} className={`row thread-row ${props.selectedId === id ? 'selected' : ''} ${withButtons ? 'has-buttons' : ''}`}>
                   <Item item={t} selectedId={props.selectedId} filtered={filtered} showSource={showSource} showMailbox={!mailboxId && !lineAccountId} onSelect={props.onSelect} />
                   {/* Labels and assignee on the left, the row's own status buttons on the right. */}
                   <div className="row-foot">
-                    <Chips statuses={t.statuses} labels={t.labels} assignees={t.assignees} showStatus={!withButtons || t.statuses.length > 1} due={t.source === 'email' ? t.due : undefined} />
+                    <Chips statuses={t.statuses} labels={editing ? [] : t.labels} assignees={t.assignees} showStatus={!withButtons || t.statuses.length > 1} due={t.source === 'email' ? t.due : undefined} />
+                    {labelEditable && (
+                      <button
+                        type="button"
+                        id={`line-labels-toggle-${id}`}
+                        className="label-toggle"
+                        aria-expanded={editing}
+                        aria-controls={editing ? `line-labels-${id}` : undefined}
+                        aria-label={`「${t.title}」のラベルを${editing ? '閉じる' : '付ける'}`}
+                        onClick={() => (editing ? closeLabels(id) : setLabelsOpen(id))}
+                      >
+                        {editing ? 'ラベルを閉じる' : '＋ ラベル'}
+                      </button>
+                    )}
                     {withButtons && (
                       <ThreadStatusButtons
                         target={t.source === 'email' ? { kind: 'thread', threadId: t.threadId } : { kind: 'line', conversationId: t.conversationId, version: t.triageVersion ?? 0 }}
@@ -407,6 +431,20 @@ export function ThreadList(props: {
                       />
                     )}
                   </div>
+                  {editing && t.source === 'line' && (
+                    <LineLabelEditor
+                      conversationId={t.conversationId}
+                      title={t.title}
+                      labels={t.labels}
+                      version={t.triageVersion ?? 0}
+                      used={labels.data ?? []}
+                      onSaved={() => {
+                        (props.onChanged ?? threads.retry)();
+                        labels.retry();
+                      }}
+                      onClose={() => closeLabels(t.conversationId)}
+                    />
+                  )}
                 </li>
               );
             })}
