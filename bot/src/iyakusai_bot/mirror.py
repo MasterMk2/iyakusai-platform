@@ -638,13 +638,41 @@ def _dst_rel(rel: str, kind: str) -> str:
     return rel
 
 
+# 削除の歯止め(2026-11-09)。サーバーの再起動で rclone のマウントが先に外れ、止める途中の
+# 同期がソース(_目録)の一覧を空と読んで、ミラーから 1,905 件を消した。システムがユーザーの
+# FUSE のマウントを外す順番はユニットの After= では守れないので、同期の側で確かめる。
+MASS_REMOVE_RATIO = 0.2  # 1 回で manifest のこの割合を超えて「消えた」ときは削除を保留する
+MASS_REMOVE_MIN = 50     # ただし、この件数までは保留しない(小さなミラーで止まらないように)
+
+
+def _source_alive(root: Path) -> bool:
+    """ソースが読めるか。マウントが外れると OSError(Transport endpoint is not connected)か、
+    空のマウント先が見える。どちらも「読めない」とする。"""
+    try:
+        with os.scandir(root) as it:
+            return any(True for _ in it)
+    except OSError:
+        return False
+
+
 def sync_mirror(
     root: Path,
     mirror: Path,
     blocklist: list[str] | None = None,
     raw_blocklist: list[str] | None = None,
+    allow_mass_remove: bool = False,
 ) -> dict:
-    """増分同期。戻り値は統計 dict(written/unchanged/removed/dropped/secs)。"""
+    """増分同期。戻り値は統計 dict(written/unchanged/removed/dropped/secs、
+    removal_held/hold_reason=削除を保留した件数と理由、skipped=同期を見送った理由)。
+
+    ソースが読めないときは何もしない。走査のあとにソースが読めなくなっていたとき、
+    または 1 回で消す数が多すぎるとき(allow_mass_remove=False)は、「ソースに見当たらない」
+    分の削除を保留する(manifest に残すので次の同期で判断し直す)。遮断リストに入って
+    消すもの(機微)は保留しない。"""
+    if not _source_alive(Path(root)):
+        log.warning("ミラー同期を見送り: ソースが読めない(マウントが外れている?): %s", root)
+        return {"written": 0, "unchanged": 0, "removed": 0, "dropped": 0, "parse_failed": 0,
+                "removal_held": 0, "hold_reason": None, "skipped": "source_unavailable", "secs": 0.0}
     global _author_map, _role_map
     _author_map = load_author_aliases(root)   # 著者実名化(tick毎に読み直す=表の更新に追随)
     _role_map = load_role_names(root)         # <@&ID> のロール名(同上)
@@ -666,6 +694,7 @@ def sync_mirror(
     # (#14)が起きてもミラーから静かに消えるだけだった(2026-08-12 追加)。
     stats = {"written": 0, "unchanged": 0, "removed": 0, "dropped": 0, "parse_failed": 0}
     seen: set[str] = set()
+    blocked_now: set[str] = set()  # 遮断リストに当たったもの(ミラーにあれば必ず消す)
 
     def _jobs():
         for g in PLAIN_GLOBS:
@@ -685,6 +714,7 @@ def sync_mirror(
     for src, kind, block in _jobs():
         rel = src.relative_to(root).as_posix()
         if _blocked(rel, block):
+            blocked_now.add(rel)
             continue
         seen.add(rel)
         try:
@@ -740,8 +770,25 @@ def sync_mirror(
         manifest[rel] = sig
         stats["written"] += 1
 
-    # ソースが消えたものはミラーからも消す(ミラー内は再生成前提=削除可)
-    for rel in [r for r in manifest if r not in seen]:
+    # ソースが消えたものはミラーからも消す(ミラー内は再生成前提=削除可)。
+    # ただし、走査のあとにソースが読めなくなっていた・1 回で消す数が多すぎるときは、
+    # 「見当たらない」分の削除を保留する。遮断リストに入ったもの(機微)は保留しない。
+    missing = [r for r in manifest if r not in seen and r not in blocked_now]
+    blocked_old = [r for r in manifest if r in blocked_now]
+    hold = None
+    if missing:
+        if not _source_alive(root):
+            hold = "source_unavailable"
+        elif not allow_mass_remove and len(missing) > max(MASS_REMOVE_MIN,
+                                                          int(len(manifest) * MASS_REMOVE_RATIO)):
+            hold = "too_many"
+    stats["removal_held"] = len(missing) if hold else 0
+    stats["hold_reason"] = hold
+    if hold:
+        log.warning("ミラー同期: ソースに見当たらない %d 件(ミラー全体 %d 件)の削除を保留(%s)。"
+                    "意図した削除なら python -m iyakusai_bot.mirror --allow-mass-remove で流す",
+                    len(missing), len(manifest), hold)
+    for rel in blocked_old + ([] if hold else missing):
         kind = (manifest[rel][2] if isinstance(manifest[rel], list)
                 and len(manifest[rel]) > 2 else "plain")
         try:
@@ -781,13 +828,20 @@ def main() -> int:
     ap = argparse.ArgumentParser(prog="iyakusai_bot.mirror", description="無害化ミラーの手動ビルド")
     ap.add_argument("--root", required=True, help="_目録 のパス")
     ap.add_argument("--mirror", required=True, help="ミラー出力先(ドライブ外)")
+    ap.add_argument("--allow-mass-remove", action="store_true",
+                    help="ソースから大量に消えたのが意図どおりのとき、保留せずにミラーからも消す")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-    stats = sync_mirror(Path(args.root), Path(args.mirror))
+    stats = sync_mirror(Path(args.root), Path(args.mirror), allow_mass_remove=args.allow_mass_remove)
+    if stats.get("skipped"):
+        print(f"見送り: {stats['skipped']}(ソースが読めない)")
+        return 1
     print(f"完了: 更新 {stats['written']} / 変化なし {stats['unchanged']} / 削除 {stats['removed']}"
           f" / 機微drop {stats['dropped']}件 / parse失敗 {stats.get('parse_failed', 0)}件"
           f" / アクション索引 {stats.get('actions', '?')}件"
           f" / {stats['secs']}秒")
+    if stats.get("removal_held"):
+        print(f"削除を保留: {stats['removal_held']} 件({stats['hold_reason']})")
     return 0
 
 
