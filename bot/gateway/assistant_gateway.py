@@ -26,8 +26,11 @@ from pathlib import Path
 PREFIX = "/api/integration/v1/assistant"
 PUBLIC_FILES = "/assistant/files"
 JST = timezone(timedelta(hours=9))
-KINDS = ("ask", "doc", "image", "remind", "screening")
+KINDS = ("ask", "doc", "image", "remind", "screening", "taskdraft")
 FILE_KINDS = ("ask", "doc", "image")
+# POST /jobs で受け付ける種類。taskdraft(タスクの起票支援・2026-11-09)は本人だけが読む(#bottest に出さない)。
+CREATABLE_KINDS = FILE_KINDS + ("taskdraft",)
+OWNER_ONLY_KINDS = ("remind", "screening", "taskdraft")
 TERMINAL_STATES = ("done", "failed", "canceled")
 DOC_TYPES = (
     ("request", "依頼文(対外)"), ("notice", "お知らせ(学内・委員向け)"), ("report", "報告書"),
@@ -462,12 +465,17 @@ class AssistantGateway:
         return status, {"job": self._job_json(current)}
 
     def _can_read(self, job, context) -> bool:
-        """ask/doc/image は委員なら誰でも(#bottest に出ているため)。remind・screening は本人だけ。"""
+        """ask/doc/image は委員なら誰でも(#bottest に出ているため)。remind・screening・taskdraft は本人だけ。"""
         return job.kind in FILE_KINDS or job.actor_id == context.actor_id
 
     def _validate_file_job(self, kind: str, raw_input: dict, caps: dict) -> dict:
         gemini = caps.get("gemini") is True
         with self._input_guard():
+            if kind == "taskdraft":
+                check = getattr(self.logic, "taskdraft_input", None)
+                if check is None:   # Bot のフォルダが古い(連携口だけ新しい)ときは受け付けない
+                    raise AssistantError(400, "FEATURE_UNAVAILABLE", "この機能はいまの設定では使えません。")
+                return check(raw_input)
             if kind == "ask":
                 return self.logic.ask_input(raw_input, gemini=gemini)
             if kind == "doc":
@@ -526,7 +534,7 @@ class AssistantGateway:
         body = self._body(payload, {"clientOperationId", "kind", "input"})
         client_op = self._client_op(body.get("clientOperationId"))
         kind = body.get("kind")
-        if kind not in FILE_KINDS:
+        if kind not in CREATABLE_KINDS:
             _invalid("依頼の種類が正しくありません。")
         raw_input = body.get("input")
         if not isinstance(raw_input, dict):
@@ -557,7 +565,7 @@ class AssistantGateway:
         if before is not None and not self.jobs.JOB_ID_RE.fullmatch(before):
             _invalid()
         actor = context.actor_id
-        if kind in ("remind", "screening"):
+        if kind in OWNER_ONLY_KINDS:
             kinds, owner = (kind,), actor
         elif kind is not None:
             kinds, owner = (kind,), (actor if mine == "1" else None)

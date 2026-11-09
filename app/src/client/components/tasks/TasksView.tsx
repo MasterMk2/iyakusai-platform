@@ -25,6 +25,7 @@ import { coveredKeys, coversTask, DepartmentFilter, parseSelection, selectionLab
 import { TaskBowtie } from './TaskBowtie';
 import { PeopleView } from './PeopleView';
 import { TaskDetailPanel } from './TaskDetailPanel';
+import { CreateModeSwitch, storeCreateMode, storedCreateMode, TaskDraftPanel, useDraftAvailability, type CreateMode } from './TaskDraftPanel';
 import { childrenByParent, groupRows, openCount, parentChoices, type RowGroup } from './nesting';
 import { openChildrenText, TaskStatusButtons } from './TaskStatusButtons';
 import { CalendarView } from '../calendar/CalendarView';
@@ -182,6 +183,15 @@ export function TasksView({ route, onNavigate, refresh }: { route: TaskRoute; on
   // (chair's decision 2026-11-03; it was officers only before).
   const editable = role === 'editor' || role === 'admin';
   const canReopen = editable;
+  // Task drafting (2026-11-09): offered next to the plain form when the Bot can draft (one Bot request, only for
+  // someone who can create tasks); the last choice of the two ways is kept in this browser.
+  const drafting = useDraftAvailability(editable && !!context.data?.bound);
+  const [createMode, setCreateMode] = useState<CreateMode>(storedCreateMode);
+  const chooseCreateMode = (mode: CreateMode) => {
+    setCreateMode(mode);
+    storeCreateMode(mode);
+  };
+  const draftListChanged = useCallback(() => setLocalRefresh((n) => n + 1), []);
 
   async function write(task: TaskView, kind: 'status' | 'reopen', status?: TaskStatus): Promise<TaskView> {
     const key = JSON.stringify({ id: task.id, v: task.version, kind, status });
@@ -806,7 +816,22 @@ export function TasksView({ route, onNavigate, refresh }: { route: TaskRoute; on
             ← 一覧に戻る
           </button>
         )}
-        {route.creating && canCreate ? (
+        {route.creating && canCreate && drafting.available && <CreateModeSwitch value={createMode} onChange={chooseCreateMode} />}
+        {route.creating && canCreate && drafting.available && createMode === 'draft' ? (
+          <TaskDraftPanel
+            key={`draft:${multi ? 'departments' : (workspaceId ?? '')}:${parentOfNew?.id ?? ''}`}
+            workspaceId={workspaceId}
+            departments={departments}
+            initialTags={createTags}
+            parent={parentOfNew}
+            nesting={nesting}
+            helping={current.some((t) => t.helperIds !== undefined)}
+            members={people}
+            botAlive={drafting.botAlive}
+            onOpenTask={(id) => onNavigate({ workspaceId: wsParam, taskId: id, creating: false })}
+            onListChanged={draftListChanged}
+          />
+        ) : route.creating && canCreate ? (
           <CreateTaskForm
             key={`${multi ? 'departments' : (workspaceId ?? '')}:${parentOfNew?.id ?? ''}`}
             workspaceId={workspaceId}

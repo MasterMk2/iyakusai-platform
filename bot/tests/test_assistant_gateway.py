@@ -119,7 +119,8 @@ class FakeDiscord:
 
 def caps(**overrides) -> dict:
     value = {
-        "features": {"ask": True, "doc": True, "image": True, "remind": True, "screening": True},
+        "features": {"ask": True, "doc": True, "image": True, "remind": True, "screening": True,
+                     "taskdraft": True},
         "gemini": False,
         "maxActivePerUser": 3,
         "reminderChannels": [{"id": CHANNEL_A, "name": "総務連絡"}],
@@ -340,7 +341,8 @@ class MetaTests(Harness):
         self.make_gateway()
         self.start(self.gateway)
         body = self.request("GET", self.jobs_path("meta")).json()
-        self.assertEqual(body["features"], {"ask": False, "doc": False, "image": False, "remind": False, "screening": False})
+        self.assertEqual(body["features"], {"ask": False, "doc": False, "image": False, "remind": False, "screening": False,
+                                            "taskdraft": False})
         self.assertEqual([m["id"] for m in body["models"]], ["auto", "sonnet", "opus"])
         self.assertEqual([d["id"] for d in body["docTypes"]],
                          ["request", "notice", "report", "minutes", "mail", "free"])
@@ -441,6 +443,88 @@ class JobInputTests(Harness):
         self.assertEqual(job["actor"], {"id": uid(EDITOR), "name": "委員A"})
         self.assertIsNone(job["result"])
         self.assertIsNone(job["error"])
+
+
+def taskdraft_body(op: str = "ui-draft-1", **overrides) -> dict:
+    data = {
+        "overview": "11/23 の片付けの段取り。テントの撤去、ゴミの回収、借りた物品の返却",
+        "deadline": "2026-11-23",
+        "tags": ["kaijo"],
+        "useSources": False,
+        "roster": [
+            {"id": f"discord-{EDITOR}", "name": "委員A", "departments": ["kaijo"], "lead": 1, "helper": 0,
+             "overdue": 0, "history": ["kaijo"]},
+            {"id": f"discord-{OTHER}", "name": "委員B", "departments": ["kikaku"], "lead": 3, "helper": 1,
+             "overdue": 1, "history": []},
+        ],
+        "openTasks": [{"title": "テントを借りる", "tags": ["kaijo"], "assigneeId": f"discord-{EDITOR}",
+                       "deadline": "2026-11-20"}],
+    }
+    data.update(overrides)
+    return {"clientOperationId": op, "kind": "taskdraft", "input": data}
+
+
+class TaskDraftTests(Harness):
+    """タスクの起票支援(2026-11-09): 受け付け・入力の検査・本人だけが読めること。"""
+
+    def setUp(self):
+        super().setUp()
+        self.make_gateway(capabilities=caps())
+        self.start(self.gateway)
+
+    def post(self, body, actor=EDITOR):
+        return self.request("POST", self.jobs_path("jobs"), actor=actor, body=body)
+
+    def test_accepts_and_normalizes(self):
+        reply = self.post(taskdraft_body(overview="  概略\x07です\n二行目  "))
+        self.assertEqual(reply.status, 202)
+        job = reply.json()["job"]
+        self.assertEqual((job["kind"], job["state"]), ("taskdraft", "queued"))
+        self.assertEqual(job["input"]["overview"], "概略です\n二行目")   # 改行は残す・制御文字は削る
+        self.assertEqual(job["input"]["parent"], None)
+        self.assertEqual([p["id"] for p in job["input"]["roster"]], [f"discord-{EDITOR}", f"discord-{OTHER}"])
+
+    def test_only_the_actor_reads_it(self):
+        job = self.post(taskdraft_body()).json()["job"]
+        self.assertEqual(self.request("GET", self.jobs_path("jobs", job["id"]), actor=EDITOR).status, 200)
+        self.assertEqual(self.request("GET", self.jobs_path("jobs", job["id"]), actor=OTHER).status, 404)
+        everyone = self.request("GET", self.jobs_path("jobs"), actor=OTHER).json()["jobs"]
+        self.assertEqual(everyone, [])   # 全員の一覧(ask/doc/image)には出ない
+        self.assertEqual(self.request("GET", self.jobs_path("jobs") + "?kind=taskdraft", actor=OTHER).json()["jobs"], [])
+        mine = self.request("GET", self.jobs_path("jobs") + "?kind=taskdraft", actor=EDITOR).json()["jobs"]
+        self.assertEqual([j["id"] for j in mine], [job["id"]])
+
+    def test_counts_toward_the_active_limit(self):
+        self.assertEqual(self.post(taskdraft_body("ui-d-1")).status, 202)
+        self.assertEqual(self.store.count_active(uid(EDITOR)), 1)
+
+    def test_invalid_inputs_are_400(self):
+        cases = {
+            "empty overview": taskdraft_body(overview="   "),
+            "long overview": taskdraft_body(overview="あ" * 2001),
+            "bad deadline": taskdraft_body(deadline="2026-02-30"),
+            "unknown tag": taskdraft_body(tags=["nope"]),
+            "roster dup": taskdraft_body(roster=[{"id": "discord-1", "name": "a"}, {"id": "discord-1", "name": "b"}]),
+            "roster bad id": taskdraft_body(roster=[{"id": "Discord 1", "name": "a"}]),
+            "roster extra key": taskdraft_body(roster=[{"id": "discord-1", "name": "a", "mail": "x"}]),
+            "roster too many": taskdraft_body(roster=[{"id": f"discord-{i}", "name": "a"} for i in range(81)]),
+            "open tasks too many": taskdraft_body(openTasks=[{"title": "x"}] * 41),
+            "count negative": taskdraft_body(roster=[{"id": "discord-1", "name": "a", "lead": -1}]),
+            "use sources not bool": taskdraft_body(useSources="yes"),
+            "unknown key": taskdraft_body(model="opus"),
+            "parent without title": taskdraft_body(parent={"id": "task-3"}),
+        }
+        for name, body in cases.items():
+            with self.subTest(name):
+                reply = self.post(body)
+                self.assertEqual(reply.status, 400)
+                self.assertEqual(reply.error_code(), "VALIDATION")
+
+    def test_feature_off_is_400(self):
+        self.store.set_meta("capabilities", json.dumps(caps(features={"taskdraft": False})))
+        reply = self.post(taskdraft_body())
+        self.assertEqual(reply.status, 400)
+        self.assertEqual(reply.error_code(), "FEATURE_UNAVAILABLE")
 
 
 class QuotaAndIdempotencyTests(Harness):

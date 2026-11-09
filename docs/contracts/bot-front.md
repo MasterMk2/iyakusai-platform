@@ -1,6 +1,6 @@
 # 統合アプリの「Bot」タブと IyakusaiBot の取り決め
 
-統合アプリの「Bot」タブから、IyakusaiBot の質問（`/ask`）・文書の起草（`/doc`）・リマインド・タスク候補の承認を使うための取り決めです。
+統合アプリの「Bot」タブから、IyakusaiBot の質問（`/ask`）・文書の起草（`/doc`）・リマインド・タスク候補の承認を使うための取り決めです。タスク画面の起票支援（概略からタスクの分け方と担当の案を作る、§9）も同じ仕組みを使います。
 節の番号はソースのコメントから参照しているので、変えないでください。ここに書く ID や値はすべて例です。
 
 ## 1. 全体の形
@@ -20,6 +20,7 @@ IyakusaiBot の Assistant Cog（Bot のプロセスの中）
    doc       → Discord の /doc と同じ処理をそのまま実行
    remind    → リマインドの保存（書くのは Bot だけ）。通知は Discord のリマインドと同じく Bot が出す
    screening → Discord のタスク候補のボタンと同じ処理を呼ぶ。Discord の候補の投稿も同じく書き換わる
+   taskdraft → /doc と同じ AI で、概略からタスクの分け方と担当の案を作る（§9）。Discord には投稿しない
    → 結果をジョブ表に書き戻す。ask・doc は共有用のチャンネル（設定 share_channel_id）にも投稿する
 ```
 
@@ -57,7 +58,7 @@ max_active_per_user = 3                        # 受付中と実行中の ask・
 ### 3-1. 型
 
 ```ts
-type JobKind = 'ask' | 'doc' | 'image' | 'remind' | 'screening';
+type JobKind = 'ask' | 'doc' | 'image' | 'remind' | 'screening' | 'taskdraft';
 type JobState = 'queued' | 'running' | 'done' | 'failed' | 'canceled';
 
 interface Job {
@@ -80,6 +81,7 @@ interface JobResult {
   reminder?: Reminder;        // remind
   message?: string;           // remind・screening の結果の一文
   taskNumber?: number | null; // screening の ok
+  draft?: TaskDraft;          // taskdraft（§9-3）
 }
 ```
 
@@ -103,8 +105,8 @@ interface JobResult {
 |---|---|
 | GET `/assistant/meta` | `{ features:{ask,doc,image,remind,screening:boolean}, models:[{id,label,ask:boolean,doc:boolean}], docTypes:[{id,label}], reminderChannels:[{id,name}], shareChannel:{id,name}\|null, isAdmin:boolean, bot:{alive:boolean, lastSeenAt:string\|null} }`。`bot.alive` は Cog の生存の記録（30 秒以内） |
 | GET `/assistant/summary` | ホーム用。`{ pendingCandidates:number, reminders:{overdue:number, today:number, upcoming7d:number} }`（自分が登録者か対象の未完了） |
-| POST `/assistant/jobs` | `{clientOperationId, kind:'ask'\|'doc'\|'image', input}` → 202 `{job}`。同じ actor・同じ clientOperationId なら同じジョブを返す。上限を超えたら 429 `TOO_MANY_JOBS` |
-| GET `/assistant/jobs/<id>` | `{job}`。ask・doc は委員なら誰でも読める（共有用のチャンネルに出ているため）。remind・screening は本人だけ |
+| POST `/assistant/jobs` | `{clientOperationId, kind:'ask'\|'doc'\|'image'\|'taskdraft', input}` → 202 `{job}`。同じ actor・同じ clientOperationId なら同じジョブを返す。上限を超えたら 429 `TOO_MANY_JOBS` |
+| GET `/assistant/jobs/<id>` | `{job}`。ask・doc は委員なら誰でも読める（共有用のチャンネルに出ているため）。remind・screening・taskdraft は本人だけ |
 | GET `/assistant/jobs?kind=ask&mine=1&limit=20&before=<id>` | `{jobs:[Job], next:string\|null}`。新しい順。`mine` を省くと全員の ask・doc |
 | GET `/assistant/similar?q=<質問>` | `{jobs:[{job, score}]}`。完了した ask から、文字の 2-gram の類似度 0.35 以上の上位 5 件 |
 | POST `/assistant/jobs/<id>/cancel` | 本人の `queued` だけ取り消せる。`{job}` |
@@ -163,6 +165,7 @@ interface Candidate {
 | GET `/api/assistant/meta` | GET `/assistant/meta` |
 | GET `/api/assistant/summary` | GET `/assistant/summary` |
 | POST `/api/assistant/jobs` | POST `/assistant/jobs`（clientOperationId に `ui-` を付ける） |
+| POST `/api/assistant/taskdraft` | POST `/assistant/jobs`（kind は taskdraft。名簿と未完了のタスクをアプリが足す。§9-2） |
 | GET `/api/assistant/jobs/:id` | GET `/assistant/jobs/<id>` |
 | GET `/api/assistant/jobs` | GET `/assistant/jobs` |
 | GET `/api/assistant/similar` | GET `/assistant/similar` |
@@ -201,3 +204,77 @@ interface Candidate {
 
 - Bot ホストの側：ジョブ表（受け付け・取り合い・やり直し・上限・冪等）、連携口（署名・委員の確認・各ルートの入力の検査・ファイル）、Cog（偽の Discord で ask・doc・remind・screening が Discord に投稿し、結果を書き戻す）。試験は `bot/tests/` と `bot/gateway/`。
 - アプリの側：署名付きの呼び出し（合成の Bot ホスト）、入力の検査、権限、ファイルの中継、画面（Playwright：質問 → 進み具合 → 回答、リマインドの追加・完了、候補の承認、375px で横のスクロールがないこと）。試験は `app/tests/api/assistant.test.ts` と `app/tests/e2e/`。
+
+## 9. タスクの起票支援（taskdraft・2026-11-09）
+
+委員がタスク画面で「やりたいことの概略」を書くと、Bot がタスクの分け方と担当の案を出し、委員が確かめて直してから起票する。
+
+### 9-1. 流れ
+
+1. タスク画面の「＋ 新しいタスク」→「Bot に下書きを頼む」（どちらの作り方かはブラウザに覚える）。親タスクの「＋ 子タスクを追加」からも使え、そのときは子タスクだけを案にする。
+2. ブラウザ → アプリ POST `/api/assistant/taskdraft` `{clientOperationId, overview, deadline?, tags?, parentId?, useSources?}`。
+3. アプリは、頼んだ本人としてタスク API から委員の一覧（`members`）と全部局のタスク（`/tasks/all`、無い構成では最初の部局の一覧）を読み、名簿と未完了のタスクを組み立てて、ジョブ `taskdraft` を作る（§9-2）。閲覧だけの委員（viewer）は 403（タスクを登録できる人だけ）。
+4. Bot は ask・doc と同じ枠（2 本）で実行する。`useSources` なら委員会の資料を探し（60 秒まで。失敗しても続ける）、/doc と同じ AI に指示文を渡して JSON を受け、コードで確かめて `result.draft` に書く（§9-3）。使用量は `assistant.taskdraft` で記帳する。Discord には投稿しない。
+5. ブラウザは 2.5 秒ごとにジョブを読み、下書きを表に出す。委員は題・担当・副担当・期限・部局・内容を直し、起票しないものを外して「選んだ N 件を起票する」。アプリの既存のタスク作成（POST `/api/tasks/workspaces/<部局>/tasks`）で、親タスク→子タスク（`parentId`）の順に 1 件ずつ作る。行ごとに操作 ID を持つので、途中で失敗しても残りだけをやり直せ、同じ内容の再送で二重にならない。
+
+### 9-2. ジョブの入力（アプリのサーバーが組み立てる）
+
+```ts
+{
+  overview: string;            // 1..2000（改行可）
+  deadline: string | null;     // 全体の期限の目安（YYYY-MM-DD）
+  tags: string[];              // 部局のヒント（キー、0..5）。親タスクの下に作るときは、指定が無ければ親の部局
+  parent: { id: string; title: string } | null;   // 既存の親の下に作るとき（新しい親は提案しない）
+  useSources: boolean;
+  roster: {                    // 担当の案に使ってよい人（0..80）。在籍中で、閲覧だけでない委員
+    id: string;                // タスク API のユーザー ID（discord-<ID>）
+    name: string;              // ..40
+    departments: string[];     // 所属（Discord のロール × discord-auth.json の departmentRoleIds を部局キーにしたもの）
+    lead: number; helper: number; overdue: number;   // 未完了の主担当・副担当・期限超過の件数
+    history: string[];         // 担当したことのあるタスクの部局キー（完了も含む）
+  }[];
+  openTasks: { title: string; tags: string[]; assigneeId: string | null; deadline: string | null }[];   // 0..40。重ねて作らないため
+}
+```
+
+- 連携口（`assistant_logic.taskdraft_input`）でも同じ規則で確かめる。名簿の外の担当は `openTasks` でも `null` にして送る。本文は連携口の上限（64 KB）に収まる。
+- 指示文には ID を出さず、名簿の人を P1・P2… の番号で示す。AI の答えの番号を名簿で ID に戻す（名簿の外の番号・名前は使わない）。
+
+### 9-3. 結果（`result.draft`）
+
+```ts
+interface TaskDraft {
+  parent: TaskDraftItem | null;   // 2 件以上に分けたときの新しい親。既存の親の下・1 件だけのときは null
+  items: TaskDraftItem[];         // 1..10
+  notes: string;                  // Bot からの前提の一言
+  questions: string[];            // 決めておくこと（..5）
+  parentTask: { id: string; title: string } | null;
+  sources: { label: string; excerpt: string }[];   // 参考にした資料（..4）
+  model?: string;
+}
+interface TaskDraftItem {
+  title: string; tags: string[]; deadline: string | null;   // 期限は今日〜1 年以内だけ（外れたら null）
+  purpose: string; deliverable: string; completionCriteria: string; openQuestions: string;
+  assigneeId: string | null; assigneeName: string | null;
+  assigneeBy: 'ai' | 'rule' | null;   // AI が選んだ／AI が選ばず規則で選んだ／案なし
+  assigneeFacts: string;              // コードが数えた事実「企画課｜主担当 2・副担当 1・期限超過 1」
+  reason: string;
+  helperIds: string[]; helperNames: string[];   // 副担当の案（..2、主担当と別の人）
+  alternatives: { id: string; name: string; facts: string }[];   // ほかの候補（..3）
+}
+```
+
+- 規則（`taskdraft_logic.rank_people`）：タスクの部局に所属する人（3）→ 部と課の関係（内務部の人と企画課のタスクなど、2）→ その部局の担当をしたことがある（1）の順。同じ近さなら持ち（主担当＋副担当、この下書きで割り当てた分を足す）の少ない順、期限超過の少ない順。同じ部の別の課（会計課とシステム課など）は近いとみなさない。近い人がいなければ担当の案は出さない。規則で選ぶときは、近い人がほかにいれば 1 人に 3 件以上まとめない。
+- 電話番号・メールアドレス・口座番号は伏せ字にする（タスク候補と同じ）。
+- アプリのサーバーは `taskdraft` のジョブにだけ `draft` を通し、形が違えば落とす（`browserDraft`）。画面は担当の案を、いまの委員の一覧にいる人のときだけ選んだ状態にする。
+
+### 9-4. 機能の有無と古い版
+
+- meta の `features.taskdraft`（Bot に /doc の AI があるとき true）。無い・false なら、画面に作り方の切り替えを出さない。古い Bot は taskdraft を受け付けない（400 `FEATURE_UNAVAILABLE`）。
+- ジョブ表の `kind` の CHECK に taskdraft を足した。古い表は開いたときに作り直す（同じ列の表に写して入れ替える。`schema_version` は 1 のまま）。古い Bot・連携口もこの表を開けて今までどおり動くので、切り戻しでジョブ表を戻す必要はない。
+- 権限：`assistant.taskdraft` は「書く（write）」（タスクの作成と同じ）。起票そのものはタスク API の権限で決まる。
+
+### 9-5. 試験
+
+- Bot：`bot/tests/test_taskdraft.py`（担当の順位、指示文に ID を出さないこと、出力の検証、ジョブ表の作り直し、Cog の実行と失敗）、`bot/tests/test_assistant_gateway.py` の `TaskDraftTests`（受け付け・入力の検査・本人だけが読めること）。
+- アプリ：`app/tests/api/assistant-taskdraft.test.ts`（名簿と未完了のタスクの組み立て、閲覧だけの委員の拒否、draft の形の検査）、`app/tests/e2e/task-draft.spec.ts`（入力→待ち→確認・修正→親子の順に起票、既存の親の下、失敗、機能が無いとき、375px）。
