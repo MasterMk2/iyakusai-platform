@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { certaintyOf, doubtsOf, fmtOffset, textDiff, unclearTimes, type MinutesDetail, type MinutesSegmentUpdate, type TranscriptSegment } from '../../../shared/minutes';
 import { api, fmtDate, toFailure } from '../../api';
 
@@ -68,8 +68,11 @@ function CheckedNote({ segment }: { segment: TranscriptSegment }) {
   );
 }
 
-/** What the AI's guess changes in the text as heard: struck out what goes, marked what comes. */
-function GuessDiff({ heard, guess }: { heard: string; guess: string }) {
+/**
+ * What the AI's guess changes in the text as heard: struck out what goes, marked what comes. Kept as it was while
+ * the person types elsewhere (a list can have hundreds of rows).
+ */
+const GuessDiff = memo(function GuessDiff({ heard, guess }: { heard: string; guess: string }) {
   return (
     <p className="minutes-guess" data-testid="minutes-guess">
       <span className="minutes-guess-label">AI の案</span>{' '}
@@ -88,7 +91,7 @@ function GuessDiff({ heard, guess }: { heard: string; guess: string }) {
       )}
     </p>
   );
-}
+});
 
 /** Where the AI's guesses stand, and the button to ask for them (again, or on from where they stopped). */
 function GuessStatus({ m, onSaved }: { m: MinutesDetail; onSaved: (next: MinutesDetail) => void }) {
@@ -300,9 +303,8 @@ export function MinutesTranscript({ m, playing, onPlay, mode, onMode, target, on
               ? '音声認識の自信が低い文と、AI が要確認とした所だけを並べています。'
               : 'この文字起こしは確からしさを記録する前に作られたため、AI が要確認とした所だけを並べています。'}
             {canPlay ? '▶ でその文だけを再生します。' : m.audio.present ? '（音声を聞けるのは、録音した人と権限管理者だけです。文字は読んで直せます）' : '（音声は消去済みです。文字は読んで直せます）'}
-            {m.can.check ? '直したら Enter（直さないときもそのまま Enter で「正しい」と記録）。' : ''}
             {m.can.check
-              ? 'AI の案は前後の発言と用語集からの推測で、AI は音声を聞いていません。欄に入っていても、聞いて確かめてから確定してください（Esc で聞いたままの文に戻ります）。'
+              ? '欄の文で確定するときは Enter。AI の案が入っている行は案のまま確定するので、聞いたままが正しいときは Esc で戻してから Enter を押してください。AI の案は前後の発言と用語集からの推測で、AI は音声を聞いていません。聞いて確かめてから確定してください。'
               : ''}
           </p>
           {(m.can.check || m.suggest) && <GuessStatus m={m} onSaved={onSaved} />}
@@ -355,7 +357,11 @@ export function MinutesTranscript({ m, playing, onPlay, mode, onMode, target, on
             <li key={i} data-index={i} className={s.checked ? 'is-checked' : undefined}>
               {playButton(i, s)}{' '}
               {editing === i ? (
-                editor(i, null)
+                <>
+                  {/* The box starts from the AI's guess here too: what it changes from the text as heard stays in sight. */}
+                  {changedByGuess(s) && <GuessDiff heard={s.text} guess={s.suggestion!} />}
+                  {editor(i, null)}
+                </>
               ) : (
                 <>
                   <MarkedText segment={s} />
