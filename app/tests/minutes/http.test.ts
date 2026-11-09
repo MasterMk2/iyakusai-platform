@@ -623,6 +623,67 @@ describe('sending back, listening again and correcting confirmed minutes', { tim
     expect(kept.reviews.at(-1)).toMatchObject({ status: 'failed', byName: '合成 太郎' });
   });
 
+  it("the AI's guesses follow the first draft, after the meetings' own stages, and a guess confirmed as it was is marked", async () => {
+    await build();
+    const recorder = await signIn(MEMBER, '21000002');
+    const id = await drafted(recorder, { title: '役員会', heldOn: '2026-11-10', visibility: 'members', viewers: [] });
+    let m = (await call('GET', `/api/minutes/${id}`, { cookie: recorder })).json;
+    // Segment 1 has a word the model was unsure of: it alone is queued.
+    expect(m.suggest).toMatchObject({ status: 'wait', done: 0, total: 1, changed: 0, unchanged: 0, requestedByName: '下書きのあと自動' });
+    expect(m.can).toMatchObject({ check: true, suggest: false });
+    expect((await call('POST', `/api/minutes/${id}/suggest`, { cookie: recorder, body: {} })).json.message).toContain('作っているところ');
+
+    // A worker asking for its own stages only (one of before) never gets a part of the guesses.
+    expect((await worker(WORKER_PATHS.claim, { stages: ['transcribe', 'summarize'] })).json.job).toBeNull();
+    // A meeting's stage comes first: a second meeting waiting for its summary is given before the guesses.
+    const second = (await upload(recorder, audio, { title: '定例', heldOn: '2026-11-10', visibility: 'members', viewers: [] })).json.id as string;
+    const t = (await worker(WORKER_PATHS.claim, { stages: ['transcribe'] })).json.job;
+    await worker(WORKER_PATHS.result, { id: second, leaseToken: t.leaseToken, stage: 'transcribe', transcript: { segments: [segments[0]], durationSec: 5, model: 'large-v3' } });
+    expect((await worker(WORKER_PATHS.claim, { stages: ['summarize', 'suggest'] })).json.job).toMatchObject({ id: second, stage: 'summarize' });
+
+    const job = (await worker(WORKER_PATHS.claim, { stages: ['suggest'] })).json.job;
+    expect(job).toMatchObject({ id, stage: 'suggest', audio: null, suggest: { targets: [1], hints: [], done: 0, total: 1 } });
+    expect(job.transcript.segments[1]).toEqual({ start: 300, end: 306, text: measured[1]!.text });
+    expect(job.glossary).toEqual(expect.arrayContaining(['協賛']));
+    expect((await worker(WORKER_PATHS.progress, { id, leaseToken: job.leaseToken, stage: 'suggest', done: 0, total: 1 })).status).toBe(200);
+    expect((await worker(WORKER_PATHS.progress, { id, leaseToken: 'x'.repeat(24), stage: 'suggest', done: 0, total: 1 })).status).toBe(409);
+    expect((await worker(WORKER_PATHS.result, { id, leaseToken: job.leaseToken, stage: 'suggest' })).status).toBe(400);
+    // The guess is made one line, and the committee's words are fixed in it as in a transcript; a stale one is dropped.
+    const guess = { index: 1, heard: measured[1]!.text, text: '共産の依頼文は総務部が十一月二十日までに作る、\nということで決定とします。' };
+    expect((await worker(WORKER_PATHS.result, { id, leaseToken: job.leaseToken, stage: 'suggest', suggestions: [guess, { index: 0, heard: '別の文', text: 'x' }] })).status).toBe(200);
+    expect((await worker(WORKER_PATHS.result, { id, leaseToken: job.leaseToken, stage: 'suggest', suggestions: [] })).status).toBe(409);
+
+    m = (await call('GET', `/api/minutes/${id}`, { cookie: recorder })).json;
+    const fixedGuess = '協賛の依頼文は総務部が十一月二十日までに作る、 ということで決定とします。';
+    expect(m.transcript.segments[1].suggestion).toBe(fixedGuess);
+    expect(m.transcript.segments[0].suggestion).toBeUndefined();
+    expect(m.suggest).toMatchObject({ status: 'done', done: 1, total: 1, changed: 1, unchanged: 0 });
+    expect(m.can.suggest).toBe(true);
+
+    // Confirmed as the AI guessed it: marked, and the guess is no longer shown.
+    const saved = await call('PUT', `/api/minutes/${id}/segments/1`, { cookie: recorder, body: { expectedText: measured[1]!.text, text: fixedGuess } });
+    expect(saved.json.transcript.segments[1]).toMatchObject({ text: fixedGuess, checked: { original: measured[1]!.text, ai: true } });
+    expect(saved.json.transcript.segments[1].suggestion).toBeUndefined();
+    expect(saved.json.suggest).toMatchObject({ changed: 0, unchanged: 0 });
+    // Nothing left to listen to again: no new guesses.
+    expect((await call('POST', `/api/minutes/${id}/suggest`, { cookie: recorder, body: {} })).json.message).toContain('聞き直す文が残っていない');
+
+    // A part the AI failed on is tried again; after the last attempt the failure is shown, and asking again goes on
+    // from where it stopped.
+    const third = await drafted(recorder, { title: '部会', heldOn: '2026-11-10', visibility: 'members', viewers: [] });
+    for (let i = 0; i < 3; i++) {
+      const part = (await worker(WORKER_PATHS.claim, { stages: ['suggest'] })).json.job;
+      expect(part.id).toBe(third);
+      expect((await worker(WORKER_PATHS.result, { id: third, leaseToken: part.leaseToken, stage: 'suggest', error: 'AI の案づくりに失敗しました: 時間切れ' })).status).toBe(200);
+      if (i === 0) expect((await call('GET', `/api/minutes/${third}`, { cookie: recorder })).json.suggest).toMatchObject({ status: 'wait', error: null });
+    }
+    expect((await worker(WORKER_PATHS.claim, { stages: ['suggest'] })).json.job).toBeNull();
+    m = (await call('GET', `/api/minutes/${third}`, { cookie: recorder })).json;
+    expect(m.suggest).toMatchObject({ status: 'failed', error: 'AI の案づくりに失敗しました: 時間切れ', done: 0, total: 1 });
+    const asked = await call('POST', `/api/minutes/${third}/suggest`, { cookie: recorder, body: {} });
+    expect(asked.json.suggest).toMatchObject({ status: 'wait', requestedByName: '合成 太郎' });
+  });
+
   it('correct confirmed minutes into the next version, and drop a correction', async () => {
     await build();
     const recorder = await signIn(MEMBER, '21000002');

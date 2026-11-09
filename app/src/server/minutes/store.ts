@@ -16,6 +16,10 @@ import type { MinutesAudioExtension, MinutesDraft, MinutesStage, MinutesVisibili
 // summarize_wait, and the worker reworks the draft), and confirmed minutes can be corrected (meeting_versions keeps
 // every confirmed version; a correction is the stage "draft" again while the last version still stands). The stages
 // are the same as before and the columns were only added, so the app of before still opens the file.
+//
+// 2026-11-10: the AI guesses what was said in the segments to listen to again (meeting_suggestions). The guessing runs
+// beside the draft, not as a stage of the meeting, so people keep working on the draft meanwhile; it is only a table
+// added, and an app of before ignores it.
 
 export const MINUTES_FILE = 'minutes.sqlite3';
 export const AUDIO_DIR = 'minutes-audio';
@@ -23,14 +27,18 @@ export const AUDIO_DIR = 'minutes-audio';
 const SCHEMA_VERSION = '1';
 export const MAX_ATTEMPTS = 3;
 /** How long the worker may hold a stage before it is offered again. */
-export const LEASE_MS = { transcribe: 8 * 3_600_000, summarize: 45 * 60_000 } as const;
+export const LEASE_MS = { transcribe: 8 * 3_600_000, summarize: 45 * 60_000, suggest: 30 * 60_000 } as const;
 /**
  * How far each report of progress pushes the lease out (2026-11-07). The worker reports about every 20 seconds while
  * it works, so a stage that takes longer than LEASE_MS on a slow machine is kept; a worker that stops reporting loses
  * the stage this long after its last report (or LEASE_MS after it took it, whichever is later).
  */
-export const LEASE_RENEW_MS = { transcribe: 2 * 3_600_000, summarize: 45 * 60_000 } as const;
+export const LEASE_RENEW_MS = { transcribe: 2 * 3_600_000, summarize: 45 * 60_000, suggest: 30 * 60_000 } as const;
 export type WorkerStage = keyof typeof LEASE_MS;
+/** The stages a meeting itself goes through; the AI's guesses (`suggest`) run beside the draft, in their own table. */
+export type MeetingWorkStage = Exclude<WorkerStage, 'suggest'>;
+/** Segments the AI guesses for in one lease (2026-11-10): one call of the AI, so a summary waiting meanwhile is not held up long. */
+export const SUGGEST_PART = 120;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -88,6 +96,21 @@ CREATE TABLE IF NOT EXISTS meeting_versions(
   note TEXT NOT NULL,
   PRIMARY KEY(meeting_id, no)
 );
+CREATE TABLE IF NOT EXISTS meeting_suggestions(
+  meeting_id TEXT PRIMARY KEY,
+  status TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  lease_token TEXT,
+  lease_until INTEGER,
+  part_end INTEGER,
+  requested_by TEXT NOT NULL,
+  requested_at TEXT NOT NULL,
+  done_at TEXT,
+  error TEXT,
+  targets_json TEXT NOT NULL,
+  done INTEGER NOT NULL DEFAULT 0,
+  items_json TEXT NOT NULL DEFAULT '{}'
+);
 `;
 
 /** Columns added on 2026-11-06 (ALTER TABLE on a file made before). */
@@ -101,7 +124,79 @@ const ADDED_COLUMNS: [string, string][] = [
 ];
 
 /** A segment as kept: who checked it is kept by ID (the routes show the name). */
-export type StoredSegment = Omit<TranscriptSegment, 'checked'> & { checked?: { original: string; by: string; at: string } };
+export type StoredSegment = Omit<TranscriptSegment, 'checked' | 'suggestion'> & { checked?: { original: string; by: string; at: string; ai?: true } };
+
+/** The AI's guess for a segment, with the text it was made for (a guess for a text changed since is not shown). */
+export interface SuggestionItem {
+  heard: string;
+  text: string;
+}
+
+export type SuggestionStatus = 'wait' | 'run' | 'done' | 'failed';
+
+/**
+ * The AI's guesses for one meeting (2026-11-10): the segments to guess for, fixed when asked (`targets`), are taken a
+ * part at a time (`done` of them so far); each part has its own lease, and its guesses are kept as soon as they come.
+ */
+export interface SuggestionRow {
+  meetingId: string;
+  status: SuggestionStatus;
+  attempts: number;
+  leaseToken: string | null;
+  leaseUntil: number | null;
+  /** The end (in `targets`) of the part being guessed while the lease holds. */
+  partEnd: number | null;
+  requestedBy: string;
+  requestedAt: string;
+  doneAt: string | null;
+  error: string | null;
+  targets: number[];
+  done: number;
+  items: Record<number, SuggestionItem>;
+}
+
+interface RawSuggestion {
+  meeting_id: string;
+  status: string;
+  attempts: number;
+  lease_token: string | null;
+  lease_until: number | null;
+  part_end: number | null;
+  requested_by: string;
+  requested_at: string;
+  done_at: string | null;
+  error: string | null;
+  targets_json: string;
+  done: number;
+  items_json: string;
+}
+
+const suggestionFromRaw = (r: RawSuggestion): SuggestionRow => ({
+  meetingId: r.meeting_id,
+  status: r.status as SuggestionStatus,
+  attempts: Number(r.attempts),
+  leaseToken: r.lease_token,
+  leaseUntil: r.lease_until === null ? null : Number(r.lease_until),
+  partEnd: r.part_end === null ? null : Number(r.part_end),
+  requestedBy: r.requested_by,
+  requestedAt: r.requested_at,
+  doneAt: r.done_at,
+  error: r.error,
+  targets: JSON.parse(r.targets_json) as number[],
+  done: Number(r.done),
+  items: JSON.parse(r.items_json) as Record<number, SuggestionItem>,
+});
+
+/** A part of the AI's guesses given to the worker. */
+export interface ClaimedSuggestion {
+  row: MeetingRow;
+  leaseToken: string;
+  /** The segments of this part (still unchecked when it was given). */
+  targets: number[];
+  /** Segments guessed for before this part, and all of them. */
+  done: number;
+  total: number;
+}
 export interface StoredTranscript extends Omit<Transcript, 'segments'> {
   segments: StoredSegment[];
 }
@@ -139,7 +234,7 @@ export interface MeetingRow {
   visibility: MinutesVisibility;
   viewers: string[];
   stage: MinutesStage;
-  failedStage: WorkerStage | null;
+  failedStage: MeetingWorkStage | null;
   error: string | null;
   attempts: number;
   leaseToken: string | null;
@@ -201,7 +296,7 @@ const fromRaw = (r: RawRow): MeetingRow => ({
   visibility: r.visibility as MinutesVisibility,
   viewers: JSON.parse(r.viewers_json) as string[],
   stage: r.stage as MinutesStage,
-  failedStage: (r.failed_stage as WorkerStage | null) ?? null,
+  failedStage: (r.failed_stage as MeetingWorkStage | null) ?? null,
   error: r.error,
   attempts: Number(r.attempts),
   leaseToken: r.lease_token,
@@ -287,7 +382,7 @@ export type MeetingSettings = Pick<MeetingRow, 'title' | 'heldOn' | 'visibility'
 
 export interface ClaimedJob {
   row: MeetingRow;
-  stage: WorkerStage;
+  stage: MeetingWorkStage;
   leaseToken: string;
 }
 
@@ -388,7 +483,7 @@ export class MinutesStore {
    * after MAX_ATTEMPTS the meeting fails, or a reworking of a draft goes back to the draft). Only the stages the
    * worker asked for.
    */
-  claim(stages: WorkerStage[], nowMs: number, now: string): ClaimedJob | null {
+  claim(stages: MeetingWorkStage[], nowMs: number, now: string): ClaimedJob | null {
     return this.tx(() => {
       // Stages held too long, of the kinds this worker does: back to waiting, or failed after the last attempt. (A
       // worker that only summarizes never takes a long transcription away from the one that transcribes.)
@@ -396,7 +491,7 @@ export class MinutesStore {
       if (!running) return null;
       const expired = this.db.prepare(`SELECT * FROM meetings WHERE stage IN (${running}) AND lease_until < ?`).all(nowMs) as unknown as RawRow[];
       for (const r of expired) {
-        const stage: WorkerStage = r.stage === 'transcribe_run' ? 'transcribe' : 'summarize';
+        const stage: MeetingWorkStage = r.stage === 'transcribe_run' ? 'transcribe' : 'summarize';
         if (Number(r.attempts) >= MAX_ATTEMPTS) {
           const message = `処理が ${MAX_ATTEMPTS} 回とも時間内に終わりませんでした。`;
           if (stage === 'summarize' && this.abandonReview(r, message, now)) continue;
@@ -411,7 +506,7 @@ export class MinutesStore {
       if (!waiting) return null;
       const r = this.db.prepare(`SELECT * FROM meetings WHERE stage IN (${waiting}) ORDER BY created_at, id LIMIT 1`).get() as RawRow | undefined;
       if (!r) return null;
-      const stage: WorkerStage = r.stage === 'transcribe_wait' ? 'transcribe' : 'summarize';
+      const stage: MeetingWorkStage = r.stage === 'transcribe_wait' ? 'transcribe' : 'summarize';
       const token = randomBytes(18).toString('base64url');
       this.db
         .prepare('UPDATE meetings SET stage=?, lease_token=?, lease_until=?, attempts=attempts+1, error=NULL, failed_stage=NULL WHERE id=?')
@@ -421,13 +516,13 @@ export class MinutesStore {
   }
 
   /** Pushes the lease out to `untilMs` (never pulls it in) while the worker holds the stage with this lease. */
-  renewLease(id: string, stage: WorkerStage, token: string, untilMs: number): boolean {
+  renewLease(id: string, stage: MeetingWorkStage, token: string, untilMs: number): boolean {
     const r = this.db.prepare('UPDATE meetings SET lease_until=MAX(lease_until, ?) WHERE id=? AND stage=? AND lease_token=?').run(untilMs, id, `${stage}_run`, token);
     return Number(r.changes) > 0;
   }
 
   /** The row while the worker still holds this stage with this lease, else null (a late or repeated answer). */
-  private held(id: string, stage: WorkerStage, token: string): RawRow | null {
+  private held(id: string, stage: MeetingWorkStage, token: string): RawRow | null {
     const r = this.db.prepare('SELECT * FROM meetings WHERE id=?').get(id) as RawRow | undefined;
     if (!r || r.stage !== `${stage}_run` || r.lease_token !== token) return null;
     return r;
@@ -452,14 +547,18 @@ export class MinutesStore {
       this.db
         .prepare("UPDATE meetings SET stage='summarize_wait', transcript_json=?, attempts=0, lease_token=NULL, lease_until=NULL, updated_at=? WHERE id=?")
         .run(JSON.stringify(transcript), now, id);
+      // Guesses made for a transcript that is no longer there.
+      this.db.prepare('DELETE FROM meeting_suggestions WHERE meeting_id=?').run(id);
       this.history(id, now, 'worker', 'transcribed', null);
       return true;
     });
   }
 
-  completeDraft(id: string, token: string, draft: MinutesDraft, body: string, now: string): boolean {
+  /** The first draft; `suggestTargets` (the segments to listen to again) are queued for the AI's guesses at once. */
+  completeDraft(id: string, token: string, draft: MinutesDraft, body: string, now: string, suggestTargets: number[] = []): boolean {
     return this.tx(() => {
       if (!this.held(id, 'summarize', token)) return false;
+      if (suggestTargets.length > 0) this.queueSuggestions(id, suggestTargets, 'worker', now);
       this.db
         .prepare("UPDATE meetings SET stage='draft', draft_json=?, body=?, ai_body=?, version=version+1, attempts=0, lease_token=NULL, lease_until=NULL, updated_at=? WHERE id=?")
         .run(JSON.stringify(draft), body, body, now, id);
@@ -487,7 +586,7 @@ export class MinutesStore {
     });
   }
 
-  fail(id: string, token: string, stage: WorkerStage, message: string, now: string): boolean {
+  fail(id: string, token: string, stage: MeetingWorkStage, message: string, now: string): boolean {
     return this.tx(() => {
       const r = this.held(id, stage, token);
       if (!r) return false;
@@ -555,7 +654,11 @@ export class MinutesStore {
       if (!r.transcript || !segment) return 'no-segment';
       if (segment.text !== expectedText) return 'conflict';
       const segments = r.transcript.segments.slice();
-      segments[index] = { ...segment, text, checked: { original: segment.checked?.original ?? segment.text, by: actor, at: now } };
+      const original = segment.checked?.original ?? segment.text;
+      // Confirmed as the AI guessed it (and not as it was heard): kept apart from a correction a person typed.
+      const guess = this.suggestion(id)?.items[index];
+      const ai = !!guess && guess.heard === segment.text && guess.text === text && text !== original;
+      segments[index] = { ...segment, text, checked: { original, by: actor, at: now, ...(ai ? { ai: true as const } : {}) } };
       this.db.prepare('UPDATE meetings SET transcript_json=?, updated_by=?, updated_at=? WHERE id=?').run(JSON.stringify({ ...r.transcript, segments }), actor, now, id);
       this.history(id, now, actor, 'segment', JSON.stringify({ index, text: segment.text }));
       return this.get(id)!;
@@ -674,8 +777,154 @@ export class MinutesStore {
       this.db.prepare('UPDATE meeting_history SET before_body=NULL WHERE meeting_id=?').run(id);
       this.db.prepare('DELETE FROM meeting_reviews WHERE meeting_id=?').run(id);
       this.db.prepare('DELETE FROM meeting_versions WHERE meeting_id=?').run(id);
+      this.db.prepare('DELETE FROM meeting_suggestions WHERE meeting_id=?').run(id);
       this.history(id, now, actor, 'delete', null);
       return r;
+    });
+  }
+
+  // ---- the AI's guesses for the segments to listen to again (2026-11-10)
+
+  suggestion(id: string): SuggestionRow | null {
+    const r = this.db.prepare('SELECT * FROM meeting_suggestions WHERE meeting_id=?').get(id) as RawSuggestion | undefined;
+    return r ? suggestionFromRaw(r) : null;
+  }
+
+  /**
+   * Queues the guesses for `targets` (asked again: from the start, the guesses made before stay until a new one
+   * replaces them). Inside a transaction of the caller.
+   */
+  private queueSuggestions(id: string, targets: number[], actor: string, now: string): void {
+    this.db
+      .prepare(
+        `INSERT INTO meeting_suggestions(meeting_id,status,attempts,lease_token,lease_until,part_end,requested_by,requested_at,done_at,error,targets_json,done,items_json)
+         VALUES(?,'wait',0,NULL,NULL,NULL,?,?,NULL,NULL,?,0,'{}')
+         ON CONFLICT(meeting_id) DO UPDATE SET status='wait', attempts=0, lease_token=NULL, lease_until=NULL, part_end=NULL, requested_by=excluded.requested_by,
+           requested_at=excluded.requested_at, done_at=NULL, error=NULL, targets_json=excluded.targets_json, done=0`,
+      )
+      .run(id, actor, now, JSON.stringify(targets));
+  }
+
+  /**
+   * A person asks for the guesses while the minutes are a draft. After a failure the guessing goes on from where it
+   * stopped; otherwise it starts again over `targets` (the segments still to be checked now).
+   */
+  requestSuggestions(id: string, targets: number[], actor: string, now: string): MeetingRow | null | 'locked' | 'busy' | 'none' {
+    return this.tx(() => {
+      const r = this.get(id);
+      if (!r) return null;
+      if (r.stage !== 'draft' || !r.transcript) return 'locked';
+      const s = this.suggestion(id);
+      if (s && (s.status === 'wait' || s.status === 'run')) return 'busy';
+      if (s && s.status === 'failed' && s.done < s.targets.length) {
+        this.db.prepare("UPDATE meeting_suggestions SET status='wait', attempts=0, error=NULL, requested_by=?, requested_at=? WHERE meeting_id=?").run(actor, now, id);
+      } else {
+        if (targets.length === 0) return 'none';
+        this.queueSuggestions(id, targets, actor, now);
+      }
+      this.history(id, now, actor, 'suggest', null);
+      return this.get(id)!;
+    });
+  }
+
+  /**
+   * Gives the worker the next part of the oldest waiting guesses of a meeting that is a draft (a part held too long
+   * goes back to waiting, or fails after MAX_ATTEMPTS). Segments checked since they were queued are skipped.
+   */
+  claimSuggestion(nowMs: number, now: string, part = SUGGEST_PART): ClaimedSuggestion | null {
+    return this.tx(() => {
+      const expired = this.db.prepare("SELECT * FROM meeting_suggestions WHERE status='run' AND lease_until < ?").all(nowMs) as unknown as RawSuggestion[];
+      for (const r of expired) {
+        if (Number(r.attempts) >= MAX_ATTEMPTS) {
+          this.db
+            .prepare("UPDATE meeting_suggestions SET status='failed', error=?, lease_token=NULL, lease_until=NULL, part_end=NULL WHERE meeting_id=?")
+            .run(`AI の案づくりが ${MAX_ATTEMPTS} 回とも時間内に終わりませんでした。`, r.meeting_id);
+        } else {
+          this.db.prepare("UPDATE meeting_suggestions SET status='wait', lease_token=NULL, lease_until=NULL, part_end=NULL WHERE meeting_id=?").run(r.meeting_id);
+        }
+      }
+      const waiting = this.db
+        .prepare("SELECT s.* FROM meeting_suggestions s JOIN meetings m ON m.id=s.meeting_id WHERE s.status='wait' AND m.stage='draft' ORDER BY s.requested_at, s.meeting_id")
+        .all() as unknown as RawSuggestion[];
+      for (const raw of waiting) {
+        const s = suggestionFromRaw(raw);
+        const row = this.get(s.meetingId)!;
+        const segments = row.transcript?.segments ?? [];
+        let start = s.done;
+        let end = start;
+        let targets: number[] = [];
+        // Parts whose segments were all checked meanwhile are passed over.
+        while (start < s.targets.length && targets.length === 0) {
+          end = Math.min(s.targets.length, start + part);
+          targets = s.targets.slice(start, end).filter((i) => segments[i] && !segments[i]!.checked && segments[i]!.text.trim());
+          if (targets.length === 0) start = end;
+        }
+        if (targets.length === 0) {
+          this.db.prepare("UPDATE meeting_suggestions SET status='done', done=?, done_at=?, attempts=0 WHERE meeting_id=?").run(s.targets.length, now, s.meetingId);
+          continue;
+        }
+        const token = randomBytes(18).toString('base64url');
+        this.db
+          .prepare("UPDATE meeting_suggestions SET status='run', lease_token=?, lease_until=?, part_end=?, done=?, attempts=attempts+1, error=NULL WHERE meeting_id=?")
+          .run(token, nowMs + LEASE_MS.suggest, end, start, s.meetingId);
+        return { row, leaseToken: token, targets, done: start, total: s.targets.length };
+      }
+      return null;
+    });
+  }
+
+  /** The guesses of the meeting while the worker holds a part of them with this lease, else null. */
+  private heldSuggestion(id: string, token: string): SuggestionRow | null {
+    const s = this.suggestion(id);
+    return s && s.status === 'run' && s.leaseToken === token ? s : null;
+  }
+
+  holdsSuggestion(id: string, token: string): boolean {
+    return this.heldSuggestion(id, token) !== null;
+  }
+
+  renewSuggestionLease(id: string, token: string, untilMs: number): boolean {
+    const r = this.db.prepare("UPDATE meeting_suggestions SET lease_until=MAX(lease_until, ?) WHERE meeting_id=? AND status='run' AND lease_token=?").run(untilMs, id, token);
+    return Number(r.changes) > 0;
+  }
+
+  /**
+   * The guesses of a part: kept for the segments that still read as the worker was given them and are not checked
+   * (a person who corrected one meanwhile is not overruled). The guessing goes on with the next part, or is done.
+   */
+  completeSuggestions(id: string, token: string, guesses: { index: number; heard: string; text: string }[], now: string): boolean {
+    return this.tx(() => {
+      const s = this.heldSuggestion(id, token);
+      if (!s) return false;
+      const segments = this.get(id)?.transcript?.segments ?? [];
+      const items = { ...s.items };
+      for (const g of guesses) {
+        const segment = segments[g.index];
+        if (segment && !segment.checked && segment.text === g.heard && g.text) items[g.index] = { heard: g.heard, text: g.text };
+      }
+      const done = Math.min(s.targets.length, s.partEnd ?? s.done);
+      const finished = done >= s.targets.length;
+      this.db
+        .prepare('UPDATE meeting_suggestions SET status=?, done=?, done_at=?, attempts=0, lease_token=NULL, lease_until=NULL, part_end=NULL, items_json=? WHERE meeting_id=?')
+        .run(finished ? 'done' : 'wait', done, finished ? now : null, JSON.stringify(items), id);
+      return true;
+    });
+  }
+
+  /**
+   * A part the worker could not guess for (the AI failed, or answered out of form): tried again with the next claim,
+   * and the guessing stops only after MAX_ATTEMPTS failures of the same part (a person may ask again from there).
+   */
+  failSuggestions(id: string, token: string, message: string, now: string): boolean {
+    return this.tx(() => {
+      const s = this.heldSuggestion(id, token);
+      if (!s) return false;
+      const stop = s.attempts >= MAX_ATTEMPTS;
+      this.db
+        .prepare('UPDATE meeting_suggestions SET status=?, error=?, lease_token=NULL, lease_until=NULL, part_end=NULL WHERE meeting_id=?')
+        .run(stop ? 'failed' : 'wait', message, id);
+      if (stop) this.history(id, now, 'worker', 'suggest-failed', null);
+      return true;
     });
   }
 

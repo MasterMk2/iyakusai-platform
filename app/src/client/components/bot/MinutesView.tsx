@@ -33,6 +33,9 @@ import { MinutesVersions } from './MinutesVersions';
 
 const PROCESSING: MinutesStage[] = ['transcribe_wait', 'transcribe_run', 'summarize_wait', 'summarize_run'];
 const POLL_MS = 15_000;
+/** Reading the meeting again while the AI makes its guesses (the whole transcript comes each time, so not too often). */
+const SUGGEST_POLL_MS = 30_000;
+const SUGGEST_FOLLOW_MS = 30 * 60_000;
 
 const stageTone = (stage: MinutesStage) => (stage === 'confirmed' ? 'ok' : stage === 'draft' ? 'warn' : stage === 'failed' ? 'error' : 'info');
 const mb = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
@@ -710,6 +713,21 @@ function MinutesDetailView({ meetingId, people, onBack }: { meetingId: string; p
     const timer = setInterval(retry, POLL_MS);
     return () => clearInterval(timer);
   }, [processing, retry]);
+
+  // While the AI makes its guesses (a part every minute or two), the meeting is read again now and then, so the guesses
+  // appear in the list as they come (2026-11-10). A run that does not move for half an hour (no worker takes it) is not
+  // followed any further; the screen says it is waiting, and opening the meeting again looks once more.
+  const guessing = m?.suggest?.status === 'wait' || m?.suggest?.status === 'run';
+  // Each step (a part done, or the state changing) starts the half hour again.
+  const guessStep = m?.suggest ? `${m.suggest.status}:${m.suggest.done}` : '';
+  useEffect(() => {
+    if (!guessing || processing) return;
+    const since = Date.now();
+    const timer = setInterval(() => {
+      if (Date.now() - since < SUGGEST_FOLLOW_MS) retry();
+    }, SUGGEST_POLL_MS);
+    return () => clearInterval(timer);
+  }, [guessing, processing, retry, guessStep]);
 
   // The editor starts from the saved minutes, and follows them when nothing was typed since.
   const editing = body && m && body.base === m.version ? body.text : (m?.body ?? '');

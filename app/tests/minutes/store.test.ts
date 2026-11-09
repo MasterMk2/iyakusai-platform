@@ -166,3 +166,102 @@ describe('the checks of the AI draft', () => {
     expect(() => draftSchema.parse({ unknown: 1 })).toThrow();
   });
 });
+
+// The AI's guesses for the segments to listen to again (2026-11-10).
+describe("the AI's guesses, a part at a time beside the draft", () => {
+  const segs = Array.from({ length: 5 }, (_, i) => ({ start: i * 10, end: i * 10 + 5, text: `合成の発言その${i + 1}です。` }));
+
+  /** A meeting through its first draft, with the guesses queued for `targets`. */
+  function toDraft(targets: number[]): string {
+    const id = newMeetingId();
+    store.create(id, meeting, 'u1', iso(T0));
+    const t = store.claim(['transcribe'], T0, iso(T0))!;
+    store.completeTranscript(id, t.leaseToken, { segments: segs, durationSec: 60, model: 'large-v3' }, iso(T0));
+    const s = store.claim(['summarize'], T0, iso(T0))!;
+    expect(store.completeDraft(id, s.leaseToken, emptyDraft, '本文', iso(T0), targets)).toBe(true);
+    return id;
+  }
+
+  it('gives a part at a time, skips what people checked meanwhile, keeps each part as it comes, and marks a guess confirmed as it was', () => {
+    const id = toDraft([0, 1, 2, 3, 4]);
+    expect(store.suggestion(id)).toMatchObject({ status: 'wait', targets: [0, 1, 2, 3, 4], done: 0, requestedBy: 'worker', items: {} });
+    const p1 = store.claimSuggestion(T0, iso(T0), 2)!;
+    expect(p1).toMatchObject({ targets: [0, 1], done: 0, total: 5 });
+    // One part of a meeting at a time.
+    expect(store.claimSuggestion(T0, iso(T0), 2)).toBeNull();
+    expect(store.completeSuggestions(id, 'not-the-lease', [], iso(T0))).toBe(false);
+    // A guess for a text that is not the segment's is dropped.
+    expect(store.completeSuggestions(id, p1.leaseToken, [{ index: 0, heard: segs[0]!.text, text: '合成の案その1です。' }, { index: 1, heard: '別の文', text: '案' }], iso(T0))).toBe(true);
+    expect(store.completeSuggestions(id, p1.leaseToken, [], iso(T0))).toBe(false);
+    expect(store.suggestion(id)).toMatchObject({ status: 'wait', done: 2, items: { 0: { heard: segs[0]!.text, text: '合成の案その1です。' } } });
+    expect(store.suggestion(id)!.items[1]).toBeUndefined();
+
+    // People check segments 2 and 3 meanwhile: the next part starts at 4.
+    store.checkSegment(id, 2, segs[2]!.text, segs[2]!.text, 'u2', iso(T0));
+    store.checkSegment(id, 3, segs[3]!.text, '人が直した文。', 'u2', iso(T0));
+    const p2 = store.claimSuggestion(T0, iso(T0), 2)!;
+    expect(p2).toMatchObject({ targets: [4], done: 4, total: 5 });
+    expect(store.completeSuggestions(id, p2.leaseToken, [{ index: 4, heard: segs[4]!.text, text: segs[4]!.text }], iso(T0 + 1000))).toBe(true);
+    expect(store.suggestion(id)).toMatchObject({ status: 'done', done: 5, doneAt: iso(T0 + 1000), leaseToken: null });
+    expect(store.claimSuggestion(T0, iso(T0), 2)).toBeNull();
+
+    // Confirmed as the AI guessed it: marked. Typed by a person, or confirmed as heard: not.
+    store.checkSegment(id, 0, segs[0]!.text, '合成の案その1です。', 'u2', iso(T0));
+    const after = store.get(id)!.transcript!.segments;
+    expect(after[0]!.checked).toMatchObject({ original: segs[0]!.text, by: 'u2', ai: true });
+    expect(after[2]!.checked!.ai).toBeUndefined();
+    expect(after[3]!.checked!.ai).toBeUndefined();
+    // Asked again with nothing left to guess for.
+    expect(store.requestSuggestions(id, [], 'u2', iso(T0))).toBe('none');
+  });
+
+  it('puts a part held too long back, fails after the last attempt, and goes on from where it stopped when asked', () => {
+    const id = toDraft([0, 1, 2]);
+    for (let i = 0; i < MAX_ATTEMPTS; i++) {
+      const at = T0 + i * (LEASE_MS.suggest + 1);
+      expect(store.claimSuggestion(at, iso(at), 2)).toMatchObject({ targets: [0, 1], done: 0 });
+    }
+    const late = T0 + MAX_ATTEMPTS * (LEASE_MS.suggest + 1);
+    expect(store.claimSuggestion(late, iso(late), 2)).toBeNull();
+    expect(store.suggestion(id)).toMatchObject({ status: 'failed', done: 0, leaseToken: null });
+    expect(store.suggestion(id)!.error).toContain('時間内に終わりませんでした');
+
+    // Asked again after a failure: on from where it stopped, over the segments queued before.
+    expect(store.requestSuggestions(id, [2], 'u2', iso(late))).toMatchObject({ id });
+    expect(store.suggestion(id)).toMatchObject({ status: 'wait', targets: [0, 1, 2], attempts: 0, error: null, requestedBy: 'u2' });
+    expect(store.requestSuggestions(id, [2], 'u2', iso(late))).toBe('busy');
+    const p = store.claimSuggestion(late, iso(late), 2)!;
+    // A report of the worker pushes the lease out.
+    expect(store.renewSuggestionLease(id, p.leaseToken, late + 10 * LEASE_MS.suggest)).toBe(true);
+    expect(store.claimSuggestion(late + 2 * LEASE_MS.suggest, iso(late), 2)).toBeNull();
+    expect(store.failSuggestions(id, 'not-the-lease', '失敗', iso(late))).toBe(false);
+    // A part the AI failed on is tried again, and stops the guessing only after the last attempt.
+    expect(store.failSuggestions(id, p.leaseToken, 'Claude CLI が異常終了しました', iso(late))).toBe(true);
+    expect(store.suggestion(id)).toMatchObject({ status: 'wait', attempts: 1 });
+    for (let i = 1; i < MAX_ATTEMPTS; i++) {
+      const again = store.claimSuggestion(late, iso(late), 2)!;
+      expect(again).toMatchObject({ targets: [0, 1], done: 0 });
+      store.failSuggestions(id, again.leaseToken, 'Claude CLI が異常終了しました', iso(late));
+    }
+    expect(store.suggestion(id)).toMatchObject({ status: 'failed', attempts: MAX_ATTEMPTS, error: 'Claude CLI が異常終了しました' });
+    expect(store.claimSuggestion(late, iso(late), 2)).toBeNull();
+    // On from where it stopped again; once all are done, asking again starts over the segments still to be checked.
+    store.requestSuggestions(id, [1], 'u2', iso(late));
+    for (let part = store.claimSuggestion(late, iso(late), 2); part; part = store.claimSuggestion(late, iso(late), 2)) store.completeSuggestions(id, part.leaseToken, [], iso(late));
+    expect(store.suggestion(id)).toMatchObject({ status: 'done', done: 3, targets: [0, 1, 2] });
+    store.requestSuggestions(id, [1], 'u2', iso(late));
+    expect(store.suggestion(id)).toMatchObject({ status: 'wait', targets: [1], done: 0 });
+  });
+
+  it('waits while the draft is reworked, and forgets the guesses with a new transcript or the meeting', () => {
+    const id = toDraft([0]);
+    expect(store.sendBack(id, store.get(id)!.version, '要点を短く', 10, 'u1', iso(T0))).toMatchObject({ stage: 'summarize_wait' });
+    expect(store.claimSuggestion(T0, iso(T0))).toBeNull();
+    expect(store.requestSuggestions(id, [0], 'u1', iso(T0))).toBe('locked');
+    expect(store.suggestion(id)).toMatchObject({ status: 'wait' });
+    store.delete(id, 'u1', iso(T0));
+    expect(store.suggestion(id)).toBeNull();
+    // A draft with nothing to listen to again queues nothing.
+    expect(store.suggestion(toDraft([]))).toBeNull();
+  });
+});

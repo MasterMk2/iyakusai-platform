@@ -17,6 +17,8 @@ import {
   MINUTES_UPLOAD_HEAD_BYTES,
   MINUTES_VISIBILITIES,
   sizeLabel,
+  suggestTargets,
+  unclearTimes,
   type MinutesAudioExtension,
   type MinutesDetail,
   type MinutesListResponse,
@@ -39,8 +41,8 @@ import type { MailSession } from '../mailbox/routes.js';
 import type { People } from '../mailbox/service.js';
 import { MAX_SKEW_MS, verifySignature } from '../tasks/signing.js';
 import type { MinutesConfig } from './config.js';
-import { fixedSegment } from './fixes.js';
-import { LEASE_RENEW_MS, MinutesStore, newMeetingId, type MeetingRow, type StoredTranscript, type WorkerStage } from './store.js';
+import { fixedSegment, fixTranscriptText } from './fixes.js';
+import { LEASE_RENEW_MS, MinutesStore, newMeetingId, type MeetingRow, type MeetingWorkStage, type StoredTranscript, type SuggestionRow, type WorkerStage } from './store.js';
 import { checkedDraft, draftSchema, transcriptSchema } from './validate.js';
 
 // Meeting minutes (α, 2026-11-02). Browser routes under /api/minutes (Discord login, committee members only, like
@@ -53,7 +55,9 @@ import { checkedDraft, draftSchema, transcriptSchema } from './validate.js';
 // review); its title, date and readers are changed (2026-11-05), and it is deleted, by the recorder or an access
 // administrator. Whoever reads it may correct the draft, send it back to the AI with a comment, correct the
 // transcript, confirm it, and start a correction of the confirmed minutes (2026-11-06): every confirmed version is
-// kept, so a correction never loses what was confirmed before.
+// kept, so a correction never loses what was confirmed before. The AI's guesses for the segments to listen to again
+// (2026-11-10) are made by the same worker after the draft, a part at a time; whoever may correct the transcript may
+// ask for them again.
 
 export const WORKER_CLIENT = 'iyakusai-minutes-worker';
 export const WORKER_PATHS = {
@@ -157,12 +161,13 @@ interface Upload {
   finalizing?: boolean;
 }
 
-const claimBody = z.strictObject({ stages: z.array(z.enum(['transcribe', 'summarize'])).min(1).max(2) });
+/** `suggest` (2026-11-10) is asked for on its own after the meeting's stages; an app of before refuses the name. */
+const claimBody = z.strictObject({ stages: z.array(z.enum(['transcribe', 'summarize', 'suggest'])).min(1).max(3) });
 const audioBody = z.strictObject({ id: z.string().regex(/^mt_[0-9a-f]{16}$/), leaseToken: z.string().min(16).max(64) });
 const resultBody = z.strictObject({
   id: z.string().regex(/^mt_[0-9a-f]{16}$/),
   leaseToken: z.string().min(16).max(64),
-  stage: z.enum(['transcribe', 'summarize']),
+  stage: z.enum(['transcribe', 'summarize', 'suggest']),
   transcript: transcriptSchema.optional(),
   draft: draftSchema.optional(),
   error: z.string().max(500).optional(),
@@ -170,19 +175,24 @@ const resultBody = z.strictObject({
   reviewId: z.number().int().min(1).optional(),
   /** What the AI says it changed for the comment. */
   reply: z.string().max(MINUTES_LIMITS.reply * 4).optional(),
+  /** The AI's guesses of a part (2026-11-10): the segment, its text as given, and the guess (the same text: nothing to change). */
+  suggestions: z
+    .array(z.strictObject({ index: z.number().int().min(0).max(MINUTES_LIMITS.segments), heard: z.string().max(MINUTES_LIMITS.segmentText), text: z.string().max(MINUTES_LIMITS.segmentText) }))
+    .max(MINUTES_LIMITS.segments)
+    .optional(),
 });
-/** transcribe: seconds of the recording; summarize: parts of the transcript. */
+/** transcribe: seconds of the recording; summarize: parts of the transcript; suggest: the part (it keeps the lease). */
 const progressBody = z.strictObject({
   id: z.string().regex(/^mt_[0-9a-f]{16}$/),
   leaseToken: z.string().min(16).max(64),
-  stage: z.enum(['transcribe', 'summarize']),
+  stage: z.enum(['transcribe', 'summarize', 'suggest']),
   done: z.number().min(0).max(1_000_000),
   total: z.number().positive().max(1_000_000).nullable(),
 });
 
 /** A stage's progress as the worker reported it, with where the pace is counted from. */
 interface Reported {
-  stage: WorkerStage;
+  stage: MeetingWorkStage;
   leaseToken: string;
   done: number;
   total: number | null;
@@ -264,12 +274,44 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
    */
   const registeredDecisions = (row: MeetingRow) => deps.decisions?.countByTokenPrefix(minutesTokenPrefix(row.id)) ?? 0;
 
-  /** The transcript as the screen gets it: who checked a segment by name, not by ID. */
-  const shownTranscript = (t: StoredTranscript | null) =>
+  /**
+   * The transcript as the screen gets it: who checked a segment by name, not by ID, and the AI's guess on a segment
+   * still to be checked that reads as the guess was made for (2026-11-10).
+   */
+  const shownTranscript = (t: StoredTranscript | null, guesses: SuggestionRow['items'] = {}) =>
     t && {
       ...t,
-      segments: t.segments.map(({ checked, ...s }): TranscriptSegment => (checked ? { ...s, checked: { original: checked.original, at: checked.at, byName: nameOf(checked.by) } } : s)),
+      segments: t.segments.map(({ checked, ...s }, i): TranscriptSegment => {
+        if (checked) return { ...s, checked: { original: checked.original, at: checked.at, byName: nameOf(checked.by), ...(checked.ai ? { ai: true } : {}) } };
+        const guess = guesses[i];
+        return guess && guess.heard === s.text ? { ...s, suggestion: guess.text } : s;
+      }),
     };
+
+  /** The state of the AI's guesses, with how many segments now show one that changes the text and one that does not. */
+  const suggestOf = (row: MeetingRow, s: SuggestionRow | null): MinutesDetail['suggest'] => {
+    if (!s) return null;
+    let changed = 0;
+    let unchanged = 0;
+    row.transcript?.segments.forEach((seg, i) => {
+      const g = s.items[i];
+      if (!seg.checked && g && g.heard === seg.text) {
+        if (g.text === seg.text) unchanged++;
+        else changed++;
+      }
+    });
+    return {
+      status: s.status,
+      requestedAt: s.requestedAt,
+      requestedByName: s.requestedBy === 'worker' ? '下書きのあと自動' : nameOf(s.requestedBy),
+      doneAt: s.doneAt,
+      error: s.status === 'failed' ? s.error : null,
+      done: s.done,
+      total: s.targets.length,
+      changed,
+      unchanged,
+    };
+  };
 
   function visible(request: FastifyRequest): { user: User; row: MeetingRow } {
     const user = member(request);
@@ -284,7 +326,7 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
   // within seconds after a restart. A report counts only while its lease still holds the stage, so a report of a lease
   // that ran out (and was claimed again) is not shown.
   const reported = new Map<string, Reported>();
-  const holds = (row: MeetingRow, p: { stage: WorkerStage; leaseToken: string }) => row.stage === `${p.stage}_run` && row.leaseToken === p.leaseToken;
+  const holds = (row: MeetingRow, p: { stage: MeetingWorkStage; leaseToken: string }) => row.stage === `${p.stage}_run` && row.leaseToken === p.leaseToken;
 
   const progressOf = (row: MeetingRow): MinutesProgress | null => {
     const p = reported.get(row.id);
@@ -307,6 +349,7 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
     const reopened = row.stage === 'draft' && versions.length > 0;
     const draftStage = row.stage === 'draft';
     const used = reviews.filter((r) => r.status !== 'failed').length;
+    const guesses = store.suggestion(row.id);
     return {
       id: row.id,
       title: row.title,
@@ -322,7 +365,7 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
       confirmedByName: row.confirmedBy ? nameOf(row.confirmedBy) : null,
       confirmedAt: row.confirmedAt,
       audio: { present: !row.audioDeletedAt, bytes: row.audioBytes, deletesAt: keeps, deletedAt: row.audioDeletedAt },
-      transcript: shownTranscript(row.transcript),
+      transcript: shownTranscript(row.transcript, guesses?.items),
       draft: row.draft,
       body: row.body,
       version: row.version,
@@ -332,6 +375,7 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
       bodyEdited: row.aiBody === null ? row.body.trim() !== '' : row.body !== row.aiBody,
       reviews: reviews.map((r) => ({ id: r.id, at: r.at, byName: nameOf(r.actorId), comment: r.comment, status: r.status, reply: r.reply, error: r.error, doneAt: r.doneAt })),
       versions: versions.map((v) => ({ no: v.no, confirmedByName: nameOf(v.confirmedBy), confirmedAt: v.confirmedAt, note: v.note })),
+      suggest: suggestOf(row, guesses),
       can: {
         edit: draftStage,
         confirm: draftStage,
@@ -343,6 +387,7 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
         check: draftStage && !!row.transcript,
         reopen: row.stage === 'confirmed',
         discard: reopened,
+        suggest: draftStage && !!row.transcript && guesses?.status !== 'wait' && guesses?.status !== 'run',
       },
     };
   };
@@ -708,6 +753,19 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
     return detail(result, user);
   });
 
+  // The AI guesses again what was said in the segments still to be checked (2026-11-10), or goes on after it stopped.
+  // Whoever may correct the transcript may ask; one run at a time per meeting.
+  app.post('/api/minutes/:meetingId/suggest', async (request): Promise<MinutesDetail> => {
+    const { user, row } = visible(request);
+    const targets = row.transcript ? suggestTargets(row.transcript.segments, unclearTimes(row.draft)) : [];
+    const result = store.requestSuggestions(row.id, targets, user.id, deps.clock());
+    if (result === null) throw notFound();
+    if (result === 'locked') throw new DomainError('conflict', 'AI の案を作れるのは、下書き（訂正中を含む）の間だけです。');
+    if (result === 'busy') throw new DomainError('conflict', 'AI の案はいま作っているところです。終わるまでお待ちください。');
+    if (result === 'none') throw new DomainError('conflict', '聞き直す文が残っていないので、AI の案は作りません。');
+    return detail(result, user);
+  });
+
   // A correction of confirmed minutes (2026-11-06): the minutes are a draft again while the last confirmed version
   // still stands; confirming makes the next version, and dropping the correction goes back to the last version.
   app.post('/api/minutes/:meetingId/reopen', async (request): Promise<MinutesDetail> => {
@@ -873,7 +931,32 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
       } catch {
         return reply.code(401).send(REJECTED);
       }
-      const job = store.claim(stages, now(), deps.clock());
+      // A meeting's own stages first: the guesses never hold up a transcription or a summary waiting meanwhile.
+      const meetingStages = stages.filter((s): s is MeetingWorkStage => s !== 'suggest');
+      const job = meetingStages.length > 0 ? store.claim(meetingStages, now(), deps.clock()) : null;
+      if (!job && stages.includes('suggest')) {
+        const part = store.claimSuggestion(now(), deps.clock());
+        if (part) {
+          const { row } = part;
+          return reply.header('Cache-Control', 'no-store').send({
+            job: {
+              id: row.id,
+              stage: 'suggest',
+              leaseToken: part.leaseToken,
+              title: row.title,
+              heldOn: row.heldOn,
+              audio: null,
+              glossary: glossary(),
+              transcript: row.transcript && {
+                ...row.transcript,
+                segments: row.transcript.segments.map((s) => ({ start: s.start, end: s.end, text: s.text, ...(s.checked ? { checked: true } : {}) })),
+              },
+              // The AI's "要確認" items: free text, a time near the place (not always on the segment).
+              suggest: { targets: part.targets, hints: (row.draft?.unclear ?? []).map((u) => ({ text: u.text, at: u.at })), done: part.done, total: part.total },
+            },
+          });
+        }
+      }
       if (!job) return reply.header('Cache-Control', 'no-store').send({ job: null });
       const { row } = job;
       const pending = job.stage === 'summarize' ? store.pendingReview(row.id) : null;
@@ -941,6 +1024,19 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
       }
       const at = deps.clock();
       let ok: boolean;
+      if (body.stage === 'suggest') {
+        if (body.error !== undefined) {
+          ok = store.failSuggestions(body.id, body.leaseToken, body.error.replace(/\s+/g, ' ').trim() || 'AI の案づくりに失敗しました。', at);
+        } else if (body.suggestions) {
+          // One line, as a corrected segment is kept; the fixed misreadings (共産→協賛 …) apply to a guess too.
+          const guesses = body.suggestions.map((g) => ({ index: g.index, heard: g.heard, text: fixTranscriptText(g.text.replace(/\s+/g, ' ').trim()).slice(0, MINUTES_LIMITS.segmentText) }));
+          ok = store.completeSuggestions(body.id, body.leaseToken, guesses, at);
+        } else {
+          return reply.code(400).send({ error: 'invalid', issues: ['suggestions or error is required for the stage'] });
+        }
+        if (!ok) return reply.code(409).send({ error: 'not_held' });
+        return reply.header('Cache-Control', 'no-store').send({ ok: true });
+      }
       if (body.error !== undefined) {
         ok = store.fail(body.id, body.leaseToken, body.stage, body.error.replace(/\s+/g, ' ').trim() || '処理に失敗しました。', at);
       } else if (body.stage === 'transcribe' && body.transcript) {
@@ -954,7 +1050,9 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
         const draft = checkedDraft(row.transcript, body.draft);
         const pending = store.pendingReview(row.id);
         if (!pending) {
-          ok = store.completeDraft(body.id, body.leaseToken, draft, draftToMarkdown(row.title, row.heldOn, draft), at);
+          // The AI's guesses for the segments to listen to again follow the first draft (2026-11-10).
+          const targets = suggestTargets(row.transcript.segments, unclearTimes(draft));
+          ok = store.completeDraft(body.id, body.leaseToken, draft, draftToMarkdown(row.title, row.heldOn, draft), at, targets);
         } else if (body.reviewId === pending.id) {
           // The body is written anew from the reworked draft; the attendees a person wrote are carried over.
           const next = carryOverAttendees(row.body, draftToMarkdown(row.title, row.heldOn, draft));
@@ -983,11 +1081,17 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
       } catch {
         return reply.code(401).send(REJECTED);
       }
+      // A part of the guesses is one call of the AI: its report only keeps the lease (the screen counts the parts done).
+      if (body.stage === 'suggest') {
+        if (!store.renewSuggestionLease(body.id, body.leaseToken, now() + LEASE_RENEW_MS.suggest)) return reply.code(409).send({ error: 'not_held' });
+        return reply.header('Cache-Control', 'no-store').send({ ok: true });
+      }
+      const stage = body.stage;
       const row = store.get(body.id);
-      if (!row || !holds(row, body)) return reply.code(409).send({ error: 'not_held' });
+      if (!row || !holds(row, { stage, leaseToken: body.leaseToken })) return reply.code(409).send({ error: 'not_held' });
       // A worker that reports is still at it: its lease is pushed out (2026-11-07), so a slow machine is never
       // overtaken by its own lease; one that stops reporting loses the stage as before.
-      store.renewLease(row.id, body.stage, body.leaseToken, now() + LEASE_RENEW_MS[body.stage]);
+      store.renewLease(row.id, stage, body.leaseToken, now() + LEASE_RENEW_MS[stage]);
       if (!reported.has(row.id) && reported.size >= MAX_REPORTED) {
         for (const [id, p] of reported) {
           const r = store.get(id);
@@ -997,9 +1101,9 @@ export function registerMinutesRoutes(app: FastifyInstance, config: MinutesConfi
       }
       const at = now();
       const prev = reported.get(row.id);
-      const same = prev && prev.stage === body.stage && prev.leaseToken === body.leaseToken && body.done >= prev.firstDone;
+      const same = prev && prev.stage === stage && prev.leaseToken === body.leaseToken && body.done >= prev.firstDone;
       reported.set(row.id, {
-        stage: body.stage,
+        stage,
         leaseToken: body.leaseToken,
         done: body.done,
         total: body.total,
