@@ -62,6 +62,9 @@ async function syntheticWorkspace(page: Page, options: { role?: 'viewer' | 'edit
     if (path === '/api/contacts/by-address') return respond([]);
     // The decision register (2026-11-03) is off on this synthetic server (no 「決定として登録」 in the thread).
     if (path === '/api/decisions/meta') return respond({ enabled: false, canRegister: false, canAdminister: false, departments: [] });
+    // The Bot (2026-11-09: the task view asks once whether it can draft tasks) is off on this synthetic server, as the
+    // server answers without SMM_ASSISTANT_MODE: no 「Bot に下書きを頼む」 above the create form.
+    if (path === '/api/assistant/meta' && request.method() === 'GET') return respond({ error: 'ASSISTANT_DISABLED', message: 'Bot 機能はこのサーバーでは有効になっていません。' }, 404);
     if (path === '/api/mailboxes') return respond(boxes.map((b, i) => ({ ...b, access: 'edit', threadCount: i ? 1 : 3, unhandledCount: i ? 0 : 1 })));
     if (path === '/api/tasks/context') return respond({ enabled: true, bound: true, tagging: true, memberships: [{ workspace: { id: WORKSPACE, name: '総務部', description: '' }, role }, { workspace: { id: 'dept-koho', name: '広報課', description: '' }, role }] });
     if (path === '/api/rental/me') return respond({ permissions: [] });
