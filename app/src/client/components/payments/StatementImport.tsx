@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import type { BankStatementAvailability, BankStatementImportResponse } from '../../../shared/bank';
 import { CsvError, decodeCsvBytes, parseCsvRecords } from '../../../shared/organizations';
 import {
   guessHeaderRow,
@@ -29,7 +30,7 @@ interface Sheet {
   records: { line: number; cells: string[] }[];
 }
 
-export function StatementImport({ onDone, onCancel }: { onDone: (added: number) => void; onCancel: () => void }) {
+function CsvStatementImport({ onDone, onCancel }: { onDone: (added: number) => void; onCancel: () => void }) {
   const [sheet, setSheet] = useState<Sheet | null>(null);
   const [headerRow, setHeaderRow] = useState(0);
   const [mapping, setMapping] = useState<StatementMapping>({});
@@ -98,12 +99,8 @@ export function StatementImport({ onDone, onCancel }: { onDone: (added: number) 
     setPlan(null);
   };
 
-  const listed = plan ? plan.rows.filter((r) => r.action === 'new' || r.action === 'unreadable') : [];
-  const folded = plan ? plan.rows.filter((r) => r.action === 'duplicate' || r.action === 'withdrawal') : [];
-
   return (
-    <div className="pay-form" data-testid="accounting-statement-import">
-      <h2>入出金明細を取り込む</h2>
+    <div>
       <p className="hint">ネットバンキングの入出金明細を CSV で保存し、そのまま選んでください（Shift_JIS でも UTF-8 でも読めます）。入金の行だけを取り込みます。明細は会計の権限がある人だけが見られます。</p>
       {error && (
         <p className="status error" role="alert">
@@ -174,57 +171,186 @@ export function StatementImport({ onDone, onCancel }: { onDone: (added: number) 
         </>
       )}
 
-      {plan && (
-        <section className="pay-section" aria-labelledby="pay-plan-title">
-          <h3 id="pay-plan-title">下見の結果</h3>
-          <p className="status info" role="status">
-            新しい入金 {plan.counts.new} 件 · 取り込み済み {plan.counts.duplicate} 件 · 出金 {plan.counts.withdrawal} 件 · 読めない行 {plan.counts.unreadable} 件
-          </p>
-          {listed.length > 0 && (
-            <ul className="pay-plan" aria-label="新しい入金と読めない行">
-              {listed.map((r) => (
-                <li key={r.line}>
-                  <span className="pay-plan-head">
-                    <span>{r.line} 行目</span>
-                    <span className={`pay-badge ${r.action === 'unreadable' ? 'short' : ''}`}>{ACTION_LABEL[r.action]}</span>
-                    {r.bookedOn && <span>{r.bookedOn}</span>}
-                    {r.amountYen !== null && <span className="pay-amount">{yen(r.amountYen)}</span>}
-                  </span>
-                  {r.description && <span className="pay-desc">{r.description}</span>}
-                  {r.reason && <span className="hint">{r.reason}</span>}
-                </li>
-              ))}
-            </ul>
-          )}
-          {folded.length > 0 && (
-            <details>
-              <summary>取り込み済み・出金の行（{folded.length} 件）</summary>
-              <ul className="pay-plan">
-                {folded.map((r) => (
-                  <li key={r.line}>
-                    <span className="pay-plan-head">
-                      <span>{r.line} 行目</span>
-                      <span className="pay-badge">{ACTION_LABEL[r.action]}</span>
-                      {r.bookedOn && <span>{r.bookedOn}</span>}
-                      {r.amountYen !== null && <span className="pay-amount">{yen(r.amountYen)}</span>}
-                    </span>
-                    {r.description && <span className="pay-desc">{r.description}</span>}
-                  </li>
-                ))}
-              </ul>
-            </details>
-          )}
-          <div className="actions">
-            <button type="button" disabled={busy || plan.counts.new === 0} onClick={() => void send(false)} data-testid="accounting-import-commit">
-              {busy ? '取り込んでいます…' : `新しい入金 ${plan.counts.new} 件を取り込む`}
-            </button>
-            <button type="button" className="secondary" disabled={busy} onClick={() => setPlan(null)}>
-              列の対応を直す
-            </button>
-          </div>
-          {plan.counts.new === 0 && <p className="hint">新しい入金がないため、取り込むものがありません。</p>}
-        </section>
+      {plan && <PlanView plan={plan} unit="行目" busy={busy} onCommit={() => void send(false)} onBack={() => setPlan(null)} backLabel="列の対応を直す" />}
+    </div>
+  );
+}
+
+/** The 下見 of a statement (from a CSV or from the bank) and its 取り込む. */
+function PlanView({ plan, unit, busy, onCommit, onBack, backLabel }: { plan: StatementImportResponse; unit: string; busy: boolean; onCommit: () => void; onBack: () => void; backLabel: string }) {
+  const listed = plan.rows.filter((r) => r.action === 'new' || r.action === 'unreadable');
+  const folded = plan.rows.filter((r) => r.action === 'duplicate' || r.action === 'withdrawal');
+  return (
+    <section className="pay-section" aria-labelledby="pay-plan-title">
+      <h3 id="pay-plan-title">下見の結果</h3>
+      <p className="status info" role="status">
+        新しい入金 {plan.counts.new} 件 · 取り込み済み {plan.counts.duplicate} 件 · 出金 {plan.counts.withdrawal} 件 · 読めない行 {plan.counts.unreadable} 件
+      </p>
+      {listed.length > 0 && (
+        <ul className="pay-plan" aria-label="新しい入金と読めない行">
+          {listed.map((r) => (
+            <li key={r.line}>
+              <span className="pay-plan-head">
+                <span>
+                  {r.line} {unit}
+                </span>
+                <span className={`pay-badge ${r.action === 'unreadable' ? 'short' : ''}`}>{ACTION_LABEL[r.action]}</span>
+                {r.bookedOn && <span>{r.bookedOn}</span>}
+                {r.amountYen !== null && <span className="pay-amount">{yen(r.amountYen)}</span>}
+              </span>
+              {r.description && <span className="pay-desc">{r.description}</span>}
+              {r.reason && <span className="hint">{r.reason}</span>}
+            </li>
+          ))}
+        </ul>
       )}
+      {folded.length > 0 && (
+        <details>
+          <summary>取り込み済み・出金の行（{folded.length} 件）</summary>
+          <ul className="pay-plan">
+            {folded.map((r) => (
+              <li key={r.line}>
+                <span className="pay-plan-head">
+                  <span>
+                    {r.line} {unit}
+                  </span>
+                  <span className="pay-badge">{ACTION_LABEL[r.action]}</span>
+                  {r.bookedOn && <span>{r.bookedOn}</span>}
+                  {r.amountYen !== null && <span className="pay-amount">{yen(r.amountYen)}</span>}
+                </span>
+                {r.description && <span className="pay-desc">{r.description}</span>}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      <div className="actions">
+        <button type="button" disabled={busy || plan.counts.new === 0} onClick={onCommit} data-testid="accounting-import-commit">
+          {busy ? '取り込んでいます…' : `新しい入金 ${plan.counts.new} 件を取り込む`}
+        </button>
+        <button type="button" className="secondary" disabled={busy} onClick={onBack}>
+          {backLabel}
+        </button>
+      </div>
+      {plan.counts.new === 0 && <p className="hint">新しい入金がないため、取り込むものがありません。</p>}
+    </section>
+  );
+}
+
+const isoDay = (d: Date) => d.toLocaleDateString('sv-SE', { timeZone: 'Asia/Tokyo' });
+
+/** 銀行から: read the 入出金明細 of a period through the bank connection, with the same 下見 and 取り込み as a CSV. */
+function BankStatementImport({ onDone, onCancel }: { onDone: (added: number) => void; onCancel: () => void }) {
+  const [today] = useState(() => isoDay(new Date()));
+  const [dateFrom, setDateFrom] = useState(() => isoDay(new Date(Date.now() - 30 * 86_400_000)));
+  const [dateTo, setDateTo] = useState(today);
+  const [plan, setPlan] = useState<BankStatementImportResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const send = async (dryRun: boolean) => {
+    if (busy) return;
+    if (!dateFrom || !dateTo || dateFrom > dateTo) {
+      setError('期間は「から」が「まで」より前の日付になるように選んでください。');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const answer = await api<BankStatementImportResponse>('POST', '/api/payments/statements/bank', { dryRun, dateFrom, dateTo, ...(dryRun ? {} : { planToken: plan?.planToken }) });
+      if (dryRun) setPlan(answer);
+      else onDone(answer.counts.new);
+    } catch (err) {
+      if (!dryRun) setPlan(null);
+      setError(failureOf(err).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const change = (set: (v: string) => void) => (e: { target: { value: string } }) => {
+    set(e.target.value);
+    setPlan(null);
+  };
+
+  const account = plan?.account;
+  return (
+    <div>
+      <p className="hint">
+        銀行の入出金明細を、銀行の連携から直接読みます。入金の行だけを取り込み、前に取り込んだ入金（CSV で取り込んだものも、日付・摘要・金額・残高が同じなら）は除きます。
+      </p>
+      {error && (
+        <p className="status error" role="alert">
+          {error}
+        </p>
+      )}
+      <div className="orgs-mapping">
+        <label>
+          期間（から）
+          <input type="date" value={dateFrom} max={dateTo} onChange={change(setDateFrom)} />
+        </label>
+        <label>
+          期間（まで）
+          <input type="date" value={dateTo} min={dateFrom} max={today} onChange={change(setDateTo)} />
+        </label>
+      </div>
+      {!plan && (
+        <div className="actions">
+          <button type="button" className="secondary" disabled={busy} onClick={() => void send(true)} data-testid="accounting-bank-check">
+            {busy ? '銀行から読んでいます…' : '銀行から読んで下見を見る（まだ取り込みません）'}
+          </button>
+          <button type="button" className="secondary" disabled={busy} onClick={onCancel}>
+            やめる
+          </button>
+        </div>
+      )}
+      {plan && account && (
+        <p className="hint">
+          読んだ口座：{[account.branchName, account.accountTypeName, account.accountNumberLast4 ? `下4桁 ${account.accountNumberLast4}` : null].filter(Boolean).join(' ')}（{plan.dateFrom}〜{plan.dateTo}）
+        </p>
+      )}
+      {plan && <PlanView plan={plan} unit="件目" busy={busy} onCommit={() => void send(false)} onBack={() => setPlan(null)} backLabel="期間を変える" />}
+    </div>
+  );
+}
+
+/** 入出金明細を取り込む: from the bank (when the bank connection is up) or from a CSV the bank gave. */
+export function StatementImport({ onDone, onCancel }: { onDone: (added: number) => void; onCancel: () => void }) {
+  const [bank, setBank] = useState<BankStatementAvailability | null>(null);
+  const [source, setSource] = useState<'bank' | 'csv' | null>(null);
+  useEffect(() => {
+    let live = true;
+    api<BankStatementAvailability>('GET', '/api/payments/statements/bank').then(
+      (b) => {
+        if (!live) return;
+        setBank(b);
+        setSource((s) => s ?? (b.available ? 'bank' : 'csv'));
+      },
+      () => {
+        if (live) setSource((s) => s ?? 'csv');
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, []);
+  const chosen = source === 'bank' && bank?.available ? 'bank' : 'csv';
+  return (
+    <div className="pay-form" data-testid="accounting-statement-import">
+      <h2>入出金明細を取り込む</h2>
+      <fieldset className="theme-choice">
+        <legend className="sr-only">取り込み元</legend>
+        <label className="status-option">
+          <input type="radio" name="statement-source" value="bank" checked={chosen === 'bank'} disabled={!bank?.available} onChange={() => setSource('bank')} />
+          銀行から（API）
+        </label>
+        <label className="status-option">
+          <input type="radio" name="statement-source" value="csv" checked={chosen === 'csv'} onChange={() => setSource('csv')} />
+          CSV ファイルから
+        </label>
+      </fieldset>
+      {bank && !bank.available && bank.message && <p className="hint">銀行から：{bank.message}</p>}
+      {chosen === 'bank' && bank?.environmentLabel && <p className="hint">つないでいる銀行：{bank.environmentLabel}</p>}
+      {chosen === 'bank' ? <BankStatementImport onDone={onDone} onCancel={onCancel} /> : <CsvStatementImport onDone={onDone} onCancel={onCancel} />}
     </div>
   );
 }

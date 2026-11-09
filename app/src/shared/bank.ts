@@ -1,3 +1,4 @@
+import type { StatementImportResponse } from './payments.js';
 // The bank connection (GMO あおぞらネット銀行 API, 2026-11-06): types shared by the server and the settings screen.
 // No secret ever crosses this boundary: the screen sees the state of the connection, never a token or a code.
 
@@ -58,4 +59,19 @@ export interface BankCheckAccount {
 export interface BankCheckResponse {
   checkedAt: string;
   accounts: BankCheckAccount[];
+}
+
+/** GET /api/payments/statements/bank: whether 入金確認 can read the statement from the bank now. */
+export interface BankStatementAvailability {
+  available: boolean;
+  environmentLabel: string | null;
+  /** Why not, in words (not configured, not connected, needs reconnecting). */
+  message: string | null;
+}
+
+/** POST /api/payments/statements/bank: the same 下見 / 取り込み as a CSV, plus which account and period were read. */
+export interface BankStatementImportResponse extends StatementImportResponse {
+  account: { branchName: string | null; accountTypeName: string | null; accountNumberLast4: string | null };
+  dateFrom: string;
+  dateTo: string;
 }

@@ -247,7 +247,9 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
   const paymentsVisible = (user: User) => paymentsStore !== null && accountingPermissionsOf(paymentsStore, user).includes('accounting.view');
   registerOrganizationRoutes(app, organizations, { requireUser: deps.requireUser, session: deps.session, people: deps.people, discordUserIdOf: deps.discordUserIdOf, clock: deps.clock, parse: deps.parse, contacts, sender, mailGate: (request) => reader(request, true), mailPeek: (request) => reader(request, false), mail: service, attachmentBytes: sendConfig?.maxAttachmentBytes ?? 0, now: deps.now ?? Date.now, paymentsVisible });
 
-  registerPaymentRoutes(app, payments, { requireUser: deps.requireUser, session: deps.session, people: deps.people, discordUserIdOf: deps.discordUserIdOf, clock: deps.clock, parse: deps.parse, organizations, contacts, now: deps.now ?? Date.now });
+  // The bank connection (bank.json), made here because the payments read the statement from it too.
+  const bank = rt.config.bank ? new BankService(rt.config.bank, { fetch: rt.bankFetch ?? fetch, now, clock: deps.clock }) : null;
+  registerPaymentRoutes(app, payments, { requireUser: deps.requireUser, session: deps.session, people: deps.people, discordUserIdOf: deps.discordUserIdOf, clock: deps.clock, parse: deps.parse, organizations, contacts, now: deps.now ?? Date.now, bank });
 
   // Books (会計の帳簿, 2026-11-05): their own file next to payments.sqlite3, with the payments' accounting permissions,
   // and the master spreadsheet when books-sheets.json is set up. A file that cannot be opened turns off the books only
@@ -298,7 +300,6 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
   // The bank connection (GMO あおぞらネット銀行 API, 2026-11-06), when bank.json is next to the mail configuration:
   // the tokens encrypted in the mail folder, with the payments' accounting permissions (bank/routes.ts). Without
   // bank.json the status says "not configured" to those who may see it, and nothing else exists.
-  const bank = rt.config.bank ? new BankService(rt.config.bank, { fetch: rt.bankFetch ?? fetch, now, clock: deps.clock }) : null;
   if (bank) {
     // Expired tokens are renewed or deleted on a timer, not only when someone next uses the connection.
     const sweep = () => void bank.sweep().catch(() => undefined);
