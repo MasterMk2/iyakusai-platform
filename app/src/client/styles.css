@@ -527,6 +527,14 @@ mark.minutes-weak { background: var(--amber-bg); color: var(--amber); border-bot
 .minutes-check-edit .status { flex-basis: 100%; }
 .minutes-checked { margin: 0; font-size: 14px; color: var(--green); display: grid; gap: 2px; }
 .minutes-original { color: var(--muted); overflow-wrap: anywhere; }
+/* The AI's guess (2026-11-10): what it changes in the text as heard, shown above the box it fills. */
+.minutes-guess { margin: 0; line-height: 1.7; overflow-wrap: anywhere; font-size: 15px; }
+.minutes-guess-label { display: inline-block; padding: 0 6px; border-radius: 4px; background: var(--info-bg); color: var(--navy); border: 1px solid var(--info-line); font-size: 12px; font-weight: 700; }
+del.minutes-guess-del { color: var(--red); background: var(--red-bg); text-decoration-thickness: 2px; }
+ins.minutes-guess-ins { color: var(--navy); background: var(--info-bg); text-decoration: none; border-bottom: 2px solid var(--blue); font-weight: 700; }
+.minutes-guess-same { font-size: 13px; color: var(--muted); }
+.minutes-guess-status .status { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.minutes-guess-status .status button { margin: 0; }
 .minutes-empty-text { color: var(--muted); }
 button.minutes-play { min-height: 32px; padding: 0 10px; font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; background: var(--info-bg); color: var(--navy); border: 1px solid var(--info-line); }
 button.minutes-play[aria-pressed='true'], button.minutes-play[aria-pressed='true']:hover:not(:disabled) { background: var(--navy-fill); border-color: var(--navy-fill); color: #fff; }

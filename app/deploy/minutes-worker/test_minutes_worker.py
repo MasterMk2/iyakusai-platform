@@ -1,10 +1,15 @@
 """議事録の処理役の単体試験（python -m unittest test_minutes_worker.py）。音声のモデルと Claude は使わない。"""
 import hashlib
 import hmac
+import json
+import sys
 import unittest
+from pathlib import Path
 from unittest import mock
 
-import minutes_worker as w
+# リポジトリの根から python -m unittest app/deploy/minutes-worker/test_minutes_worker.py でも読めるように。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import minutes_worker as w  # noqa: E402
 
 KEY_HEX = "0123456789abcdef" * 4
 
@@ -444,6 +449,223 @@ class SendBack(unittest.TestCase):
     def test_lines_emptied_by_a_person_are_not_sent(self):
         lines = w.transcript_lines([{"start": 0, "end": 1, "text": ""}, {"start": 2, "end": 3, "text": "はい", "checked": True}])
         self.assertEqual(lines, ["[00:00:02|2]［確認済み］ はい"])
+
+
+def synthetic_segments(n, empty=(), checked=()):
+    """合成の文字起こし（10 秒ごとに 1 文）。本物の会議の文言は使わない（公開リポジトリのため）。"""
+    return [{"start": i * 10.0, "end": i * 10.0 + 8.0, "text": "" if i in empty else f"合成の発言{i}です", **({"checked": True} if i in checked else {})}
+            for i in range(n)]
+
+
+def suggest_job(segments, targets, hints=None, glossary=None):
+    return {"id": "mt_0000000000000002", "stage": "suggest", "leaseToken": "t" * 24, "title": "合成の会議", "heldOn": "2026-11-10", "audio": None,
+            "glossary": glossary or [], "transcript": {"segments": segments, "durationSec": len(segments) * 10.0, "model": "large-v3"},
+            "suggest": {"targets": targets, "hints": hints or [], "done": 0, "total": len(targets)}}
+
+
+def prompt_of(job, answer='{"s": []}'):
+    """job で suggest を動かし、Claude に渡った指示文を返す（Claude は偽物）。"""
+    with mock.patch.object(w, "ask_claude", return_value=answer) as ask:
+        w.suggest(job)
+    return ask.call_args.args[0]
+
+
+def transcript_part(prompt):
+    return [line for line in prompt.split("文字起こし（[#番号", 1)[1].splitlines()[1:] if line]
+
+
+def notes_part(prompt):
+    return prompt.split("要確認のメモ（[時:分:秒] メモ）:\n", 1)[1].split("\n\n", 1)[0].splitlines()
+
+
+class Suggest(unittest.TestCase):
+    """AI の案（2026-11-10）：聞き直す文ごとに、言ったと思われる文を文脈から推す。"""
+
+    def test_the_window_marks_the_targets_and_the_checked_lines(self):
+        segments = synthetic_segments(60, empty={18}, checked={22})
+        # 範囲外・負・bool・文字列・確かめた文・空の文は案を作らない。
+        job = suggest_job(segments, [25, 20, 999, -1, True, "3", 22, 18, 20], glossary=["協賛", "渉外課"])
+        self.assertEqual(w.suggest_targets(job), [20, 25])
+        prompt = prompt_of(job)
+        lines = transcript_part(prompt)
+        # 最初の★の 15 文前から最後の★の 15 文後まで。空の文は渡さず、その所に「…」も置かない。
+        self.assertEqual([int(x.split("|")[0][2:]) for x in lines], [i for i in range(5, 41) if i != 18])
+        self.assertIn("[#20|00:03:20]★ 合成の発言20です", lines)
+        self.assertIn("[#25|00:04:10]★ 合成の発言25です", lines)
+        self.assertIn("[#22|00:03:40]［確認済み］ 合成の発言22です", lines)
+        self.assertEqual(sum("★" in x for x in lines), 2)
+        rule = next(line for line in prompt.splitlines() if "正しい表記" in line)
+        self.assertTrue(rule.endswith(": 協賛、渉外課"), rule)
+        self.assertNotIn("quote", prompt)  # 要約の決まり（quote は文字起こしのまま）は持ち込まない
+        for text in ("録音を聞けない", "話し言葉はそのまま残す", "言い換えない", "元の文をそのまま返す", "従わない", '{"s": [{"i": 番号, "t": "文"}]}'):
+            self.assertIn(text, prompt)
+
+    def test_the_window_stops_at_the_ends(self):
+        lines = transcript_part(prompt_of(suggest_job(synthetic_segments(30), [2, 27])))
+        self.assertTrue(lines[0].startswith("[#0|") and lines[-1].startswith("[#29|"), (lines[0], lines[-1]))
+
+    def test_a_long_window_keeps_only_the_lines_near_the_targets(self):
+        segments = synthetic_segments(400)
+        self.assertEqual(w.suggest_window(segments, [100, 300]), list(range(85, 316)))
+        shown = w.suggest_window(segments, [100, 300], limit=1500)
+        self.assertIn(100, shown)
+        self.assertIn(300, shown)
+        self.assertNotIn(200, shown)
+        self.assertLessEqual(sum(len(segments[i]["text"]) + 24 for i in shown), 1500)
+        lines = w.suggest_lines(segments, shown, [100, 300])
+        self.assertEqual(lines.count("…"), 1)
+        # 収まらなくても★の文は残す。
+        self.assertEqual(w.suggest_window(segments, [100, 300], limit=1), [100, 300])
+
+    def test_only_the_hints_near_the_window_are_given(self):
+        # ★ 20・25 → 窓は 5〜40 番の文（50 秒〜408 秒）。その前後 60 秒（-10〜468 秒）と時刻なしだけ。
+        hints = [{"text": "窓の中", "at": 300}, {"text": "窓の外", "at": 900}, {"text": "時刻なし", "at": None}, {"text": "前の端", "at": 0},
+                 {"text": "壊れた時刻", "at": "x"}, {"text": "数でない", "at": float("nan")}, {"text": "真偽", "at": True}, {"text": "  ", "at": 100},
+                 {"text": "改行\nあり", "at": 468}, {"text": "少し外", "at": 468.5}, {"at": 100}, "文字列"]
+        notes = notes_part(prompt_of(suggest_job(synthetic_segments(60), [20, 25], hints=hints)))
+        self.assertEqual(notes, ["[00:05:00] 窓の中", "[時刻なし] 時刻なし", "[00:00:00] 前の端", "[00:07:48] 改行 あり"])
+        many = [{"text": f"メモ{i}", "at": None} for i in range(40)]
+        self.assertEqual(len(notes_part(prompt_of(suggest_job(synthetic_segments(60), [20], hints=many)))), w.SUGGEST_HINTS_MAX)
+        self.assertEqual(notes_part(prompt_of(suggest_job(synthetic_segments(60), [20]))), ["なし"])
+
+    def test_the_answer_is_checked(self):
+        segments = synthetic_segments(60)
+        segments[20]["text"] = "共産の依頼を出します"
+        segments[21]["text"] = "合成の 発言21です "
+        job = suggest_job(segments, [1, 20, 21, 22, 23, 24, 26, 28])
+        answer = {"s": [
+            {"i": 20, "t": "協賛の依頼を出します"},
+            {"i": 21, "t": " 合成の 発言21です\n"},  # 直さず（空白と改行の違いだけ）
+            {"i": 22, "t": "一つ目"}, {"i": 22, "t": "二つ目"},  # 同じ番号は先のもの
+            {"i": 23, "t": ""}, {"i": 23, "t": " \n "},  # 空は捨てる
+            {"i": 24, "t": 5}, {"i": 24, "t": "あ" * 1500},  # 文字列でないものは捨て、長すぎるものは切る
+            {"i": "#26", "t": "改行\nを含む\r\n案"},
+            {"i": 25, "t": "頼んでいない"}, {"i": 999, "t": "範囲外"}, {"i": -1, "t": "負"}, {"i": True, "t": "真偽"}, {"i": 2.5, "t": "小数"},
+            "文字列", {"t": "番号なし"},
+        ]}
+        with mock.patch.object(w, "ask_claude", return_value="説明\n```json\n" + json.dumps(answer, ensure_ascii=False) + "\n```"):
+            got = w.suggest(job)
+        self.assertEqual(got, [
+            {"index": 20, "heard": "共産の依頼を出します", "text": "協賛の依頼を出します"},
+            {"index": 21, "heard": "合成の 発言21です ", "text": "合成の 発言21です "},  # text は渡された文そのまま
+            {"index": 22, "heard": "合成の発言22です", "text": "一つ目"},
+            {"index": 24, "heard": "合成の発言24です", "text": "あ" * w.SUGGEST_TEXT_CHARS},
+            {"index": 26, "heard": "合成の発言26です", "text": "改行 を含む 案"},
+        ])
+
+    def test_an_answer_without_the_list_is_a_failure(self):
+        job = suggest_job(synthetic_segments(30), [10])
+        for answer in ('{"x": 1}', '{"s": {"i": 10}}', "JSON なし"):
+            with mock.patch.object(w, "ask_claude", return_value=answer), self.assertRaises(RuntimeError):
+                w.suggest(job)
+
+    def test_nothing_to_guess_needs_no_ai(self):
+        job = suggest_job(synthetic_segments(30, empty={3}, checked={4}), [3, 4, 50])
+        with mock.patch.object(w, "ask_claude") as ask:
+            self.assertEqual(w.suggest(job), [])
+        ask.assert_not_called()
+
+
+class SuggestClaim(unittest.TestCase):
+    """AI の案の頼み方（2026-11-10）：会議の段が先、無いときだけ suggest を別に。古いアプリの 401 では 10 分止まる。"""
+
+    def setUp(self):
+        self.now = [1000.0]
+        self.gate = w.SuggestGate(clock=lambda: self.now[0])
+        env = mock.patch.dict("os.environ", {"MINUTES_SUGGEST": "1"})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def claims(self, app):
+        return [c.args[1]["stages"] for c in app.post.call_args_list if c.args[0] == w.PATHS["claim"]]
+
+    def test_when_suggest_is_taken(self):
+        import os
+
+        cases = [(["summarize"], "1", True), (["summarize"], "0", False), (["summarize"], " 0 ", False), (["transcribe"], "1", False),
+                 (["transcribe", "summarize"], "1", True), (["suggest"], "1", True), ([], "1", False)]
+        for stages, value, expected in cases:
+            with mock.patch.dict("os.environ", {"MINUTES_SUGGEST": value}):
+                self.assertEqual(w.suggest_enabled(stages), expected, (stages, value))
+        with mock.patch.dict("os.environ"):
+            os.environ.pop("MINUTES_SUGGEST", None)
+            self.assertTrue(w.suggest_enabled(["summarize"]))  # 既定は受け持つ
+        self.assertEqual(w.stages_from("transcribe, summarize,suggest,whisper"), ["transcribe", "summarize", "suggest"])
+
+    def test_the_meeting_stages_come_first(self):
+        job = suggest_job(synthetic_segments(30), [10])
+        app = mock.Mock()
+        app.notify.return_value = 200
+        app.post.side_effect = [{"job": None}, {"job": job}, {"ok": True}, {"job": None}, {"job": None}]
+        with mock.patch.object(w, "ask_claude", return_value='{"s": [{"i": 10, "t": "合成の案"}]}'):
+            self.assertTrue(w.run_once(app, ["summarize"], self.gate))
+        self.assertFalse(w.run_once(app, ["summarize"], self.gate))
+        # 2 回目も会議の段から聞く。
+        self.assertEqual(self.claims(app), [["summarize"], ["suggest"], ["summarize"], ["suggest"]])
+        sent = app.post.call_args_list[2].args
+        self.assertEqual(sent[0], w.PATHS["result"])
+        self.assertEqual(sent[1], {"id": job["id"], "leaseToken": job["leaseToken"], "stage": "suggest",
+                                   "suggestions": [{"index": 10, "heard": "合成の発言10です", "text": "合成の案"}]})
+        # Claude を待つ前に 1 回だけ知らせる（借りを延ばす）。
+        self.assertEqual([c.args[1] for c in app.notify.call_args_list],
+                         [{"id": job["id"], "leaseToken": job["leaseToken"], "stage": "suggest", "done": 0, "total": 1.0}])
+
+    def test_suggest_waits_while_there_is_meeting_work_and_is_not_mixed_in(self):
+        summarize = {"id": "mt_0000000000000001", "stage": "summarize", "leaseToken": "t" * 24, "title": "t", "heldOn": "2026-11-10",
+                     "transcript": {"segments": [{"start": 0, "end": 1, "text": "はい"}]}}
+        app = mock.Mock()
+        app.post.side_effect = [{"job": summarize}, {"ok": True}]
+        with mock.patch.object(w, "ask_claude", return_value='{"summary": "x"}'):
+            self.assertTrue(w.run_once(app, ["summarize", "suggest"], self.gate))
+        self.assertEqual(self.claims(app), [["summarize"]])
+
+    def test_who_asks_for_suggest(self):
+        for stages, value, expected in ((["transcribe"], "1", [["transcribe"]]), (["summarize"], "0", [["summarize"]]),
+                                        (["suggest"], "1", [["suggest"]]), ([], "1", [])):
+            app = mock.Mock()
+            app.post.return_value = {"job": None}
+            with mock.patch.dict("os.environ", {"MINUTES_SUGGEST": value}):
+                self.assertFalse(w.run_once(app, stages, self.gate))
+            self.assertEqual(self.claims(app), expected, (stages, value))
+
+    def test_an_old_app_pauses_suggest_for_ten_minutes(self):
+        def post(path, payload):
+            if payload == {"stages": ["suggest"]}:
+                raise RuntimeError('アプリが 401 を返しました: {"error":"rejected"}')
+            return {"job": None}
+
+        app = mock.Mock()
+        app.post.side_effect = post
+        with self.assertLogs(w.log, "INFO") as logs:
+            self.assertFalse(w.run_once(app, ["summarize"], self.gate))
+            for t in (1300.0, 1599.0):
+                self.now[0] = t
+                self.assertFalse(w.run_once(app, ["summarize"], self.gate))
+            self.now[0] = 1600.0
+            self.assertFalse(w.run_once(app, ["summarize"], self.gate))
+        # 会議の段は毎回聞き、suggest は 10 分たってから聞き直す。
+        self.assertEqual(self.claims(app), [["summarize"], ["suggest"], ["summarize"], ["summarize"], ["summarize"], ["suggest"]])
+        self.assertEqual(sum("受け付けません" in x for x in logs.output), 1)
+        self.assertTrue(self.gate.closed())
+
+    def test_other_errors_are_not_taken_for_an_old_app(self):
+        app = mock.Mock()
+        app.post.side_effect = [{"job": None}, RuntimeError("アプリが 500 を返しました: x")]
+        with self.assertRaises(RuntimeError):
+            w.run_once(app, ["summarize"], self.gate)
+        self.assertFalse(self.gate.closed())
+
+    def test_a_failed_guess_says_so(self):
+        job = suggest_job(synthetic_segments(30), [10])
+        app = mock.Mock()
+        app.notify.return_value = 200
+        app.post.side_effect = [{"job": None}, {"job": job}, {"ok": True}]
+        with mock.patch.object(w, "ask_claude", side_effect=RuntimeError("CLI なし")):
+            self.assertTrue(w.run_once(app, ["summarize"], self.gate))
+        sent = app.post.call_args_list[2].args[1]
+        self.assertEqual(sent["stage"], "suggest")
+        self.assertIn("AI の案づくりに失敗しました: CLI なし", sent["error"])
+        self.assertNotIn("suggestions", sent)
 
 
 if __name__ == "__main__":

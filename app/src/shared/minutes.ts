@@ -89,6 +89,11 @@ export interface SegmentCheck {
   original: string;
   byName: string;
   at: string;
+  /**
+   * The person confirmed the AI's guess as it was (2026-11-10): the text differs from what the model heard and is the
+   * AI's suggestion word for word. Told apart from a correction a person typed, as the AI cannot hear the recording.
+   */
+  ai?: boolean;
 }
 
 export interface TranscriptSegment {
@@ -98,6 +103,12 @@ export interface TranscriptSegment {
   text: string;
   confidence?: SegmentConfidence;
   checked?: SegmentCheck;
+  /**
+   * What the AI guesses was said, from the context and the glossary (2026-11-10; the AI does not hear the recording).
+   * Only on segments still to be checked whose text is the one the guess was made for; equal to `text` when the AI
+   * found nothing to change. Sent to the screen only, never kept in the transcript.
+   */
+  suggestion?: string;
 }
 
 /**
@@ -110,7 +121,7 @@ export interface TranscriptSegment {
 export const DOUBT_THRESHOLDS = { logprob: -0.7, noSpeech: 0.6, noSpeechLogprob: -0.4, compression: 2.4, veryWeakWord: 0.2, weakWords: 2 } as const;
 
 /** Why a segment is worth listening to again; empty when nothing points to it. */
-export function doubtsOf(segment: TranscriptSegment, aiUnclearAt: number[] = []): string[] {
+export function doubtsOf(segment: Omit<TranscriptSegment, 'checked'>, aiUnclearAt: number[] = []): string[] {
   const out: string[] = [];
   const c = segment.confidence;
   if (c) {
@@ -122,6 +133,81 @@ export function doubtsOf(segment: TranscriptSegment, aiUnclearAt: number[] = [])
   }
   if (aiUnclearAt.some((at) => at >= segment.start - 1 && at <= segment.end + 1)) out.push('AI が要確認とした所');
   return out;
+}
+
+/**
+ * The segments the AI is asked to guess for (2026-11-10): those worth listening to again that no one has checked yet.
+ * The same choice as the screen's "聞き直す所", so the guesses land where people look.
+ */
+export function suggestTargets(segments: readonly (Omit<TranscriptSegment, 'checked'> & { checked?: unknown })[], aiUnclearAt: number[] = []): number[] {
+  const out: number[] = [];
+  segments.forEach((s, i) => {
+    if (!s.checked && s.text.trim() && doubtsOf(s, aiUnclearAt).length > 0) out.push(i);
+  });
+  return out;
+}
+
+/** The seconds the AI's "要確認" items point to (items without a time are left out). */
+export function unclearTimes(draft: Pick<MinutesDraft, 'unclear'> | null | undefined): number[] {
+  return (draft?.unclear ?? []).flatMap((u) => (u.at === null ? [] : [u.at]));
+}
+
+export interface TextDiffPart {
+  kind: 'same' | 'del' | 'ins';
+  text: string;
+}
+
+/**
+ * The characters `to` changed from `from` (2026-11-10), for showing what the AI's guess changes in a segment: the
+ * common start and end, and a longest common subsequence over the characters between (segments are short; when the
+ * part between is over 600 characters on a side, it is shown as replaced rather than spend the time).
+ */
+export function textDiff(from: string, to: string): TextDiffPart[] {
+  if (from === to) return from ? [{ kind: 'same', text: from }] : [];
+  const a = [...from];
+  const b = [...to];
+  // Common prefix and suffix first: a guess usually changes a word or two in the middle.
+  let head = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) head++;
+  let tail = 0;
+  while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
+  const x = a.slice(head, a.length - tail);
+  const y = b.slice(head, b.length - tail);
+  const parts: TextDiffPart[] = [];
+  const push = (kind: TextDiffPart['kind'], ch: string) => {
+    const last = parts.at(-1);
+    if (last && last.kind === kind) last.text += ch;
+    else parts.push({ kind, text: ch });
+  };
+  for (const ch of a.slice(0, head)) push('same', ch);
+  if (x.length > 600 || y.length > 600) {
+    for (const ch of x) push('del', ch);
+    for (const ch of y) push('ins', ch);
+    for (const ch of a.slice(a.length - tail)) push('same', ch);
+    return parts;
+  }
+  const n = x.length;
+  const m = y.length;
+  const len: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) len[i]![j] = x[i] === y[j] ? len[i + 1]![j + 1]! + 1 : Math.max(len[i + 1]![j]!, len[i]![j + 1]!);
+  let i = 0;
+  let j = 0;
+  while (i < n || j < m) {
+    if (i < n && j < m && x[i] === y[j]) {
+      push('same', x[i]!);
+      i++;
+      j++;
+    } else if (i < n && (j >= m || len[i + 1]![j]! >= len[i]![j + 1]!)) {
+      // What was heard first, then what replaces it.
+      push('del', x[i]!);
+      i++;
+    } else {
+      push('ins', y[j]!);
+      j++;
+    }
+  }
+  for (const ch of a.slice(a.length - tail)) push('same', ch);
+  return parts;
 }
 
 /** How sure the model was, 0–100 (the mean probability of a token); null for transcripts made before 2026-11-06. */
@@ -336,10 +422,13 @@ export interface MinutesDetail {
   bodyEdited: boolean;
   reviews: MinutesReview[];
   versions: MinutesVersionInfo[];
+  /** The AI's guesses for the segments to listen to again (2026-11-10); null when none were asked for. */
+  suggest: MinutesSuggest | null;
   /**
    * `manage`: change the title, the date and who may read it (the recorder and the access administrators).
    * `review`: send the draft back to the AI with a comment. `check`: correct the transcript. `reopen`: start a
    * correction of the confirmed minutes. `discard`: drop the correction and go back to the last confirmed version.
+   * `suggest`: ask the AI to guess (again) what was said in the segments still to be checked.
    */
   can: {
     edit: boolean;
@@ -352,7 +441,27 @@ export interface MinutesDetail {
     check: boolean;
     reopen: boolean;
     discard: boolean;
+    suggest: boolean;
   };
+}
+
+/**
+ * The AI's guesses, made a part at a time after the draft (2026-11-10). `wait`: waiting for the worker (a worker of
+ * before never takes it); `run`: a part is being guessed; `done`; `failed`: stopped with `error`, the guesses made so
+ * far stay and asking again goes on from where it stopped.
+ */
+export interface MinutesSuggest {
+  status: 'wait' | 'run' | 'done' | 'failed';
+  requestedAt: string;
+  requestedByName: string;
+  doneAt: string | null;
+  error: string | null;
+  /** Segments guessed for so far, of `total`. */
+  done: number;
+  total: number;
+  /** Segments now showing a guess that changes the text, and showing one that changes nothing. */
+  changed: number;
+  unchanged: number;
 }
 
 /** The title, the date and who may read a meeting, changed after it was made (2026-11-05). */
