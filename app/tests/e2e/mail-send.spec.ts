@@ -259,6 +259,9 @@ test('replies to the committee own mail go back to its recipients, never to our 
   const all = page.getByRole('region', { name: '全員に返信' });
   await expect(all.getByLabel('宛先', { exact: true })).toHaveValue('取引先 <sender@partner.example>');
   await expect(all.getByLabel('CC', { exact: true })).toHaveValue('上長 <boss@partner.example>');
+  // The CC the reply to all brought is asked about before sending: every recipient sees it.
+  await all.getByRole('button', { name: '送信内容を確認' }).click();
+  await expect(all.getByTestId('compose-screen')).toContainText('CC にアドレスが 1 件入っています。このままでよいですか？ 宛先・CC のアドレスは、受け取った人どうしでお互いに見えます。');
 });
 
 test('a reply to mail from another committee address goes to that address', async ({ page }) => {

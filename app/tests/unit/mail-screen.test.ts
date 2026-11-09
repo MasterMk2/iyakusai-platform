@@ -57,7 +57,17 @@ describe('checks before sending', () => {
 
   it('ignores the quoted mail and says when the From address is a recipient', () => {
     expect(texts({ body: `${base.body}\n\n> 10月27日（月）に伺います【氏名】` })).toEqual([]);
-    expect(texts({ cc: [{ name: null, address: 'SPONSORSHIP@committee.example' }] })).toEqual(['warning:宛先か CC に、差出人と同じアドレスがあります。']);
+    expect(texts({ cc: [{ name: null, address: 'SPONSORSHIP@committee.example' }] })).toEqual(['warning:宛先か CC に、差出人と同じアドレスがあります。', `warning:${CC_NOTE(1)}`]);
+  });
+});
+
+const CC_NOTE = (n: number) => `CC にアドレスが ${n} 件入っています。このままでよいですか？ 宛先・CC のアドレスは、受け取った人どうしでお互いに見えます。ほかの相手にアドレスを知られたくない人は、BCC に移してください。`;
+
+describe('CC in the checks', () => {
+  it('asks about any address in CC, since every recipient sees it, and says nothing without CC', () => {
+    expect(texts({ cc: [] })).toEqual([]);
+    expect(texts({ cc: [{ name: '取引先 上長', address: 'boss@partner.example' }] })).toEqual([`warning:${CC_NOTE(1)}`]);
+    expect(texts({ cc: [{ name: null, address: 'a@partner.example' }, { name: null, address: 'b@other.example' }, { name: null, address: 'c@committee.example' }] })).toEqual([`warning:${CC_NOTE(3)}`]);
   });
 });
 
