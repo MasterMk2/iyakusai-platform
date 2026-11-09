@@ -15,7 +15,6 @@ const BASE_RULES = [
 const EMPTY_NOTES = new Set(['なし', '特になし', 'ありました', '写真のとおりです', '確認しました', '確認しました！']);
 const SHEETS = ['guide', 'group', 'location', 'summary', 'progress', 'report'];
 const state = { overview: null, defaults: BASE_RULES, saved: false, rules: null, loading: false };
-state.rules = loadRules();
 
 // ---- 小さな DOM 部品（文字列は必ず textContent で入れる）
 function el(tag, attrs = {}, ...children) {
@@ -47,6 +46,8 @@ function loadRules() {
   } catch { /* 壊れた保存は初期の規則で置き換える */ }
   return copyRules(state.defaults);
 }
+// validRules・copyRules（const）の定義より後で読む。前に置くと読み込み時に例外になり、画面が「読み込み中…」のまま止まる。
+state.rules = loadRules();
 // 一覧の応答に初期の規則があれば、それを初期にする（この端末で規則を保存していなければ、いまの規則も置き換える）
 function adoptDefaults(rules) {
   if (!validRules(rules)) return;
