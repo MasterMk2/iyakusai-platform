@@ -34,8 +34,17 @@ test('labels are set from a LINE row: a category, a typed name, a name used befo
   await expect(editor.getByRole('status')).toHaveText('「飲食」を付けました。');
   await expect(categories.getByRole('button', { name: '✓ 飲食' })).toHaveAttribute('aria-pressed', 'true');
 
-  // A typed name is added with Enter; 全角 letters are kept as the server keeps them.
+  // The Enter that ends a Japanese conversion saves nothing.
   const name = editor.getByRole('textbox', { name: '団体名など' });
+  await name.fill('合成チ');
+  await name.evaluate((el) => {
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true }));
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 229, bubbles: true }));
+  });
+  await expect(name).toHaveValue('合成チ');
+  await expect(editor.locator('.chip.label')).toHaveText(['飲食×']);
+
+  // A typed name is added with Enter; 全角 letters are kept as the server keeps them.
   await name.fill('合成チームＡ');
   await name.press('Enter');
   await expect(editor.getByRole('status')).toHaveText('「合成チームA」を付けました。');

@@ -165,6 +165,9 @@ export function LineLabelEditor(props: {
             autoComplete="off"
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
+              // The Enter that ends a Japanese conversion must not save half a name (keyCode 229: Safari, where
+              // isComposing is already false), since each Enter here saves at once.
+              if (e.nativeEvent.isComposing || e.keyCode === 229) return;
               if (e.key === 'Enter') {
                 e.preventDefault();
                 void add(input);
