@@ -106,3 +106,4 @@ button.danger{background:var(--red);color:white;border-color:var(--red)}button.d
 @media(max-width:340px){.global-nav a{padding-left:0;padding-right:0;font-size:13px}}
 /* Entry to the counted supplies screen (supplies.html) */
 .supplies-entry a{display:inline-flex;align-items:center;min-height:44px;font-weight:700;color:var(--blue)}
+@media(max-width:420px){.global-nav a{padding-left:0;padding-right:0;font-size:12px}}

@@ -94,5 +94,6 @@ npm run test:e2e    # ブラウザの試験（Playwright の Chromium。ビル�
 - 物品貸出：`docs/unified/rental-workflow.md` など
 - 決定事項の台帳：[docs/decisions.md](docs/decisions.md)（決めたことの登録・変更・取り消し、Bot の読み取り）
 - 当日の画面：[docs/dayof.md](docs/dayof.md)（当日の欄の期間・本部からの連絡・その場で決めたこと・臨時スタッフに見せる範囲）
+- 掲示板：[docs/bulletin.md](docs/bulletin.md)（委員へのお知らせ・表示対象の部局・掲載期間・ホームの新着）
 - 年度の切り替え：[docs/rollover.md](docs/rollover.md)（団体と毎年の予定を次の年度へ写す・未完了のタスク・権限の棚卸し・引き継ぎの資料）
 - 2026-11-04 の新機能を本番に出すとき：[docs/rollout-20261104.md](docs/rollout-20261104.md)（新しい保存ファイル・設定・Bot の突き合わせ・入れ替えと切り戻しの順番）

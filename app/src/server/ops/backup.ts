@@ -306,6 +306,30 @@ async function main(): Promise<void> {
     manifest.files['mailbox/dayof.sqlite3'] = { bytes: readFileSync(dest).length, sha256: sha256(readFileSync(dest)) };
   }
 
+  // Notice board (2026-11-11): bulletin.sqlite3 next to mail.sqlite3 (the notices, who has read them, their history).
+  const bulletinDb = path.join(data, 'mailbox', 'bulletin.sqlite3');
+  if (existsSync(bulletinDb)) {
+    const dest = path.join(target, 'mailbox', 'bulletin.sqlite3');
+    mkdirSync(path.dirname(dest), { recursive: true, mode: 0o700 });
+    const source = new DatabaseSync(bulletinDb, { readOnly: true });
+    try {
+      await backup(source, dest);
+    } finally {
+      source.close();
+    }
+    const copy = new DatabaseSync(dest, { readOnly: true });
+    try {
+      const check = copy.prepare('PRAGMA integrity_check').get() as { integrity_check: string };
+      if (check.integrity_check !== 'ok') throw new Error('掲示板の複製の整合性を確認できませんでした。');
+      for (const table of ['posts', 'reads', 'post_history']) {
+        manifest.counts[`bulletin.${table}`] = Number((copy.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n);
+      }
+    } finally {
+      copy.close();
+    }
+    manifest.files['mailbox/bulletin.sqlite3'] = { bytes: readFileSync(dest).length, sha256: sha256(readFileSync(dest)) };
+  }
+
   // Year rollover (2026-11-04): rollover.sqlite3 next to mail.sqlite3, the record of each run (who, when, what) and
   // what each copy made, which an undo needs.
   const rolloverDb = path.join(data, 'mailbox', 'rollover.sqlite3');

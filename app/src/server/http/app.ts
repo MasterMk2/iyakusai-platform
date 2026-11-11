@@ -9,6 +9,8 @@ import { departmentsOfLabel, TEMPORARY_STAFF_DEPARTMENT } from '../../shared/mai
 import { installAccount, type AccountRuntime } from '../account/http.js';
 import { installDiscordAuth, type DiscordAuthRuntime } from '../discord-auth/http.js';
 import { isTemporaryStaffLoginId } from '../discord-auth/temporary-staff.js';
+import { registerBulletinRoutes } from '../bulletin/routes.js';
+import type { BulletinStore } from '../bulletin/store.js';
 import { registerDecisionRoutes } from '../decisions/routes.js';
 import type { DecisionsStore } from '../decisions/store.js';
 import { registerDemoBooks, type DemoBooks } from '../payments/demo.js';
@@ -79,6 +81,8 @@ export interface AppOptions {
   decisions?: DecisionsStore | null;
   /** Demo only: contacts, organizations and payments on synthetic data (2026-11-03). Absent: those routes do not exist. */
   demoBooks?: DemoBooks | null;
+  /** The notice board (bulletin.sqlite3). Absent: the board is off (its meta route answers enabled: false). */
+  bulletin?: BulletinStore | null;
   /** The festival-day board (dayof.sqlite3). Absent: its routes do not exist (404). */
   dayof?: DayOfStore | null;
   /** The year rollover (rollover.sqlite3 beside the mail, or the demo's), with the demo's organizations file. Absent: no rollover routes. */
@@ -482,6 +486,24 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       if (discordApi && (discordApi.discordUserIdOf(user.id) === null || discordApi.currentSession(request)?.discordUserId.startsWith('staff:'))) return null;
       return user;
     },
+    nameOf: (userId) => (discordApi ? discordApi.lookupUser(userId)?.displayName : findUser(store.current, userId)?.displayName) ?? '（不明な利用者）',
+    clock,
+    parse,
+  });
+  // Notice board (2026-11-11): committee members as for the decision register. A notice for chosen departments is shown to their members only.
+  const isBoardMember = (u: User) => !u.disabled && !isTemporaryStaffLoginId(u.id) && !departmentsOfLabel(u.roleLabel).includes(TEMPORARY_STAFF_DEPARTMENT);
+  registerBulletinRoutes(app, options.bulletin ?? null, {
+    viewer: (request) => {
+      const user = requireUser(request);
+      if (!isBoardMember(user)) return null;
+      const session = discordApi?.currentSession(request) ?? null;
+      if (discordApi && (discordApi.discordUserIdOf(user.id) === null || session?.temporaryStaff === true || session?.discordUserId.startsWith('staff:'))) return null;
+      return { user, departments: departmentsOfLabel(user.roleLabel) };
+    },
+    members: () =>
+      (discordApi ? discordApi.listUsers() : store.current.users)
+        .filter((u) => isBoardMember(u) && (!discordApi || discordApi.discordUserIdOf(u.id) !== null))
+        .map((u) => ({ id: u.id, departments: departmentsOfLabel(u.roleLabel) })),
     nameOf: (userId) => (discordApi ? discordApi.lookupUser(userId)?.displayName : findUser(store.current, userId)?.displayName) ?? '（不明な利用者）',
     clock,
     parse,

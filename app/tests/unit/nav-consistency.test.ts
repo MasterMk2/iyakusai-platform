@@ -14,7 +14,7 @@ describe('module tabs on every screen', () => {
     const navBlock = /<nav class="global-nav"[^>]*>([\s\S]*?)<\/nav>/.exec(read('src/rental-web/index.html'));
     expect(navBlock).not.toBeNull();
     const rental = [...navBlock![1]!.matchAll(/<span>(.*?)<\/span>/g)].map((m) => m[1]!.replace(/<wbr>/g, ''));
-    expect(app).toEqual(['ホーム', 'タスク', '物品貸出', 'メール', '公式LINE', '連絡先', '会計', 'Bot', '設定']);
+    expect(app).toEqual(['ホーム', '掲示板', 'タスク', '物品貸出', 'メール', '公式LINE', '連絡先', '会計', 'Bot', '設定']);
     expect(rental).toEqual(app);
   });
 
@@ -48,6 +48,7 @@ describe('module tabs on every screen', () => {
       'iyakusai-rental-shell-20261026-v21-contacts-tab',
       'iyakusai-rental-shell-20261104-v22-supplies',
       'iyakusai-rental-shell-20261105-v23-books-tab',
+      'iyakusai-rental-shell-20261109-v24-paused',
     ]).not.toContain(cache);
   });
 });

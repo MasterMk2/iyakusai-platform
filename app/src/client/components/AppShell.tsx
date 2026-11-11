@@ -7,7 +7,7 @@ import { nextTheme, storeTheme, THEME_LABELS, useTheme } from '../theme';
  * looks and works the same everywhere (../docs/ui-guidelines.md).
  */
 
-export type NavKey = 'home' | 'tasks' | 'rental' | 'inbox' | 'line' | 'contacts' | 'books' | 'bot' | 'settings';
+export type NavKey = 'home' | 'board' | 'tasks' | 'rental' | 'inbox' | 'line' | 'contacts' | 'books' | 'bot' | 'settings';
 
 export interface NavItem {
   key: NavKey;
@@ -24,6 +24,8 @@ export interface NavItem {
 
 const ICONS: Record<NavKey, ReactNode> = {
   home: <path d="M3 11.5 12 4l9 7.5M5.5 9.5V20h5v-6h3v6h5V9.5" />,
+  // A notice board on a stand, with a notice's lines (2026-11-11).
+  board: <path d="M4.5 4.5h15v11h-15zM12 15.5v5M8.5 20.5h7M8 8.5h8M8 11.5h5" />,
   tasks: <path d="M10 6.5h10M10 12h10M10 17.5h10M3.5 6.5l1.5 1.5 2.5-3M3.5 12l1.5 1.5 2.5-3M3.5 17.5 5 19l2.5-3" />,
   rental: <path d="M3.5 7.5 12 3.5l8.5 4v9L12 20.5l-8.5-4zM3.5 7.5 12 11.5l8.5-4M12 11.5v9" />,
   inbox: <path d="M3.5 13.5 6.5 5h11l3 8.5V19a1 1 0 0 1-1 1h-15a1 1 0 0 1-1-1zM3.5 13.5h5l1.5 2.5h4l1.5-2.5h5" />,
