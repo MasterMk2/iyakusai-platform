@@ -1,3 +1,4 @@
+import { BulletinHomePanel } from './bulletin/BulletinHomePanel';
 import { DecisionsHomeCard } from './decisions/DecisionsHomeCard';
 import { DayOfPanel } from './dayof/DayOfPanel';
 import { useCallback, useState, type FormEvent, type ReactNode } from 'react';
@@ -54,6 +55,7 @@ export function HomeView({
   onOpenThread,
   onOpenLine,
   onOpenBot,
+  onOpenBoard,
   onOpenContacts,
 }: {
   userName?: string;
@@ -75,6 +77,8 @@ export function HomeView({
   /** The official LINE tab, on one account or on all of them. */
   onOpenLine?: (accountId?: string) => void;
   onOpenBot: (section?: 'candidates' | 'remind') => void;
+  /** The notice board tab. */
+  onOpenBoard: () => void;
   /** Committee contacts (a search, or the whole list when empty); absent where there are none. */
   onOpenContacts?: (query: string) => void;
 }) {
@@ -123,6 +127,8 @@ export function HomeView({
   // for the attention line. undefined: not known yet; null: nothing to count (a failure, or the card is left out).
   const [mailDue, setMailDue] = useState<MailDueResponse['counts'] | null | undefined>(undefined);
   const [upcoming, setUpcoming] = useState<UpcomingItem[] | null | undefined>(undefined);
+  // New notices on the board, from its own part below (null: the board is off, or not for this person).
+  const [boardNew, setBoardNew] = useState<number | null>(null);
 
   const t = taskSummary.data;
   const b = bot.data && !bot.data.hidden ? bot.data.summary : null;
@@ -136,6 +142,7 @@ export function HomeView({
 
   // The attention line: only counts above zero, each with the place it opens.
   const items: { key: string; label: string; n: number; tone: 'error' | 'warning' | 'info'; onOpen: () => void; testId: string }[] = [];
+  if (boardNew !== null && boardNew > 0) items.push({ key: 'board', label: '掲示板の新着', n: boardNew, tone: 'info', onOpen: onOpenBoard, testId: 'attention-board' });
   if (t) {
     if (t.deadlines.overdue > 0) items.push({ key: 'overdue', label: 'タスクの期限超過', n: t.deadlines.overdue, tone: 'error', onOpen: scrollTo('home-tasks'), testId: 'attention-task-overdue' });
     if (t.deadlines.today > 0) items.push({ key: 'today', label: '今日が期限のタスク', n: t.deadlines.today, tone: 'warning', onOpen: scrollTo('home-tasks'), testId: 'attention-task-today' });
@@ -183,12 +190,13 @@ export function HomeView({
             ))}
           </ul>
         ) : settled && !failed ? (
-          <p className="status ok">いま期限を過ぎたタスクや返事待ち、未対応のメール、今日・明日の予定と期限はありません。</p>
+          <p className="status ok">いま掲示板の新着、期限を過ぎたタスクや返事待ち、未対応のメール、今日・明日の予定と期限はありません。</p>
         ) : !settled ? (
           <p className="hint">件数を確認しています…</p>
         ) : null}
         {settled && failed && <p className="hint">一部の件数を取得できませんでした。下の各欄で理由と再試行を確認してください。</p>}
       </section>
+      <BulletinHomePanel refresh={refresh} onCount={setBoardNew} />
       <div className="home-columns">
         <div className="home-main">
           {inbox && (

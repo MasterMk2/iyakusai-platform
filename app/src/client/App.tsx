@@ -25,6 +25,8 @@ import { parseSettingsSection, SettingsView, type SettingsSection } from './comp
 import { TasksView, type TaskFocus } from './components/tasks/TasksView';
 import { BotView, parseBotSection, type BotSection } from './components/bot/BotView';
 import { ContactsView, type ContactPrefill } from './components/contacts/ContactsView';
+import { BulletinView } from './components/bulletin/BulletinView';
+import { BOARD_HREF, boardHash, parseBoardQuery } from '../shared/bulletin';
 import { DecisionsView } from './components/decisions/DecisionsView';
 import { decisionHref, decisionNewHref, parseDecisionPrefill, type DecisionPrefill } from './components/decisions/decisionLinks';
 import { ThreadDetail } from './components/ThreadDetail';
@@ -37,7 +39,7 @@ const PROXY_ERRORS = new Set(['untrusted_proxy', 'unauthenticated', 'invalid_ide
 
 export interface Route {
   /** `line` is the official LINE tab (2026-11-03), apart from the mail tab. */
-  view: 'home' | 'mail' | 'line' | 'admin' | 'tasks' | 'bot' | 'settings' | 'contacts' | 'decisions' | 'books';
+  view: 'home' | 'mail' | 'line' | 'admin' | 'tasks' | 'bot' | 'settings' | 'contacts' | 'decisions' | 'books' | 'board';
   mailboxId: string | null;
   lineAccountId: string | null;
   /** Selected email thread (`thread=`) or LINE conversation (`conv=`); at most one is set. */
@@ -69,6 +71,9 @@ export interface Route {
   decisionId: string | null;
   decisionNew: boolean;
   decisionPrefill: DecisionPrefill | null;
+  /** 掲示板 (2026-11-11): an opened notice (`p=`) or the form (`new=1`). */
+  boardPostId: string | null;
+  boardNew: boolean;
   /** 会計 (2026-11-05): the part of the books shown (`#/books/<section>`). */
   booksSection: BooksSection | null;
   /** 設定 (2026-11-06): the part of the settings shown (`#/settings/<section>`); none is the list on a phone. */
@@ -98,6 +103,8 @@ const EMPTY_ROUTE: Route = {
   decisionId: null,
   decisionNew: false,
   decisionPrefill: null,
+  boardPostId: null,
+  boardNew: false,
   booksSection: null,
   settingsSection: null,
 };
@@ -124,6 +131,10 @@ export function parseHash(hash: string): Route {
   if (parts[0] === 'decisions') {
     const decisionId = params.get('d');
     return { ...EMPTY_ROUTE, view: 'decisions', decisionId: decisionId && /^dc_[0-9a-f]{16}$/.test(decisionId) ? decisionId : null, decisionNew: params.get('new') === '1', decisionPrefill: parseDecisionPrefill(params) };
+  }
+  if (parts[0] === 'board') {
+    const board = parseBoardQuery(params);
+    return { ...EMPTY_ROUTE, view: 'board', boardPostId: board.postId, boardNew: board.creating };
   }
   if (parts[0] === 'books') return { ...EMPTY_ROUTE, view: 'books', booksSection: parseBooksSection(parts[1]) };
   if (parts[0] === 'bot') return { ...EMPTY_ROUTE, view: 'bot', botSection: parseBotSection(parts[1]), botJobId: params.get('job') };
@@ -161,6 +172,7 @@ export function toHash(route: Route): string {
     if (route.decisionNew) return decisionNewHref(route.decisionPrefill);
     return route.decisionId ? decisionHref(route.decisionId) : '#/decisions';
   }
+  if (route.view === 'board') return boardHash({ postId: route.boardPostId, creating: route.boardNew });
   if (route.view === 'books') return route.booksSection ? `#/books/${route.booksSection}` : '#/books';
   if (route.view === 'bot') {
     const base = `#/bot/${route.botSection ?? 'ask'}`;
@@ -441,7 +453,7 @@ export function App() {
           : null;
 
   useEffect(() => {
-    const names: Record<Route['view'], string> = { home: 'ホーム', tasks: 'タスク', bot: 'Bot', mail: 'メール', line: '公式LINE', admin: '設定', settings: '設定', contacts: '連絡先', decisions: '決定事項', books: '会計' };
+    const names: Record<Route['view'], string> = { home: 'ホーム', tasks: 'タスク', bot: 'Bot', mail: 'メール', line: '公式LINE', admin: '設定', settings: '設定', contacts: '連絡先', decisions: '決定事項', books: '会計', board: '掲示板' };
     document.title = user ? `${names[route.view]}｜医薬祭 委員会アプリ` : '医薬祭 委員会アプリ';
   }, [route.view, user]);
 
@@ -474,6 +486,8 @@ export function App() {
   // Same tabs, same order on every screen (the rental screen repeats them in src/rental-web/index.html).
   const navItems: NavItem[] = [
     { key: 'home', label: 'ホーム', href: '#/home', onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'home' }) },
+    // 掲示板 (2026-11-11): the committee's notices, next to home (what is new on it shows there).
+    { key: 'board', label: '掲示板', href: BOARD_HREF, onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'board' }) },
     { key: 'tasks', label: 'タスク', href: '#/tasks', onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'tasks' }) },
     ...(rentalPaused ? [] : [{ key: 'rental', label: '物品貸出', labelBreaks: ['物品', '貸出'], href: '/rental' } as NavItem]),
     // The tab is "メール", not "メールボックス": mail is sent from here too. The mailboxes inside it are each a "受信箱".
@@ -488,7 +502,7 @@ export function App() {
     { key: 'settings', label: '設定', href: '#/settings', onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'settings' }) },
   ];
   // The decision register has no tab of its own (the tabs stay as they are): it is reached from home, so home stays marked.
-  const currentNav: NavKey = route.view === 'home' || route.view === 'decisions' ? 'home' : route.view === 'tasks' ? 'tasks' : route.view === 'bot' ? 'bot' : route.view === 'contacts' ? 'contacts' : route.view === 'books' ? 'books' : route.view === 'line' ? 'line' : route.view === 'mail' ? 'inbox' : 'settings';
+  const currentNav: NavKey = route.view === 'home' || route.view === 'decisions' ? 'home' : route.view === 'board' ? 'board' : route.view === 'tasks' ? 'tasks' : route.view === 'bot' ? 'bot' : route.view === 'contacts' ? 'contacts' : route.view === 'books' ? 'books' : route.view === 'line' ? 'line' : route.view === 'mail' ? 'inbox' : 'settings';
   // Contacts exist with the committee mailbox (Discord login), for every committee member.
   const contactsEnabled = !!committeeMail;
   const topNav = <GlobalNav items={navItems} current={currentNav} />;
@@ -516,6 +530,7 @@ export function App() {
             onOpenThread={(threadId) => navigate({ ...EMPTY_ROUTE, threadId, inboxFilter: 'unhandled' })}
             onOpenLine={(lineAccountId) => navigate({ ...EMPTY_ROUTE, view: 'line', lineAccountId: lineAccountId ?? null, inboxFilter: 'unhandled' })}
             onOpenBot={(section) => navigate({ ...EMPTY_ROUTE, view: 'bot', botSection: section ?? 'ask' })}
+            onOpenBoard={() => navigate({ ...EMPTY_ROUTE, view: 'board' })}
             onOpenContacts={
               contactsEnabled
                 ? (query) => {
@@ -568,6 +583,16 @@ export function App() {
             }}
           />
         </div>
+      </div>
+    );
+  }
+
+  if (route.view === 'board') {
+    return (
+      <div className="app">
+        {bar}
+        {topNav}
+        <BulletinView postId={route.boardPostId} creating={route.boardNew} />
       </div>
     );
   }

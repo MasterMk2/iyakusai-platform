@@ -43,6 +43,8 @@ import { seedRentalDemo } from './rental/seed.js';
 import { CommitteeAddresses } from './mailbox/addresses.js';
 import type { MailboxRuntime } from './mailbox/routes.js';
 import { MailboxStore } from './mailbox/store.js';
+import { BulletinStore } from './bulletin/store.js';
+import { seedBulletinDemo } from './bulletin/seed.js';
 import { DecisionsStore } from './decisions/store.js';
 import { seedDecisionsDemo } from './decisions/seed.js';
 import { openDemoBooks } from './payments/demo.js';
@@ -370,6 +372,19 @@ export async function composeServer(config: ServerConfig, overrides: ComposeOver
     if (dayof && config.auth.mode === 'demo') seedDayOfDemo(dayof, decisions, initial.users.find((u) => u.canManageAccess)?.id ?? initial.users[0]?.id ?? 'system', now);
   }
 
+  // Notice board (2026-11-11): bulletin.sqlite3 beside the decision register (the mail folder in production, so its backup
+  // carries it; the demo's data folder, with synthetic notices). Off in other modes. A file that cannot be opened turns
+  // the board off only (meta enabled: false), like the decision register.
+  let bulletin: BulletinStore | null = null;
+  if (decisionsDir) {
+    try {
+      bulletin = new BulletinStore(decisionsDir);
+    } catch {
+      console.error('掲示板の保存ファイル（bulletin.sqlite3）を開けないか、形式が正しくないため、掲示板だけを止めました。ファイルは変更していません。ほかの機能は動きます。');
+    }
+    if (bulletin && config.auth.mode === 'demo') seedBulletinDemo(bulletin, initial.users.find((u) => u.canManageAccess)?.id ?? initial.users[0]?.id ?? 'system', now);
+  }
+
   // Contacts, organizations and payments on synthetic data next to the demo data file (2026-11-03); null if they cannot be opened.
   const demoBooks = config.auth.mode === 'demo' ? openDemoBooks(path.dirname(config.dataFile), initial.users, now) : null;
 
@@ -418,6 +433,7 @@ export async function composeServer(config: ServerConfig, overrides: ComposeOver
     decisions,
     demoBooks,
     dayof,
+    bulletin,
     rollover,
     ...(discord ? { discord } : {}),
     ...(account ? { account } : {}),
@@ -425,6 +441,10 @@ export async function composeServer(config: ServerConfig, overrides: ComposeOver
   });
   if (decisions) {
     const opened = decisions;
+    app.addHook('onClose', async () => opened.close());
+  }
+  if (bulletin) {
+    const opened = bulletin;
     app.addHook('onClose', async () => opened.close());
   }
   if (dayof) {

@@ -88,7 +88,7 @@ services:
 | `SMM_RENTAL_WEB_DIR` | 物品画面のファイル（`dist/rental-web`） |
 | `SMM_RENTAL_ALL_MEMBERS_ADMIN` | `true` で、委員全員に物品の管理の権限を付ける（既定 `false`） |
 | `SMM_RENTAL_DRIVE_SYNC_KEY_FILE` | 物品の記録を Google ドライブへ複製する GAS の鍵（§6）。無ければ複製しない |
-| `SMM_MAIL_DIR`・`SMM_MAIL_CONFIG` | 委員会のメールの保存先と設定（[mail.md](mail.md)）。2 つ一緒に設定する。連絡先・決定事項・団体の台帳・予定・入金確認・当日の画面・年度の切り替えの保存ファイル（`*.sqlite3`、起動のときに作る）も `SMM_MAIL_DIR` に置く |
+| `SMM_MAIL_DIR`・`SMM_MAIL_CONFIG` | 委員会のメールの保存先と設定（[mail.md](mail.md)）。2 つ一緒に設定する。連絡先・決定事項・団体の台帳・予定・入金確認・当日の画面・年度の切り替え・掲示板の保存ファイル（`*.sqlite3`、起動のときに作る）も `SMM_MAIL_DIR` に置く |
 | `SMM_BOT_DATASOURCE_KEY_FILE` | Bot のデータソースの鍵（[contracts/bot-datasource.md](contracts/bot-datasource.md)）。無ければその口は無い |
 | `SMM_CALENDAR_ICAL` | 予定の取り込み用 URL（iCal）。`on`・`off` のどちらかで、未設定なら demo だけ `on`、ほかは `off`。それ以外の値では起動しない。`on` にするときは、前段のプロキシで `/api/calendar/ical/<トークン>.ics` をブラウザ向けの認証の外で統合アプリへ通し、URL にトークンが入るので、プロキシのアクセスログの保存期間と見られる人を決める |
 | `SMM_ASSISTANT_MODE` | `on` で Bot タブを使う（[contracts/bot-front.md](contracts/bot-front.md)）。既定 `off` |
@@ -183,7 +183,7 @@ services:
 docker exec <コンテナ名> node dist/server/ops/backup.js
 ```
 
-`/backups/iyakusai-app-<UTC の時刻>/` に、状態の JSON・物品の台帳・メール・連絡先・決定事項・団体の台帳・予定・入金確認・当日の画面・年度の切り替え・会計の帳簿（SQLite のオンラインバックアップ）・それらが指す写真と添付と領収書（記録の SHA-256 と照合したもの）・`manifest.json` を書きます。何も消しません。毎日など定期的に動かしてください。
+`/backups/iyakusai-app-<UTC の時刻>/` に、状態の JSON・物品の台帳・メール・連絡先・決定事項・団体の台帳・予定・入金確認・当日の画面・年度の切り替え・掲示板・会計の帳簿（SQLite のオンラインバックアップ）・それらが指す写真と添付と領収書（記録の SHA-256 と照合したもの）・`manifest.json` を書きます。何も消しません。毎日など定期的に動かしてください。
 
 戻すとき：コンテナを止め、バックアップのフォルダの中身を `/data` に当たるフォルダへ写し戻してから起動します。
 
