@@ -1,12 +1,15 @@
 import { useRef, useState } from 'react';
 import type { Address, ReceiptView } from '../../shared/api';
 import {
+  MAIL_APPROVAL_NOTE_MAX,
   MAIL_ATTACHMENTS_MAX,
   MAIL_BODY_MAX,
   MAIL_SUBJECT_MAX,
   parseRecipient,
   SEND_UNKNOWN,
   splitRecipients,
+  type MailApprovalDetail,
+  type MailApprovalSubmitRequest,
   type MailSendOptions,
   type MailSendRequest,
   type MailSendResponse,
@@ -22,6 +25,8 @@ import { RecipientInput } from './RecipientInput';
 // Write → check what will be sent (with a confirmation tick) → send once. The browser makes one token per
 // message, so pressing again after a lost answer never sends it twice. Mail also goes as BCC to the archive.
 // A reply-to address other than From can be given.
+// Approval before sending (2026-11-11): from a mailbox where this person's mail needs an approval, the same form
+// asks a reviewer instead of sending ("承認を依頼する"); a returned mail opens here again with its files (`resubmit`).
 
 export type ComposeMode = 'new' | 'reply' | 'replyAll';
 
@@ -143,6 +148,30 @@ export function withDueSentence(options: MailSendOptions, mailboxId: string, bod
 
 const TITLES: Record<ComposeMode, string> = { new: '新しいメール', reply: '返信', replyAll: '全員に返信' };
 
+/** A returned request opened in the form again: what it was, and the files kept with it. */
+export interface ComposeResubmit {
+  id: string;
+  version: number;
+  note: string;
+  returnComment: string | null;
+  attachments: { idx: number; filename: string; size: number }[];
+}
+
+/** The form of a returned request, to change and ask again. */
+export function resubmitDraft(detail: MailApprovalDetail): { initial: ComposeDraft; resubmit: ComposeResubmit; mode: ComposeMode; replyDue: string; markDone: boolean } {
+  const m = detail.message;
+  return {
+    initial: { mailboxId: detail.mailbox.id, to: m.to.join(', '), cc: m.cc.join(', '), bcc: m.bcc.join(', '), subject: m.subject, body: m.body, replyToReceiptId: m.replyToReceiptId, replyTo: m.replyTo ?? '' },
+    resubmit: { id: detail.id, version: detail.version, note: detail.note, returnComment: detail.returnComment, attachments: detail.attachments },
+    mode: m.replyToReceiptId ? 'reply' : 'new',
+    replyDue: m.replyDue ?? '',
+    markDone: m.markThreadDone,
+  };
+}
+
+/** The line shown after an approval was asked for. */
+export const SUBMITTED_NOTE = '承認を依頼しました。校閲者が承認すると送信されます。状況は「承認待ち」で確かめられます。';
+
 /** The line shown after a send: that it went, and whether its reply deadline was kept (the thread and the app use it). */
 export function sentNoteText(result: MailSendResponse): string {
   const base = result.threadDone ? '送信しました。スレッドを「完了」にしました。' : '送信しました。';
@@ -150,17 +179,43 @@ export function sentNoteText(result: MailSendResponse): string {
   return base + waitNote;
 }
 
-export function MailCompose({ options, initial, mode, onSent, onCancel }:{ options: MailSendOptions; initial: ComposeDraft; mode: ComposeMode; onSent: (result: MailSendResponse) => void; onCancel: () => void }) {
+export function MailCompose({
+  options,
+  initial,
+  mode,
+  onSent,
+  onSubmitted,
+  onCancel,
+  resubmit,
+  initialReplyDue = '',
+  initialMarkDone,
+}: {
+  options: MailSendOptions;
+  initial: ComposeDraft;
+  mode: ComposeMode;
+  onSent: (result: MailSendResponse) => void;
+  /** An approval was asked for (the From mailbox needs one for this person). */
+  onSubmitted?: (detail: MailApprovalDetail) => void;
+  onCancel: () => void;
+  /** A returned request, changed and asked again. */
+  resubmit?: ComposeResubmit;
+  initialReplyDue?: string;
+  initialMarkDone?: boolean;
+}) {
   const [draft, setDraft] = useState<ComposeDraft>(initial);
   const [files, setFiles] = useState<File[]>([]);
-  const [markDone, setMarkDone] = useState(mode !== 'new');
+  // The files kept from a returned request (by idx), and the words to the reviewer.
+  const [kept, setKept] = useState<ComposeResubmit['attachments']>(resubmit?.attachments ?? []);
+  const [note, setNote] = useState(resubmit?.note ?? '');
+  const [markDone, setMarkDone] = useState(initialMarkDone ?? mode !== 'new');
   const [preview, setPreview] = useState<Checked | null>(null);
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [errors, setErrors] = useState<Partial<Record<'to' | 'cc' | 'bcc' | 'replyTo' | 'subject' | 'body' | 'attachments' | 'replyDue', string>>>({});
+  const [errors, setErrors] = useState<Partial<Record<'to' | 'cc' | 'bcc' | 'replyTo' | 'subject' | 'body' | 'attachments' | 'replyDue' | 'note', string>>>({});
   // Reply deadline (2026-11-03): only for a From mailbox the sender may edit; the sentence is on by default.
-  const [replyDue, setReplyDue] = useState('');
-  const [dueSentence, setDueSentence] = useState(true);
+  const [replyDue, setReplyDue] = useState(initialReplyDue);
+  // A returned mail already has its deadline sentence in the text.
+  const [dueSentence, setDueSentence] = useState(!resubmit);
   const [message, setMessage] = useState<{ kind: 'error' | 'warning'; text: string } | null>(null);
   const [locked, setLocked] = useState(false);
   // CC, BCC and the reply-to address are folded until asked for, and open from the start when any of them has
@@ -173,13 +228,16 @@ export function MailCompose({ options, initial, mode, onSent, onCancel }:{ optio
   const fileInput = useRef<HTMLInputElement>(null);
 
   const from = options.from.find((f) => f.mailboxId === draft.mailboxId) ?? null;
-  const size = files.reduce((n, f) => n + f.size, 0);
+  // From this mailbox the mail is not sent now: a reviewer approves it first.
+  const needsApproval = !!resubmit || (options.approvalMailboxIds?.includes(draft.mailboxId) ?? false);
+  const fileCount = kept.length + files.length;
+  const size = kept.reduce((n, f) => n + f.size, 0) + files.reduce((n, f) => n + f.size, 0);
   const parsed = (values: string[]) => values.flatMap((v) => parseRecipient(v) ?? []);
   const dueHere = options.dueMailboxIds?.includes(draft.mailboxId) ?? false;
   const today = jstDay(new Date());
   // Checks before sending (fixed rules): shown with what will be sent.
   const findings = preview
-    ? screenMail({ subject: draft.subject, body: preview.body, to: parsed(preview.to), cc: parsed(preview.cc), replyTo: preview.replyTo ? parseRecipient(preview.replyTo) : null, fromAddress: from?.address ?? '', fromName: options.fromName, attachments: files.length })
+    ? screenMail({ subject: draft.subject, body: preview.body, to: parsed(preview.to), cc: parsed(preview.cc), replyTo: preview.replyTo ? parseRecipient(preview.replyTo) : null, fromAddress: from?.address ?? '', fromName: options.fromName, attachments: fileCount })
     : [];
   const warnings = findings.filter((f) => f.level === 'warning').length;
   const toNames = parsed(splitRecipients(draft.to)).map((a) => a.name ?? '（名前なし）');
@@ -243,13 +301,14 @@ export function MailCompose({ options, initial, mode, onSent, onCancel }:{ optio
     if (to.length + cc.length + bcc.length > options.maxRecipients) next.to = `宛先・CC・BCC は合わせて ${options.maxRecipients} 件までです。`;
     if (!draft.subject.trim()) next.subject = '件名を入力してください。';
     else if (draft.subject.length > MAIL_SUBJECT_MAX) next.subject = `件名は ${MAIL_SUBJECT_MAX} 文字以内にしてください。`;
-    if (files.length > MAIL_ATTACHMENTS_MAX) next.attachments = `添付ファイルは ${MAIL_ATTACHMENTS_MAX} 個までです。`;
+    if (fileCount > MAIL_ATTACHMENTS_MAX) next.attachments = `添付ファイルは ${MAIL_ATTACHMENTS_MAX} 個までです。`;
     else if (size > options.maxAttachmentBytes) next.attachments = `添付ファイルは合わせて ${fmtSize(options.maxAttachmentBytes)} までです（いま ${fmtSize(size)}）。`;
     const due = dueHere && replyDue ? replyDue : null;
     if (due && !isDueDate(due)) next.replyDue = '回答期限は、実在する日付で入力してください。';
     else if (due && due < today) next.replyDue = '回答期限は今日以降の日付にしてください。';
     const body = due && dueSentence && isDueDate(due) ? withDueSentence(options, draft.mailboxId, draft.body, replyDueSentence(due, today)) : draft.body;
     if (body.length > MAIL_BODY_MAX) next.body = `本文は ${MAIL_BODY_MAX.toLocaleString('ja-JP')} 文字以内にしてください。`;
+    if (needsApproval && note.trim().length > MAIL_APPROVAL_NOTE_MAX) next.note = `校閲者へのひとことは ${MAIL_APPROVAL_NOTE_MAX} 文字以内にしてください。`;
     setErrors(next);
     return Object.keys(next).length === 0 ? { to, cc, bcc, replyTo, body, replyDue: due } : null;
   }
@@ -273,9 +332,15 @@ export function MailCompose({ options, initial, mode, onSent, onCancel }:{ optio
       replyDue: preview.replyDue,
     };
     const form = new FormData();
-    form.append('message', JSON.stringify(body));
+    const asked: MailApprovalSubmitRequest = { ...body, note: note.trim(), ...(resubmit ? { expectedVersion: resubmit.version, keepAttachments: kept.map((a) => a.idx) } : {}) };
+    form.append('message', JSON.stringify(needsApproval ? asked : body));
     for (const f of files) form.append('attachments', f, f.name);
     try {
+      if (needsApproval) {
+        const detail = await apiForm<MailApprovalDetail>(resubmit ? `/api/mail/approvals/${resubmit.id}` : '/api/mail/approvals', form, resubmit ? 'PUT' : 'POST');
+        onSubmitted?.(detail);
+        return;
+      }
       const result = await apiForm<MailSendResponse>('/api/mail/send', form);
       onSent(result);
     } catch (err) {
@@ -288,7 +353,8 @@ export function MailCompose({ options, initial, mode, onSent, onCancel }:{ optio
         if (badField) setPreview(null);
         // No answer, or a server error other than a refusal the server explained: it may have been sent.
         const unsure = failure.status === 0 || (failure.status >= 500 && !['send_failed', 'send_unavailable'].includes(failure.body?.error ?? ''));
-        setMessage({ kind: 'error', text: unsure ? `${failure.message} 届いたかどうかは、もう一度「送信する」を押すと確かめられます（二重には送られません）。` : failure.message });
+        const again = needsApproval ? '依頼できたかどうかは、もう一度「承認を依頼する」を押すと確かめられます（二重には出ません）。' : '届いたかどうかは、もう一度「送信する」を押すと確かめられます（二重には送られません）。';
+        setMessage({ kind: 'error', text: unsure ? `${failure.message} ${again}` : failure.message });
       }
     } finally {
       sending.current = false;
@@ -308,13 +374,21 @@ export function MailCompose({ options, initial, mode, onSent, onCancel }:{ optio
     <section className="mail-compose" aria-labelledby="compose-title" data-testid="mail-compose">
       <div className="compose-head">
         <div>
-          <h3 id="compose-title">{TITLES[mode]}</h3>
-          <p className="hint compose-sub">委員会のアドレスから送ります。送ったメールは、差出人の受信箱に「完了」で残ります。</p>
+          <h3 id="compose-title">{resubmit ? '差し戻されたメールを直す' : TITLES[mode]}</h3>
+          <p className="hint compose-sub">
+            {needsApproval ? 'この差出人のメールは、校閲者が承認すると委員会のアドレスから送られます（承認されるまでは送られません）。' : '委員会のアドレスから送ります。送ったメールは、差出人の受信箱に「完了」で残ります。'}
+          </p>
         </div>
         <button type="button" className="quiet" onClick={onCancel} disabled={busy}>
           閉じる
         </button>
       </div>
+      {resubmit?.returnComment && (
+        <p className="status warning approval-return" role="status" data-testid="compose-return-comment">
+          <strong>差し戻しの理由</strong>
+          <span className="approval-comment">{resubmit.returnComment}</span>
+        </p>
+      )}
       {!preview ? (
         <form
           className="compose-form"
@@ -329,10 +403,10 @@ export function MailCompose({ options, initial, mode, onSent, onCancel }:{ optio
           }}
         >
           <label htmlFor="compose-from">差出人</label>
-          <select id="compose-from" value={draft.mailboxId} onChange={(e) => changeFrom(e.target.value)} disabled={busy}>
+          <select id="compose-from" value={draft.mailboxId} onChange={(e) => changeFrom(e.target.value)} disabled={busy || !!resubmit} data-testid="compose-from">
             {options.from.map((f) => (
               <option key={f.mailboxId} value={f.mailboxId}>
-                {f.name}（{f.address}）
+                {f.name}（{f.address}）{options.approvalMailboxIds?.includes(f.mailboxId) ? '・承認が必要' : ''}
               </option>
             ))}
           </select>
@@ -400,8 +474,24 @@ export function MailCompose({ options, initial, mode, onSent, onCancel }:{ optio
           {errorOf('body')}
           <div className="compose-files">
             <span className="compose-files-label">添付ファイル</span>
-            {files.length > 0 && (
+            {fileCount > 0 && (
               <ul>
+                {kept.map((a) => (
+                  <li key={`kept-${a.idx}`}>
+                    <span className="compose-file-name">{a.filename}</span> <span className="hint">{fmtSize(a.size)}・前回の添付</span>
+                    <button
+                      type="button"
+                      className="quiet"
+                      aria-label={`${a.filename} を外す`}
+                      onClick={() => {
+                        setKept((all) => all.filter((k) => k.idx !== a.idx));
+                        setPreview(null);
+                      }}
+                    >
+                      外す
+                    </button>
+                  </li>
+                ))}
                 {files.map((f, i) => (
                   <li key={`${f.name}-${i}`}>
                     <span className="compose-file-name">{f.name}</span> <span className="hint">{fmtSize(f.size)}</span>
@@ -425,7 +515,7 @@ export function MailCompose({ options, initial, mode, onSent, onCancel }:{ optio
               <input ref={fileInput} type="file" multiple className="sr-only" onChange={(e) => addFiles(e.target.files)} data-testid="compose-files" />
             </label>
             <p className="hint">
-              {MAIL_ATTACHMENTS_MAX} 個・合わせて {fmtSize(options.maxAttachmentBytes)} まで{files.length > 0 ? `（いま ${files.length} 個・${fmtSize(size)}）` : ''}
+              {MAIL_ATTACHMENTS_MAX} 個・合わせて {fmtSize(options.maxAttachmentBytes)} まで{fileCount > 0 ? `（いま ${fileCount} 個・${fmtSize(size)}）` : ''}
             </p>
             {errorOf('attachments')}
           </div>
@@ -449,9 +539,32 @@ export function MailCompose({ options, initial, mode, onSent, onCancel }:{ optio
               送ったら、このスレッドを「完了」にする
             </label>
           )}
+          {needsApproval && (
+            <>
+              <label htmlFor="compose-note">校閲者へのひとこと（任意）</label>
+              <textarea
+                id="compose-note"
+                rows={2}
+                value={note}
+                maxLength={MAIL_APPROVAL_NOTE_MAX}
+                onChange={(e) => {
+                  setNote(e.target.value);
+                  setPreview(null);
+                  setConfirmed(false);
+                }}
+                aria-describedby="compose-note-hint"
+                {...field('note')}
+                data-testid="compose-note"
+              />
+              {errorOf('note')}
+              <p className="field-hint" id="compose-note-hint">
+                見てほしい所や急ぎの事情があれば書きます。相手には送られません。
+              </p>
+            </>
+          )}
           <div className="actions">
             <button type="submit" data-testid="compose-check">
-              送信内容を確認
+              {needsApproval ? '依頼内容を確認' : '送信内容を確認'}
             </button>
             <button type="button" className="secondary" onClick={onCancel}>
               やめる
@@ -460,7 +573,7 @@ export function MailCompose({ options, initial, mode, onSent, onCancel }:{ optio
         </form>
       ) : (
         <div className="compose-preview" data-testid="compose-preview">
-          <h4>送信内容の確認</h4>
+          <h4>{needsApproval ? '依頼内容の確認' : '送信内容の確認'}</h4>
           <dl>
             <dt>差出人</dt>
             <dd>
@@ -494,10 +607,10 @@ export function MailCompose({ options, initial, mode, onSent, onCancel }:{ optio
             )}
             <dt>件名</dt>
             <dd data-testid="preview-subject">{draft.subject}</dd>
-            {files.length > 0 && (
+            {fileCount > 0 && (
               <>
                 <dt>添付</dt>
-                <dd>{files.map((f) => `${f.name}（${fmtSize(f.size)}）`).join('、')}</dd>
+                <dd>{[...kept.map((a) => `${a.filename}（${fmtSize(a.size)}）`), ...files.map((f) => `${f.name}（${fmtSize(f.size)}）`)].join('、')}</dd>
               </>
             )}
             {preview.replyDue && (
@@ -518,6 +631,11 @@ export function MailCompose({ options, initial, mode, onSent, onCancel }:{ optio
             {preview.body}
           </pre>
           {draft.replyToReceiptId && markDone && <p className="hint">送ったあと、このスレッドを「完了」にします。</p>}
+          {needsApproval && note.trim() && (
+            <p className="hint approval-note" data-testid="preview-note">
+              校閲者へのひとこと：{note.trim()}
+            </p>
+          )}
           <section className="compose-screen" aria-labelledby="compose-screen-title" data-testid="compose-screen">
             <h5 id="compose-screen-title">送信前のチェック</h5>
             {findings.length === 0 ? (
@@ -535,11 +653,12 @@ export function MailCompose({ options, initial, mode, onSent, onCancel }:{ optio
           </section>
           <label className="confirm-check">
             <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} disabled={busy || locked} data-testid="compose-confirm" />
-            {warnings > 0 ? `注意 ${warnings} 件を確かめたうえで、` : ''}この宛先と内容で、委員会のアドレスから送ります
+            {warnings > 0 ? `注意 ${warnings} 件を確かめたうえで、` : ''}
+            {needsApproval ? 'この宛先と内容で、承認を依頼します（校閲者が承認すると送られます）' : 'この宛先と内容で、委員会のアドレスから送ります'}
           </label>
           <div className="actions">
             <button type="button" onClick={() => void send()} disabled={!confirmed || busy || locked} data-testid="compose-send">
-              {busy ? '送信しています…' : '送信する'}
+              {needsApproval ? (busy ? '依頼しています…' : '承認を依頼する') : busy ? '送信しています…' : '送信する'}
             </button>
             <button type="button" className="secondary" disabled={busy} onClick={() => setPreview(null)}>
               編集に戻る

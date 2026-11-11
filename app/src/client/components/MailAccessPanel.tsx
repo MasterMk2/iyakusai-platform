@@ -4,7 +4,10 @@ import { api, fmtDate, toFailure } from '../api';
 import { useLoader } from '../useLoader';
 import { LoadStatus } from './LoadStatus';
 
-type Kind = 'edit' | 'send';
+type Kind = 'edit' | 'send' | 'review' | 'approval';
+const KIND_LABELS: Record<Kind, string> = { edit: '編集', send: '送信', review: '校閲', approval: '承認必須' };
+/** What a tick is called in the messages: 承認必須 is a mark on a person, not a grant. */
+const KIND_NAMES: Record<Kind, string> = { edit: '編集権限', send: '送信権限', review: '校閲権限', approval: '承認必須' };
 type Target = { userId: string } | { department: string };
 
 const keyOf = (t: Target, mailboxId: string, kind: Kind) => `${'userId' in t ? `u:${t.userId}` : `d:${t.department}`}|${mailboxId}|${kind}`;
@@ -17,12 +20,16 @@ const keyOf = (t: Target, mailboxId: string, kind: Kind) => `${'userId' in t ? `
  * A tick shows at once and is saved in the background; only that tick waits for the server (2026-10-26: the
  * whole list waited for the save and a reload before, and seemed not to react).
  * The official LINE account's grants (2026-10-28) use the same panel and rules: `variant="line"`.
+ * Approval before sending (2026-11-11, mail only): 校閲 lets a person or a department approve, change and return the
+ * mail that waits in that mailbox; 承認必須 marks a person whose mail from it always waits, even with a send grant.
  */
 const TEXT = {
   mail: {
     endpoint: '/api/mail/admin/access',
     title: 'メールの権限',
     intro: 'メールの閲覧・ラベル付け・担当者変更・対応状況の変更は委員全員ができます。ここで受信箱ごとに付けるのは、内部メモを追加する「編集」と、その受信箱のアドレスを差出人にしてアプリからメールを送る「送信」です。部局に付けると、その部局の委員全員（あとから入った人も）が持ちます。',
+    approval:
+      '「校閲」を付けた人は、その受信箱から送るメールの承認待ちを見て、承認して送信・直す・差し戻すができます（自分が書いたメールは承認できません）。校閲者が 1 人でもいる受信箱では、送信権限の無い委員も「承認を依頼する」でメールを出せるようになり、校閲者が承認すると送られます。送信権限のある人にも承認を通させたいとき（1 年生など）は、その人に「承認必須」を付けます。',
     what: '受信箱の権限',
     pick: '受信箱',
     ingested: (n: number) => `取り込み済み ${n} 通`,
@@ -34,6 +41,7 @@ const TEXT = {
     endpoint: '/api/line/admin/access',
     title: '公式LINE の権限',
     intro: '公式LINE の閲覧・ラベル付け・担当者変更・対応状況の変更は委員全員ができます（臨時スタッフを除く）。ここで付けるのは、内部メモを追加する「編集」と、アプリから公式LINE で送る「送信」です。部局に付けると、その部局の委員全員（あとから入った人も）が持ちます。',
+    approval: null,
     what: '公式LINE の権限',
     pick: 'アカウント',
     ingested: (n: number) => `取り込み済み ${n} 件`,
@@ -68,13 +76,15 @@ export function MailAccessPanel({ variant = 'mail' }: { variant?: keyof typeof T
     return p === undefined ? stored : p;
   };
   const busy = (t: Target, kind: Kind) => !!selected && pending[keyOf(t, selected.id, kind)] !== undefined;
+  // The approval before sending exists on a mail server that answers with its grants (an older server does not).
+  const approvalOn = text.approval !== null && !!data?.reviewGrants;
   const rowFailed = (t: Target) =>
-    selected && failed && (failed === keyOf(t, selected.id, 'edit') || failed === keyOf(t, selected.id, 'send')) ? (
+    selected && failed && (Object.keys(KIND_LABELS) as Kind[]).some((k) => failed === keyOf(t, selected.id, k)) ? (
       <span className="grant-failed" role="alert">
         保存できませんでした
       </span>
     ) : null;
-  const count = (id: string, kind: Kind) => (kind === 'edit' ? data?.grants : data?.sendGrants)?.filter((g) => g.mailboxId === id).length ?? 0;
+  const count = (id: string, kind: 'edit' | 'send' | 'review') => (kind === 'edit' ? data?.grants : kind === 'send' ? data?.sendGrants : data?.reviewGrants)?.filter((g) => g.mailboxId === id).length ?? 0;
   const needle = filter.normalize('NFKC').trim().toLowerCase();
   const people = (data?.people ?? []).filter((p) => !needle || `${p.displayName} ${p.roleLabel}`.normalize('NFKC').toLowerCase().includes(needle));
   const departments = data?.departments ?? [];
@@ -89,8 +99,7 @@ export function MailAccessPanel({ variant = 'mail' }: { variant?: keyof typeof T
     try {
       const next = await api<MailAccessResponse>('PUT', text.endpoint, { ...target, mailboxId: box.id, [kind]: on });
       setSaved(next);
-      const what = kind === 'edit' ? '編集権限' : '送信権限';
-      setMessage({ text: `${name}の「${box.name}」の${what}を${on ? '付けました' : '外しました'}。`, error: false });
+      setMessage({ text: `${name}の「${box.name}」の${KIND_NAMES[kind]}を${on ? '付けました' : '外しました'}。`, error: false });
     } catch (err) {
       setMessage({ text: `${name}：${toFailure(err).message}`, error: true });
       setFailed(key);
@@ -107,6 +116,7 @@ export function MailAccessPanel({ variant = 'mail' }: { variant?: keyof typeof T
     <section className="admin" aria-labelledby={tid('mail-access-title')} data-testid={tid('mail-access')}>
       <h3 id={tid('mail-access-title')}>{text.title}</h3>
       <p className="hint">{text.intro}</p>
+      {approvalOn && <p className="hint">{text.approval}</p>}
       <LoadStatus loader={access} what={text.what} compact />
       {data && (
         <>
@@ -120,7 +130,7 @@ export function MailAccessPanel({ variant = 'mail' }: { variant?: keyof typeof T
               <select value={selected?.id ?? ''} onChange={(e) => setMailboxId(e.target.value)}>
                 {data.mailboxes.map((m) => (
                   <option key={m.id} value={m.id}>
-                    {m.name}（{m.address}）編集 {count(m.id, 'edit')} 人{data.sendable?.includes(m.id) ? `・送信 ${count(m.id, 'send')} 人` : ''}
+                    {m.name}（{m.address}）編集 {count(m.id, 'edit')} 人{data.sendable?.includes(m.id) ? `・送信 ${count(m.id, 'send')} 人${approvalOn ? `・校閲 ${count(m.id, 'review')} 人` : ''}` : ''}
                   </option>
                 ))}
               </select>
@@ -162,6 +172,12 @@ export function MailAccessPanel({ variant = 'mail' }: { variant?: keyof typeof T
                           送信
                         </label>
                       )}
+                      {approvalOn && (sendable || deptHas(d, 'review')) && (
+                        <label className="checkbox">
+                          <input type="checkbox" checked={shown(t, 'review', deptHas(d, 'review'))} disabled={busy(t, 'review')} onChange={(e) => void toggle(t, 'review', e.target.checked, label)} aria-label={`${d} の校閲権限`} data-testid="grant-department-review" />
+                          校閲
+                        </label>
+                      )}
                       {rowFailed(t)}
                     </li>
                   );
@@ -178,7 +194,7 @@ export function MailAccessPanel({ variant = 'mail' }: { variant?: keyof typeof T
                 {people.map((p) => {
                   const t = { userId: p.id };
                   const theirs = departmentsOfLabel(p.roleLabel);
-                  const viaDept = (kind: Kind) => theirs.some((d) => deptHas(d, kind));
+                  const viaDept = (kind: Kind) => kind !== 'approval' && theirs.some((d) => deptHas(d, kind));
                   const name = `${p.displayName} さん`;
                   const box = (kind: Kind, own: boolean) => {
                     const via = viaDept(kind) && !own;
@@ -189,16 +205,20 @@ export function MailAccessPanel({ variant = 'mail' }: { variant?: keyof typeof T
                           checked={shown(t, kind, own) || via}
                           disabled={busy(t, kind) || via}
                           onChange={(e) => void toggle(t, kind, e.target.checked, name)}
-                          aria-label={`${p.displayName} さんの${kind === 'edit' ? '編集' : '送信'}権限`}
-                          data-testid={kind === 'send' ? tid('grant-send') : undefined}
+                          aria-label={`${p.displayName} さんの${KIND_NAMES[kind]}`}
+                          data-testid={kind === 'edit' ? undefined : tid(`grant-${kind}`)}
                         />
-                        {kind === 'edit' ? '編集' : '送信'}
+                        {KIND_LABELS[kind]}
                         {via && <span className="grant-via">部局</span>}
                       </label>
                     );
                   };
                   const ownEdit = has(data.grants, p.id);
                   const ownSend = has(data.sendGrants, p.id);
+                  const ownReview = has(data.reviewGrants, p.id);
+                  const marked = has(data.approvalRequired, p.id);
+                  // 承認必須 changes something only for a person who could send at once; a mark already set can always be removed.
+                  const canSendNow = ownSend || viaDept('send');
                   return (
                     <li key={p.id} className="grant-row">
                       <span className="grant-person">
@@ -207,6 +227,8 @@ export function MailAccessPanel({ variant = 'mail' }: { variant?: keyof typeof T
                       </span>
                       {box('edit', ownEdit)}
                       {(sendable || ownSend || viaDept('send')) && box('send', ownSend)}
+                      {approvalOn && (sendable || ownReview || viaDept('review')) && box('review', ownReview)}
+                      {approvalOn && ((sendable && canSendNow) || marked) && box('approval', marked)}
                       {rowFailed(t)}
                     </li>
                   );

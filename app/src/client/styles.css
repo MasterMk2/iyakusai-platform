@@ -1644,4 +1644,39 @@ button.task-tree-toggle:focus-visible { outline-offset: -3px; }
 /* Ten tabs (掲示板 added 2026-11-11): below 420px each is under 42px, so a three-letter label (掲示板・連絡先) needs 12px to stay on one line. */
 @media (max-width: 420px) {
   .global-nav a { padding-left: 0; padding-right: 0; font-size: 12px; }
+/* Approval before sending (2026-11-11): the waiting mail's list and one request, in the mailbox's two columns. */
+.approval-list h2 { margin: 0 0 4px; }
+.approval-back { display: none; padding: 8px 0; min-height: 44px; color: var(--blue); }
+.approval-section { margin-top: 16px; }
+.approval-section .section-label { margin-bottom: 4px; }
+.chip.approval-pending, .chip.approval-sending { background: var(--info-bg); color: var(--navy); }
+.chip.approval-returned, .chip.approval-unknown { background: var(--amber-bg); color: var(--amber); }
+.chip.approval-sent { background: var(--green-bg); color: var(--green); }
+.chip.approval-withdrawn { background: var(--neutral-bg); color: var(--muted); }
+.approval-detail { display: grid; gap: 12px; }
+.approval-detail > .detail-head, .approval-detail > .status { margin: 0; }
+.approval-return { align-items: flex-start; flex-direction: column; gap: 4px; }
+.approval-comment { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); }
+.approval-note-box { border-left: 3px solid var(--line); padding: 2px 0 2px 12px; }
+.approval-note-box .section-label, .approval-note-box p { margin: 0; }
+.approval-note { overflow-wrap: anywhere; }
+.approval-changed .status { margin: 0; }
+.approval-changed summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; color: var(--blue); font-size: 14px; }
+.approval-changed dl { display: grid; gap: 8px; margin: 0; font-size: 14px; }
+.approval-changed dt { color: var(--muted); font-weight: 700; }
+.approval-changed dd { margin: 0; padding: 6px 10px; background: var(--paper); border: 1px solid var(--line); border-radius: 6px; overflow-wrap: anywhere; }
+.approval-files { list-style: none; margin: 0; padding: 0; }
+.approval-thread-link { padding: 0; min-height: 0; color: var(--blue); text-align: left; }
+.approval-done-note { display: block; }
+.approval-actions { display: grid; gap: 10px; border-top: 1px solid var(--line); padding-top: 12px; }
+.approval-actions .section-label, .approval-actions .hint { margin: 0; }
+.approval-actions .confirm-check { cursor: pointer; min-height: 44px; }
+.approval-actions .confirm-check input { width: 20px; height: 20px; min-height: 0; padding: 0; margin: 0; flex: none; cursor: pointer; }
+.approval-ask { flex-basis: 100%; font-size: 14px; }
+.approval-edit { border: 2px solid var(--blue); border-radius: 8px; padding: 12px 14px; }
+.home-approvals { justify-content: space-between; }
+.list-compose .count-badge { margin-left: 6px; }
+.sidebar-send .nav-item { margin-top: 6px; }
+@media (max-width: 1199px) {
+  .approval-back { display: inline-flex; }
 }

@@ -46,11 +46,11 @@ export async function api<T>(method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'
   return json as T;
 }
 
-/** POST of a form with files (multipart/form-data; the browser sets the boundary). */
-export async function apiForm<T>(url: string, form: FormData): Promise<T> {
+/** POST (or PUT) of a form with files (multipart/form-data; the browser sets the boundary). */
+export async function apiForm<T>(url: string, form: FormData, method: 'POST' | 'PUT' = 'POST'): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(url, { method: 'POST', credentials: 'same-origin', headers: { 'X-SMM-CSRF': '1' }, body: form });
+    res = await fetch(url, { method, credentials: 'same-origin', headers: { 'X-SMM-CSRF': '1' }, body: form });
   } catch (err) {
     throw toFailure(err);
   }

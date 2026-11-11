@@ -3,6 +3,7 @@ import { DecisionsHomeCard } from './decisions/DecisionsHomeCard';
 import { DayOfPanel } from './dayof/DayOfPanel';
 import { useCallback, useState, type FormEvent, type ReactNode } from 'react';
 import type { MailboxSummary } from '../../shared/api';
+import type { MailApprovalCounts } from '../../shared/mailbox';
 import type { UpcomingItem } from '../../shared/calendar';
 import type { MailDueResponse } from '../../shared/mailDue';
 import type { AssistantSummary } from '../../shared/assistant';
@@ -47,6 +48,8 @@ export function HomeView({
   inbox,
   inboxLocked = false,
   inboxUnhandledTotal = null,
+  approvals = null,
+  onOpenApprovals,
   refresh,
   onRefresh,
   onOpenTasks,
@@ -68,6 +71,9 @@ export function HomeView({
   inboxLocked?: boolean;
   /** The committee mailbox counts a message in two mailboxes once; the per-mailbox rows would count it twice. */
   inboxUnhandledTotal?: number | null;
+  /** Mail that waits for this person's approval, and their own mail that was sent back (2026-11-11). */
+  approvals?: MailApprovalCounts | null;
+  onOpenApprovals?: () => void;
   refresh: number;
   onRefresh: () => void;
   onOpenTasks: () => void;
@@ -205,6 +211,8 @@ export function HomeView({
               lineAccounts={lineAccounts}
               locked={inboxLocked}
               unhandledTotal={mailTotal}
+              approvals={approvals}
+              onOpenApprovals={onOpenApprovals}
               unhandled={unhandled}
               onOpenInbox={onOpenInbox}
               onOpenMailbox={onOpenMailbox}
@@ -355,6 +363,8 @@ function InboxCard({
   lineAccounts,
   locked,
   unhandledTotal,
+  approvals,
+  onOpenApprovals,
   unhandled,
   onOpenInbox,
   onOpenMailbox,
@@ -365,6 +375,8 @@ function InboxCard({
   lineAccounts: LineAccountSummary[];
   locked: boolean;
   unhandledTotal: number | null;
+  approvals?: MailApprovalCounts | null;
+  onOpenApprovals?: () => void;
   unhandled: Loader<InboxResponse | null>;
   onOpenInbox: (filter?: InboxFilter) => void;
   onOpenMailbox?: (mailboxId: string) => void;
@@ -395,6 +407,16 @@ function InboxCard({
         </p>
       ) : (
         <>
+          {approvals && onOpenApprovals && approvals.toReview + approvals.returned > 0 && (
+            <p className="status warning home-approvals" role="status" data-testid="home-approvals">
+              <span>
+                {[approvals.toReview > 0 ? `あなたの承認を待つメールが ${approvals.toReview} 件` : '', approvals.returned > 0 ? `差し戻されたメールが ${approvals.returned} 件` : ''].filter(Boolean).join('、')}あります。
+              </span>
+              <button type="button" className="secondary" onClick={onOpenApprovals}>
+                承認待ちを開く
+              </button>
+            </p>
+          )}
           <LoadStatus loader={unhandled} what="未対応のメール" compact />
           {unhandled.data && items.length === 0 && <p className="empty">未対応のメールはありません。</p>}
           {items.length > 0 && (
