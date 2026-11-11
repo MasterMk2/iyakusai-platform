@@ -123,3 +123,11 @@ describe('the title and the settings', () => {
     expect(committeeSignatureBody.parse({ address: '〒000-0000 合成市', contactEmail: 'contact@committee.example' })).toEqual({ address: '〒000-0000 合成市', contactEmail: 'contact@committee.example' });
   });
 });
+
+describe('the Bot draft in the committee shape (2026-11-10)', () => {
+  it('is replaced as a whole by the person\'s signature', () => {
+    const sig = mailSignature(FULL);
+    const bot = ['本文です。', '', MAIL_SIGNATURE_RULE, '送信者', '', '合成 医学薬学祭実行委員会', '【所属(部・課)】 【氏名】', '', '【住所】', '団体代表email : 【委員会の窓口のメールアドレス】', '委員個人email : 【自分のメールアドレス】', MAIL_SIGNATURE_RULE].join('\n');
+    expect(replaceDraftSignature(bot, sig, FULL.organization)).toBe(`本文です。\n\n${sig}`);
+  });
+});

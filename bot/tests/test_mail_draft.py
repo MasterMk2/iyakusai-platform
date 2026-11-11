@@ -119,7 +119,15 @@ class PromptTests(unittest.TestCase):
 
     def test_signature_has_no_real_phone_or_member_address(self):
         # GitHub に置くリポジトリなので、署名は【 】のまま。委員会の住所(大学の公開住所)だけ実物
-        self.assertIn("【連絡先メールアドレス】", M.MAIL_INSTRUCTIONS)
+        self.assertIn("委員個人email : 【自分のメールアドレス】", M.MAIL_INSTRUCTIONS)
+        self.assertIn("団体代表email : 【委員会の窓口のメールアドレス】", M.MAIL_INSTRUCTIONS)
+
+    def test_signature_is_the_committee_shape(self):
+        # 統合アプリの署名(app/src/shared/signature.ts の mailSignature)と同じ並び。アプリはこの枠を置き換える
+        rule = "ーーー ーーー ーーー ーーー ーーー ーーー ーーー ーーー"
+        self.assertEqual(M.MAIL_INSTRUCTIONS.count(rule), 2)
+        block = M.MAIL_INSTRUCTIONS.split(rule)[1]
+        self.assertTrue(block.startswith("\n送信者\n\n"))
         self.assertNotRegex(M.MAIL_INSTRUCTIONS, r"\d{2,4}-\d{2,4}-\d{3,4}")
         self.assertNotIn("@", M.MAIL_INSTRUCTIONS)
 
