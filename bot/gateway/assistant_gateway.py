@@ -716,7 +716,10 @@ class AssistantGateway:
             raise AssistantError(400, "FEATURE_UNAVAILABLE", "この機能はいまの設定では使えません。")
         with self._input_guard():
             validated = self.logic.notice_input({key: body[key] for key in ("targetIds", "text") if key in body})
-        if any(context.committee_role(target) is None for target in validated["targetIds"]):
+        # サーバーを抜けた人が 1 人混じっても、残りの人への知らせは止めない(全員だめなら 400)。
+        validated["targetIds"] = [target for target in validated["targetIds"]
+                                  if context.committee_role(target) is not None]
+        if not validated["targetIds"]:
             _invalid("対象は委員から選んでください")
         job = self._enqueue(context, client_op, "remind", "notice", validated)
         return self._settle(job)

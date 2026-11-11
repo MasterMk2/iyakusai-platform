@@ -715,7 +715,11 @@ class RemindWriteTests(Harness):
         self.assertEqual((job["kind"], job["op"]), ("remind", "notice"))
         self.assertEqual(job["input"]["targetIds"], [OTHER, OFFICER])   # 同じ人は 1 回
         self.assertIn("\n", job["input"]["text"])                     # 改行は残す
-        outsider = self.post(("notices",), self.notice_body(targetIds=[uid(OTHER), uid(OUTSIDER)]))
+        # 委員でない人は外して残りに送る。全員が委員でなければ 400
+        mixed = self.post(("notices",), self.notice_body(targetIds=[uid(OTHER), uid(OUTSIDER)]))
+        self.assertEqual(mixed.status, 202)
+        self.assertEqual(mixed.json()["job"]["input"]["targetIds"], [OTHER])
+        outsider = self.post(("notices",), self.notice_body(targetIds=[uid(OUTSIDER)]))
         self.assertEqual(outsider.status, 400)
         self.assertEqual(outsider.json()["error"]["message"], "対象は委員から選んでください")
 

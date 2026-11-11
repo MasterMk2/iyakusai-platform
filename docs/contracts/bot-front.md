@@ -116,7 +116,7 @@ interface JobResult {
 | POST `/assistant/reminders` | `{clientOperationId, text, due, targetId?, repeat?, channelId?}` → ジョブを作り、最大 8 秒待つ。終われば 200 `{job}`（`job.result.reminder`）、終わらなければ 202 `{job}` |
 | POST `/assistant/reminders/<id>/done` | `{clientOperationId}`。同上 |
 | POST `/assistant/reminders/<id>/delete` | `{clientOperationId}`。同上 |
-| POST `/assistant/notices` | 個人あての知らせ（2026-11-11）。`{clientOperationId, targetIds:["discord-<ID>", …], text}` → Bot が `text` を各対象に DM で送る。対象は委員だけ・1〜30 人、`text` は 1〜500 字（改行可）。ジョブは `remind` の `op:"notice"`（リマインドは作らない）。最大 8 秒待つ（同上）。Bot が知らせを扱えない版なら 400 `FEATURE_UNAVAILABLE` |
+| POST `/assistant/notices` | 個人あての知らせ（2026-11-11）。`{clientOperationId, targetIds:["discord-<ID>", …], text}` → Bot が `text` を各対象に DM で送る。対象は 1〜30 人で、委員でない人は外して残りに送る（全員が委員でなければ 400）。`text` は 1〜500 字（改行可）。ジョブは `remind` の `op:"notice"`（リマインドは作らない）。最大 8 秒待つ（同上）。Bot が知らせを扱えない版なら 400 `FEATURE_UNAVAILABLE` |
 | GET `/assistant/candidates?state=open\|recent` | `{candidates:[Candidate]}`。open は承認待ち（posted）と、自動で起票したもの（created・auto）のうち差し戻せるもの。recent は直近 7 日のすべての状態 |
 | POST `/assistant/candidates/<id>/<action>` | action は `ok`・`ng`・`undo`・`return`。`{clientOperationId, comment?}`（return は comment が必須・1000 字まで）。最大 8 秒待つ（同上） |
 

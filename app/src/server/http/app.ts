@@ -37,6 +37,7 @@ import { registerMailboxRoutes, type MailboxRuntime } from '../mailbox/routes.js
 import { attachRentalDriveSync, SYNC_ACK_PATH } from '../rental/drive-sync.js';
 import { registerRentalRoutes, type RentalRuntime } from '../rental/routes.js';
 import { registerTaskRoutes, type TaskRuntime } from '../tasks/routes.js';
+import { AssistantServiceError } from '../assistant/client.js';
 import { registerAssistantRoutes, type AssistantRuntime } from '../assistant/routes.js';
 import { attachmentDisposition } from './content-disposition.js';
 import { registerCalendarRoutes, type CalendarRuntime } from '../calendar/routes.js';
@@ -285,7 +286,11 @@ function approvalNotifierFor(assistant: AssistantRuntime, publicOrigin: string |
     if (!actor || targetIds.length === 0) return;
     void assistant.client
       .createNotice(actor, { clientOperationId: `mail-approval:${notice.requestId}:${notice.kind}:${notice.version}`, targetIds, text: approvalNoticeText(notice, publicOrigin) })
-      .catch(() => undefined);
+      .catch((err: unknown) => {
+        // One line to look at when "no DM came": the kind, the request and why. Never a name, an address or text.
+        const why = err instanceof AssistantServiceError ? `${err.kind} ${err.status}${err.body ? ` ${err.body.code}` : ''}` : 'error';
+        console.warn(`メールの承認の知らせを Bot に渡せませんでした（${notice.kind} ${notice.requestId}・${why}）`);
+      });
   };
 }
 
