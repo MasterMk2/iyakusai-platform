@@ -37,6 +37,7 @@ import type { MailboxConfig, MailSendConfig } from './config.js';
 import { fetchPublicImage, type RemoteImageFetch } from './images.js';
 import { attachMailIngest } from './ingest.js';
 import { MailApprovals } from './approval.js';
+import type { ApprovalNotifier } from './approval-notice.js';
 import { registerApprovalFormRoutes, registerApprovalRoutes, type ApprovalRouteDeps } from './approval-routes.js';
 import { MailSender } from './send.js';
 import { registerSignatureRoutes, SignatureStore } from './signature.js';
@@ -101,6 +102,8 @@ export interface MailboxRouteDeps {
   fromTrustedProxy?: (request: FastifyRequest) => boolean;
   /** The decision register, for the minutes' decision items (null or absent: the register is off). */
   decisions?: DecisionsStore | null;
+  /** Tells people on Discord about the approval before sending (2026-11-11); absent: the screens' counts only. */
+  approvalNotifier?: ApprovalNotifier | null;
 }
 
 /** Mail as a source of committee tasks (the task routes check it before linking or showing a task's origin). */
@@ -206,7 +209,7 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
   const ehloHost = deps.publicOrigin ? new URL(deps.publicOrigin).hostname : undefined;
   const sender = sendConfig ? new MailSender(rt.store, rt.addresses, { ...rt.config, send: sendConfig }, rt.transport ?? smtpTransport({ ...sendConfig.smtp, ...(ehloHost ? { ehloHost } : {}) }), service) : null;
   // Approval before sending (2026-11-11): exists with sending.
-  const approvals = sender ? new MailApprovals(rt.store, rt.addresses, deps.people, service, sender) : null;
+  const approvals = sender ? new MailApprovals(rt.store, rt.addresses, deps.people, service, sender, deps.approvalNotifier ?? null) : null;
   const now = deps.now ?? Date.now;
   const idleMs = rt.config.idleHours * 3_600_000;
   const preview = new Set(rt.config.previewDiscordUserIds);

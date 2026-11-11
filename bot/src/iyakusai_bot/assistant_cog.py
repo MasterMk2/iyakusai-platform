@@ -382,7 +382,49 @@ class Assistant(commands.Cog):
             return await self._remind_create(job)
         if job.op in ("done", "delete"):
             return await self._remind_change(job)
+        if job.op == "notice":
+            return await self._notice(job)
         raise JobError("VALIDATION", "リマインドの操作が正しくありません")
+
+    def _notice_channel(self):
+        """DM で届かない人へのメンションの投稿先。[notify] の app_notice(無ければ共有先)。見えなければ None。"""
+        share_id = self.settings.share_channel_id
+        channel = self._channel(routed_channel_id(self.bot, "app_notice", share_id))
+        return channel if channel is not None else self._channel(share_id)
+
+    async def _notice(self, job: Job) -> tuple[dict, str | None]:
+        """統合アプリからの個人あての知らせ(2026-11-11。メールの承認依頼など)。
+
+        本文はアプリが作る(宛先のアドレスや本文の中身は入れない取り決め)。まず DM で送り、DM を受け取らない
+        設定の人には、知らせ用のチャンネルでその人だけにメンションして同じ本文を出す。1 人にも届かなければ失敗。
+        """
+        guild = self._guild()
+        if guild is None:
+            raise JobError("UNAVAILABLE", "委員のサーバーに接続できません。")
+        text = job.input["text"]
+        sent, closed = 0, []
+        for raw in job.input["targetIds"]:
+            member = await self._guild_member(guild, _id_value(raw))
+            if member is None or getattr(member, "bot", False):
+                continue
+            try:
+                await member.send(text, allowed_mentions=discord.AllowedMentions.none())
+                sent += 1
+            except discord.HTTPException:   # DM を閉じている(Forbidden)を含む
+                closed.append(member)
+        posted = 0
+        channel = self._notice_channel() if closed else None
+        if channel is not None:
+            mentions = " ".join(f"<@{member.id}>" for member in closed)
+            try:
+                await channel.send(f"{mentions}\n{text}",
+                                   allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=closed))
+                posted = len(closed)
+            except discord.HTTPException as error:
+                log.warning("アプリからの知らせの投稿に失敗: %s", type(error).__name__)
+        if sent + posted == 0:
+            raise JobError("UNAVAILABLE", "知らせを届けられませんでした。")
+        return {"text": "", "files": [], "message": f"{sent + posted} 人に知らせました"}, None
 
     async def _remind_create(self, job: Job) -> tuple[dict, str | None]:
         inp = job.input
@@ -668,6 +710,8 @@ class Assistant(commands.Cog):
             },
             # Gemini の依頼は受け付けない(延期中)。連携口はこの値が false のとき gemini を出さない
             "gemini": False,
+            # アプリからの個人あての知らせ(remind の op=notice・2026-11-11)を扱える
+            "notice": True,
             "maxActivePerUser": self.settings.max_active_per_user,
             "reminderChannels": [{"id": str(cid), "name": getattr(self._channel(cid), "name", "不明")}
                                  for cid in self.settings.reminder_channel_ids],

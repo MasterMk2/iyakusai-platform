@@ -159,6 +159,14 @@ export class AssistantServiceClient {
     return this.call(actor, 'POST', `/reminders/${encodeURIComponent(reminderId)}/${action}`, body, undefined, this.longTimeoutMs);
   }
 
+  /**
+   * A notice for people (2026-11-11, contract §3): the Bot sends `text` to each target as a direct message. `targetIds`
+   * are Discord actors (`discord-<ID>`). The answer is the job, as for a reminder.
+   */
+  createNotice(actor: string, body: { clientOperationId: string; targetIds: string[]; text: string }): Promise<AssistantAnswer<{ job: AssistantJob }>> {
+    return this.call(actor, 'POST', '/notices', body, undefined, this.longTimeoutMs);
+  }
+
   candidates(actor: string, state: 'open' | 'recent'): Promise<{ candidates: AssistantCandidate[] }> {
     return this.call<{ candidates: AssistantCandidate[] }>(actor, 'GET', '/candidates', undefined, { state }).then((a) => a.body);
   }

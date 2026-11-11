@@ -692,6 +692,51 @@ class RemindWriteTests(Harness):
         self.assertEqual(job["input"]["targetId"], OTHER)
         self.assertEqual(job["input"]["channelId"], CHANNEL_A)
 
+    # ---- 個人あての知らせ(POST /notices。remind の op=notice・2026-11-11)
+
+    def notice_body(self, **extra):
+        body = {"clientOperationId": "mail-approval-" + secrets.token_hex(4), "targetIds": [uid(OTHER)],
+                "text": "メールの承認依頼が届きました。\nhttps://app.example.invalid/#/all?approval=list"}
+        body.update(extra)
+        return body
+
+    def test_notice_needs_a_bot_that_can_deliver_it(self):
+        # 古い Bot(capabilities に notice が無い)には積まない
+        reply = self.post(("notices",), self.notice_body())
+        self.assertEqual(reply.status, 400)
+        self.assertEqual(reply.error_code(), "FEATURE_UNAVAILABLE")
+        self.assertEqual(self.store.list_jobs(kinds=("remind",))[0], [])
+
+    def test_notice_is_queued_as_a_remind_job_for_committee_members_only(self):
+        self.store.set_meta("capabilities", json.dumps(caps(notice=True)))
+        reply = self.post(("notices",), self.notice_body(targetIds=[uid(OTHER), uid(OTHER), uid(OFFICER)]))
+        self.assertEqual(reply.status, 202)
+        job = reply.json()["job"]
+        self.assertEqual((job["kind"], job["op"]), ("remind", "notice"))
+        self.assertEqual(job["input"]["targetIds"], [OTHER, OFFICER])   # 同じ人は 1 回
+        self.assertIn("\n", job["input"]["text"])                     # 改行は残す
+        # 委員でない人は外して残りに送る。全員が委員でなければ 400
+        mixed = self.post(("notices",), self.notice_body(targetIds=[uid(OTHER), uid(OUTSIDER)]))
+        self.assertEqual(mixed.status, 202)
+        self.assertEqual(mixed.json()["job"]["input"]["targetIds"], [OTHER])
+        outsider = self.post(("notices",), self.notice_body(targetIds=[uid(OUTSIDER)]))
+        self.assertEqual(outsider.status, 400)
+        self.assertEqual(outsider.json()["error"]["message"], "対象は委員から選んでください")
+
+    def test_notice_inputs_are_checked(self):
+        self.store.set_meta("capabilities", json.dumps(caps(notice=True)))
+        for body in (
+            self.notice_body(targetIds=[]),
+            self.notice_body(targetIds=[uid(OTHER)] * 31),
+            self.notice_body(targetIds=[OTHER]),              # "discord-" が無い
+            self.notice_body(targetIds=uid(OTHER)),
+            self.notice_body(text=""),
+            self.notice_body(text="あ" * 501),
+            self.notice_body(channelId=CHANNEL_A),             # 知らない項目
+        ):
+            reply = self.post(("notices",), body)
+            self.assertEqual(reply.status, 400, body)
+
     def test_returns_202_quickly_when_no_bot_finishes(self):
         started = time.monotonic()
         reply = self.post(("reminders",), self.reminder_body())

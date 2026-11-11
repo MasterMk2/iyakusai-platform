@@ -68,6 +68,13 @@ class FakeMember:
         self.display_name = name
         self.bot = bot
         self.guild_permissions = discord.Permissions(manage_guild=manage)
+        self.dm_closed = False   # True: DM を受け取らない設定(send が Forbidden)
+        self.dms: list[str] = []
+
+    async def send(self, content=None, *, allowed_mentions=None):
+        if self.dm_closed:
+            raise discord.Forbidden(_Resp(), "Cannot send messages to this user")
+        self.dms.append(content)
 
 
 class FakeGuild:
@@ -435,6 +442,49 @@ class RemindTests(AssistantCase):
         capabilities = json.loads(self.store.get_meta("capabilities"))
         self.assertFalse(capabilities["features"]["image"])
         self.assertEqual(capabilities["reminderChannels"][0]["name"], "内務部")
+
+    # ---- 個人あての知らせ(op=notice・2026-11-11)
+
+    def run_notice(self, targets, text="メールの承認依頼が届きました。"):
+        async def go():
+            cog = self.cog()
+            job = self.job("remind", L.notice_input({"targetIds": [f"discord-{t}" for t in targets], "text": text}),
+                           op="notice")
+            await cog._run(self.store.claim_next(("remind",)), None)
+            await cog.publish_state()
+            return job
+        return self.store.get(asyncio.run(go()).id)
+
+    def test_notice_goes_by_dm_and_makes_no_reminder(self):
+        done = self.run_notice([TARGET, ADMIN])
+        self.assertEqual(done.state, "done", done.error_message)
+        self.assertEqual(done.result["message"], "2 人に知らせました")
+        self.assertEqual(self.guild.members[TARGET].dms, ["メールの承認依頼が届きました。"])
+        self.assertEqual(self.guild.members[ADMIN].dms, ["メールの承認依頼が届きました。"])
+        self.assertEqual(self.share.sent, [])
+        self.assertEqual(self.reminders.active(), [])
+        self.assertIs(json.loads(self.store.get_meta("capabilities"))["notice"], True)
+
+    def test_notice_mentions_only_the_people_whose_dm_is_closed(self):
+        self.guild.members[TARGET].dm_closed = True
+        done = self.run_notice([TARGET, ADMIN])
+        self.assertEqual(done.state, "done", done.error_message)
+        self.assertEqual(self.guild.members[ADMIN].dms, ["メールの承認依頼が届きました。"])
+        self.assertEqual(len(self.share.sent), 1)
+        self.assertEqual(self.share.sent[0].content, f"<@{TARGET}>\nメールの承認依頼が届きました。")
+        allowed = self.share.mentions_seen[0]
+        self.assertEqual([m.id for m in allowed.users], [TARGET])
+        self.assertFalse(allowed.everyone)
+        self.assertFalse(allowed.roles)
+
+    def test_notice_that_reaches_nobody_fails(self):
+        # サーバーにいない人だけ・DM も共有先も使えないとき
+        missing = self.run_notice([999_000_000_000_000_001])
+        self.assertEqual((missing.state, missing.error_code), ("failed", "UNAVAILABLE"))
+        self.guild.members[TARGET].dm_closed = True
+        del self.bot.channels[SHARE]
+        closed = self.run_notice([TARGET])
+        self.assertEqual((closed.state, closed.error_code), ("failed", "UNAVAILABLE"))
 
     def test_confirmation_post_failure_keeps_the_saved_reminder(self):
         # 保存の後で確認の投稿だけ失敗しても、依頼は done のまま(再依頼で二重登録させない)

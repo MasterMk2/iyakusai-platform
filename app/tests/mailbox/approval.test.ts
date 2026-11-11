@@ -4,12 +4,14 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { AssistantServiceClient } from '../../src/server/assistant/client.js';
 import { NameRoster } from '../../src/server/discord-auth/names.js';
 import { StateStore } from '../../src/server/domain/store.js';
 import { buildApp } from '../../src/server/http/app.js';
 import { CommitteeAddresses } from '../../src/server/mailbox/addresses.js';
 import { parseRawMail } from '../../src/server/mailbox/parse.js';
 import { SmtpError, type MailTransport, type SmtpEnvelope } from '../../src/server/mailbox/smtp.js';
+import { approvalNoticeText } from '../../src/server/mailbox/approval-notice.js';
 import { MailboxStore } from '../../src/server/mailbox/store.js';
 import { committeeMailSource } from '../../src/server/rollover/grants.js';
 import { seedState, TEST_HOST, TEST_PORT } from '../helpers.js';
@@ -31,6 +33,22 @@ let key: Buffer;
 const sent: { envelope: SmtpEnvelope; raw: Buffer }[] = [];
 let failNext: SmtpError | null = null;
 
+// The Bot host, as the app calls it for a notice: every request is kept, and answered as a queued job.
+const notices: { path: string; actor: string; body: { clientOperationId: string; targetIds: string[]; text: string } }[] = [];
+let noticeFails = false;
+/** Discord actors of the app's accounts (the task bridge); an account without one is told nothing. */
+const actors = new Map<string, string>();
+const botHost = new AssistantServiceClient({
+  baseUrl: 'https://bot.example.invalid',
+  key: randomBytes(32),
+  fetchImpl: async (input, init) => {
+    if (noticeFails) throw new Error('connection refused');
+    const headers = new Headers(init?.headers);
+    notices.push({ path: new URL(String(input)).pathname, actor: headers.get('x-svc-actor') ?? '', body: JSON.parse(String(init?.body)) });
+    return new Response(JSON.stringify({ job: { id: 'j_00000000000000000000', kind: 'remind', state: 'queued' } }), { status: 202, headers: { 'content-type': 'application/json' } });
+  },
+});
+
 const recording: MailTransport = {
   async send(envelope, raw) {
     if (failNext) {
@@ -48,6 +66,9 @@ beforeEach(async () => {
   ctx = setup();
   sent.length = 0;
   failNext = null;
+  notices.length = 0;
+  noticeFails = false;
+  actors.clear();
   key = randomBytes(32);
   const config = testMailboxConfig(path.join(dir, 'mail'), { draftBccAddress: ARCHIVE, send: SEND }, key, 'abcdabcdabcdabcd');
   mail = new MailboxStore(config.dataDir);
@@ -60,6 +81,7 @@ beforeEach(async () => {
     auth: { mode: 'discord', publicOrigin: 'https://app.example.invalid', publicHost: 'app.example.invalid', trustedProxies: new Set() },
     discord: { service: ctx.service, store: ctx.store, config: ctx.config, names: new NameRoster(path.join(dir, 'names.json')), publicOrigin: null, publicHost: null, trustedProxies: new Set() },
     mailbox: { store: mail, config, addresses: new CommitteeAddresses(config.mailboxes, config.domainAliases), transport: recording },
+    assistant: { client: botHost, bridge: { taskUserFor: (id) => actors.get(id) ?? null, taskUsers: () => [...actors.values()] } },
   });
 });
 afterEach(async () => {
@@ -363,6 +385,70 @@ describe('when the send fails', () => {
     expect(unknown).toMatchObject({ state: 'unknown' });
     expect((await act(chair.cookie, id, 'approve', { expectedVersion: unknown.version })).status).toBe(409);
     expect(sent).toHaveLength(0);
+  });
+});
+
+describe('telling people on Discord', () => {
+  /** Lets the notices that were handed over without waiting reach the recording Bot host. */
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+  it('tells the reviewers of a request, and the author when it is approved or returned, without mail content', async () => {
+    const { chair, member } = await people();
+    const planner = await signIn(OTHER, '21000003', [ROLE_PLANNING]);
+    await grant(chair.cookie, { department: '企画部', mailboxId: 'sponsorship', review: true });
+    actors.set(chair.id, 'discord-1000000000000000001').set(member.id, 'discord-1000000000000000002').set(planner.id, 'discord-1000000000000000003');
+
+    const first = (await submit(member.cookie)).json;
+    await settle();
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatchObject({ path: '/api/integration/v1/assistant/notices', actor: 'discord-1000000000000000002' });
+    expect(notices[0]!.body.clientOperationId).toBe(`mail-approval:${first.id}:requested:1`);
+    expect([...notices[0]!.body.targetIds].sort()).toEqual(['discord-1000000000000000001', 'discord-1000000000000000003']);
+    expect(notices[0]!.body.text).toBe(`📨 メールの承認依頼が届きました（書いた人：合成 太郎／受信箱：協賛）。\n内容を確かめて、承認か差し戻しをしてください。統合アプリの「メール › 承認待ち」\nhttps://app.example.invalid/#/all?approval=${first.id}`);
+
+    // Returned: the author is told by the reviewer; asked again: the reviewers are told again (another notice).
+    const returned = (await act(chair.cookie, first.id, 'return', { expectedVersion: 1, comment: '宛名を直してください。' })).json;
+    const again = (await call('PUT', `/api/mail/approvals/${first.id}`, { cookie: member.cookie, raw: form(request({ expectedVersion: returned.version })) })).json;
+    await act(planner.cookie, first.id, 'approve', { expectedVersion: again.version });
+    await settle();
+    expect(notices.map((n) => [n.actor.slice(-1), n.body.clientOperationId.split(':')[2], n.body.targetIds.map((t) => t.slice(-1)).sort().join('')])).toEqual([
+      ['2', 'requested', '13'],
+      ['1', 'returned', '2'],
+      ['2', 'requested', '13'],
+      ['3', 'approved', '2'],
+    ]);
+    expect(new Set(notices.map((n) => n.body.clientOperationId)).size).toBe(4);
+    expect(notices[1]!.body.text).toContain('合成 委員長 さんから差し戻されました');
+    expect(notices[3]!.body.text).toContain('合成 花子 さんに承認され、送信されました');
+    // Never an address, the subject, the mail's text or the reviewer's comment.
+    const all = JSON.stringify(notices);
+    for (const secret of [OUTSIDE, '協賛のお願い', '合成の本文', '宛名を直してください']) expect(all).not.toContain(secret);
+  });
+
+  it('tells nobody without a Discord actor, and a Bot host that cannot be reached changes nothing', async () => {
+    const { chair, member } = await people();
+    // The author has no Discord actor: nothing is handed over.
+    actors.set(chair.id, 'discord-1000000000000000001');
+    const quiet = (await submit(member.cookie)).json;
+    await settle();
+    expect(notices).toEqual([]);
+    // The Bot host is down: the request, the approval and the send go through as they are.
+    actors.set(member.id, 'discord-1000000000000000002');
+    noticeFails = true;
+    const asked = await submit(member.cookie);
+    expect(asked.status).toBe(201);
+    const approved = await act(chair.cookie, asked.json.id, 'approve', { expectedVersion: 1 });
+    expect(approved.json.state).toBe('sent');
+    expect(sent).toHaveLength(1);
+    expect((await act(member.cookie, quiet.id, 'withdraw', { expectedVersion: 1 })).json.state).toBe('withdrawn');
+    await settle();
+    expect(notices).toEqual([]);
+  });
+
+  it('writes the notice without a link when the public address of the app is not known', () => {
+    const user = { id: 'iy-000001', displayName: '合成 委員長', roleLabel: '委員', email: '', canManageAccess: true };
+    const text = approvalNoticeText({ kind: 'approved', requestId: 'ar_0000000000000001', version: 3, actor: user, targets: [user], mailboxName: '協賛', authorName: '合成 太郎' }, null);
+    expect(text).toBe('✅ 依頼したメール（受信箱：協賛）が 合成 委員長 さんに承認され、送信されました。\n統合アプリの「メール › 承認待ち」');
   });
 });
 

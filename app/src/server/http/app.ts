@@ -32,10 +32,12 @@ import { DomainError, type User } from '../domain/types.js';
 import { attachBotDatasource, BOT_DATASOURCE_PATH } from '../datasource/bot-datasource.js';
 import { WORKER_PATHS as MINUTES_WORKER_PATHS } from '../minutes/routes.js';
 import { INGEST_PATH } from '../mailbox/ingest.js';
+import { approvalNoticeText, type ApprovalNotifier } from '../mailbox/approval-notice.js';
 import { registerMailboxRoutes, type MailboxRuntime } from '../mailbox/routes.js';
 import { attachRentalDriveSync, SYNC_ACK_PATH } from '../rental/drive-sync.js';
 import { registerRentalRoutes, type RentalRuntime } from '../rental/routes.js';
 import { registerTaskRoutes, type TaskRuntime } from '../tasks/routes.js';
+import { AssistantServiceError } from '../assistant/client.js';
 import { registerAssistantRoutes, type AssistantRuntime } from '../assistant/routes.js';
 import { attachmentDisposition } from './content-disposition.js';
 import { registerCalendarRoutes, type CalendarRuntime } from '../calendar/routes.js';
@@ -273,6 +275,25 @@ function checkProxyRequest(request: FastifyRequest, proxy: TrustedProxyAuth, loo
 
 const sessionUser = (u: User): SessionUser => ({ id: u.id, displayName: u.displayName, roleLabel: u.roleLabel, canManageAccess: u.canManageAccess });
 
+/**
+ * Approval notices (2026-11-11) go to the Bot as one job each, with the acting person as the actor. People without a
+ * Discord actor are left out; a notice that cannot be handed over is dropped (the mail screens show the counts).
+ */
+function approvalNotifierFor(assistant: AssistantRuntime, publicOrigin: string | null): ApprovalNotifier {
+  return (notice) => {
+    const actor = assistant.bridge.taskUserFor(notice.actor.id);
+    const targetIds = notice.targets.flatMap((u) => assistant.bridge.taskUserFor(u.id) ?? []).filter((id) => /^discord-\d{1,25}$/.test(id));
+    if (!actor || targetIds.length === 0) return;
+    void assistant.client
+      .createNotice(actor, { clientOperationId: `mail-approval:${notice.requestId}:${notice.kind}:${notice.version}`, targetIds, text: approvalNoticeText(notice, publicOrigin) })
+      .catch((err: unknown) => {
+        // One line to look at when "no DM came": the kind, the request and why. Never a name, an address or text.
+        const why = err instanceof AssistantServiceError ? `${err.kind} ${err.status}${err.body ? ` ${err.body.code}` : ''}` : 'error';
+        console.warn(`メールの承認の知らせを Bot に渡せませんでした（${notice.kind} ${notice.requestId}・${why}）`);
+      });
+  };
+}
+
 export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   const { store } = options;
   const auth: AuthConfig = options.auth ?? { mode: 'demo' };
@@ -452,6 +473,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
         publicOrigin: auth.mode === 'discord' ? auth.publicOrigin : null,
         fromTrustedProxy: (request) => discordApi!.fromTrustedProxy(request),
         decisions: options.decisions ?? null,
+        approvalNotifier: options.assistant ? approvalNotifierFor(options.assistant, auth.mode === 'discord' ? auth.publicOrigin : null) : null,
       })
     : null;
 

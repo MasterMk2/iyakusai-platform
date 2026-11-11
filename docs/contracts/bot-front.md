@@ -116,6 +116,7 @@ interface JobResult {
 | POST `/assistant/reminders` | `{clientOperationId, text, due, targetId?, repeat?, channelId?}` → ジョブを作り、最大 8 秒待つ。終われば 200 `{job}`（`job.result.reminder`）、終わらなければ 202 `{job}` |
 | POST `/assistant/reminders/<id>/done` | `{clientOperationId}`。同上 |
 | POST `/assistant/reminders/<id>/delete` | `{clientOperationId}`。同上 |
+| POST `/assistant/notices` | 個人あての知らせ（2026-11-11）。`{clientOperationId, targetIds:["discord-<ID>", …], text}` → Bot が `text` を各対象に DM で送る。対象は 1〜30 人で、委員でない人は外して残りに送る（全員が委員でなければ 400）。`text` は 1〜500 字（改行可）。ジョブは `remind` の `op:"notice"`（リマインドは作らない）。最大 8 秒待つ（同上）。Bot が知らせを扱えない版なら 400 `FEATURE_UNAVAILABLE` |
 | GET `/assistant/candidates?state=open\|recent` | `{candidates:[Candidate]}`。open は承認待ち（posted）と、自動で起票したもの（created・auto）のうち差し戻せるもの。recent は直近 7 日のすべての状態 |
 | POST `/assistant/candidates/<id>/<action>` | action は `ok`・`ng`・`undo`・`return`。`{clientOperationId, comment?}`（return は comment が必須・1000 字まで）。最大 8 秒待つ（同上） |
 
@@ -155,6 +156,15 @@ interface Candidate {
 ```
 
 文字数・選択肢の外は 400 `VALIDATION`。前後の空白は削る。制御文字は、改行とタブ以外を削る。
+
+個人あての知らせ（`POST /assistant/notices`）の決まり：
+
+- 呼ぶのは統合アプリのサーバーだけです（ブラウザからの口は作らない）。actor は、その知らせのもとになった操作をした人。
+- いまの使い道は、メールの送信前の承認（依頼が来た → 校閲者、承認されて送られた・差し戻された → 書いた人。`app/docs/mail-approval.md`）。
+- `text` はアプリが作り、メールのアドレス・件名・本文・差し戻しの理由は入れません。DM を受け取らない設定の人には、Bot が知らせ用のチャンネル（`[notify]` の `app_notice`。無ければ共有用のチャンネル）でその人だけにメンションして同じ文を出すためです。
+- 1 人にも届かなければジョブは失敗（`UNAVAILABLE`）。アプリは結果を待たず、失敗しても元の操作は変えません。
+- 同じ知らせを 2 度送らないよう、`clientOperationId` は「依頼の ID・知らせの種類・依頼の版」から作ります。
+- Bot は、知らせを扱えることを能力の写しの `notice: true` で示します。連携口はそれが無い Bot にはジョブを積みません。
 
 ## 4. 統合アプリのブラウザ向け API
 
