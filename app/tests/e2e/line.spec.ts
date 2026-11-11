@@ -163,3 +163,30 @@ test('administrator manages LINE grants and releases synthetic events without re
   await expect(page.locator('.thread-detail')).not.toContainText('SAMPLE-0001');
   await expect(page.locator('.thread-detail')).toContainText('追加: 配送先を変更したいです。');
 });
+
+test('a LINE reply starts with the committee short signature, which alone is not a message, and a saved draft gets no second one', async ({ page }) => {
+  // The demo has no committee mailbox (no signature settings): the person's signature is answered here.
+  await page.route('**/api/signature', (route) =>
+    route.fulfill({
+      json: {
+        organization: '合成 医学薬学祭実行委員会', name: '合成 次郎', title: '内務部', address: '', contactEmail: '', personalEmail: '',
+        defaultTitle: '内務部', own: { title: '', personalEmail: '' }, canEditCommittee: false, updatedAt: null, committeeUpdatedAt: null,
+      },
+    }),
+  );
+  await loginAs(page, 'u-editor-c');
+  await openLine(page, 'line-oa-support', '顧客サンプルL1');
+  const reply = page.locator('.thread-detail').getByRole('region', { name: 'LINE で返信（模擬送信）' });
+  const box = reply.getByRole('textbox', { name: '本文' });
+  const signature = 'ーーー\n合成 医学薬学祭実行委員会\n内務部 合成 次郎';
+  await expect(box).toHaveValue(`\n\n${signature}`);
+  await reply.getByRole('button', { name: '送信内容を確認' }).click();
+  await expect(reply.locator('#line-reply-body-error')).toHaveText('本文を入力してください。');
+
+  await box.fill(`ご連絡ありがとうございます。\n\n${signature}`);
+  await reply.getByRole('button', { name: '送信内容を確認' }).click();
+  await expect(page.getByTestId('preview-body')).toContainText('内務部 合成 次郎');
+  // The text was saved as the draft: opened again, it is the draft as it is, without a second signature.
+  await page.reload();
+  await expect(box).toHaveValue(`ご連絡ありがとうございます。\n\n${signature}`);
+});
