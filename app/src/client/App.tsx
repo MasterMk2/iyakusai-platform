@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { MailboxSummary, SessionResponse } from '../shared/api';
 import type { LineAccountSummary } from '../shared/line';
-import type { MailSendOptions, MailStatusResponse } from '../shared/mailbox';
+import type { MailApprovalDetail, MailSendOptions, MailStatusResponse } from '../shared/mailbox';
 import type { TaskContextResponse } from '../shared/tasks';
 import { calendarDateParam } from '../shared/calendar';
 import { api, ApiFailure } from './api';
@@ -16,7 +16,8 @@ import { HomeView } from './components/HomeView';
 import { LoadStatus } from './components/LoadStatus';
 import { LineBroadcast } from './components/LineBroadcast';
 import { LineConversation } from './components/LineConversation';
-import { MailCompose, newDraft, sentNoteText } from './components/MailCompose';
+import { MailApprovalDetailView, MailApprovalList } from './components/MailApprovals';
+import { MailCompose, newDraft, resubmitDraft, sentNoteText } from './components/MailCompose';
 import { MailReauth } from './components/MailReauth';
 import { Login } from './components/Login';
 import { ProxyBar } from './components/ProxyBar';
@@ -58,6 +59,8 @@ export interface Route {
   inboxFilter: InboxFilter | null;
   /** Committee mailbox: writing new mail (`compose=1`) instead of a thread. */
   mailCompose: boolean;
+  /** Committee mailbox: the mail that waits for an approval (`approval=list`) or one request (`approval=ar_…`), 2026-11-11. */
+  approval: string | null;
   /** Official LINE: the broadcast screen (`broadcast=1`) instead of a conversation (2026-11-02). */
   lineBroadcast: boolean;
   /** Bot tab: the sub-view (`#/bot/<section>`) and an opened job (`?job=`). */
@@ -94,6 +97,7 @@ const EMPTY_ROUTE: Route = {
   taskCalendarDate: null,
   inboxFilter: null,
   mailCompose: false,
+  approval: null,
   lineBroadcast: false,
   botSection: null,
   botJobId: null,
@@ -141,15 +145,17 @@ export function parseHash(hash: string): Route {
   if (parts[0] === 'tasks') {
     return { ...EMPTY_ROUTE, view: 'tasks', taskWorkspaceId: params.get('ws'), taskId: params.get('task'), taskNew: params.get('new') === '1', taskRemaining: params.get('remaining') === '1', taskFocus: parseFocus(params.get('focus')), taskCalendarDate: calendarDateParam(params.get('cal')) };
   }
-  const mailCompose = !threadId && !conversationId && params.get('compose') === '1';
-  if (parts[0] === 'mailbox' && parts[1]) return { ...EMPTY_ROUTE, mailboxId: decodeURIComponent(parts[1]), threadId, inboxFilter, mailCompose };
+  const approvalParam = params.get('approval');
+  const approval = !threadId && !conversationId && approvalParam && (approvalParam === 'list' || /^ar_[0-9a-f]{16}$/.test(approvalParam)) ? approvalParam : null;
+  const mailCompose = !threadId && !conversationId && !approval && params.get('compose') === '1';
+  if (parts[0] === 'mailbox' && parts[1]) return { ...EMPTY_ROUTE, mailboxId: decodeURIComponent(parts[1]), threadId, inboxFilter, mailCompose, approval };
   if (parts[0] === 'line') {
     const lineBroadcast = !threadId && !conversationId && params.get('broadcast') === '1';
     return { ...EMPTY_ROUTE, view: 'line', lineAccountId: parts[1] ? decodeURIComponent(parts[1]) : null, conversationId, inboxFilter, lineBroadcast };
   }
   // An older link to a LINE conversation from the shared inbox (`#/all?conv=`) opens the LINE tab.
   if (conversationId) return { ...EMPTY_ROUTE, view: 'line', conversationId, inboxFilter };
-  return { ...EMPTY_ROUTE, threadId, inboxFilter, mailCompose };
+  return { ...EMPTY_ROUTE, threadId, inboxFilter, mailCompose, approval };
 }
 
 /** The official LINE tab: also a route that names a LINE account or conversation (callers spread EMPTY_ROUTE). */
@@ -197,6 +203,7 @@ export function toHash(route: Route): string {
   }
   const base = route.mailboxId ? `#/mailbox/${encodeURIComponent(route.mailboxId)}` : '#/all';
   if (route.threadId) q.set('thread', route.threadId);
+  else if (route.approval) q.set('approval', route.approval);
   else if (route.mailCompose) q.set('compose', '1');
   if (route.inboxFilter) q.set('filter', route.inboxFilter);
   return q.size > 0 ? `${base}?${q.toString()}` : base;
@@ -402,6 +409,8 @@ export function App() {
   // Each is forgotten as soon as its screen is left, so it never fills a later form.
   const [contactPrefill, setContactPrefill] = useState<ContactPrefill | null>(null);
   const [composeTo, setComposeTo] = useState<string | null>(null);
+  // A returned request opened in the compose form to be changed and asked again (memory only, like the others).
+  const [resubmitOf, setResubmitOf] = useState<MailApprovalDetail | null>(null);
   const [contactQuery, setContactQuery] = useState('');
   const clearContactPrefill = useCallback(() => setContactPrefill(null), []);
   // The line after a new mail was sent (2026-11-03): shown once on its thread, and forgotten when another thread opens.
@@ -411,6 +420,7 @@ export function App() {
   if (handoffScreen.compose !== route.mailCompose || handoffScreen.contactNew !== route.contactNew || handoffScreen.contacts !== (route.view === 'contacts')) {
     setHandoffScreen({ compose: route.mailCompose, contactNew: route.contactNew, contacts: route.view === 'contacts' });
     if (!route.mailCompose) setComposeTo(null);
+    if (!route.mailCompose) setResubmitOf(null);
     if (!route.contactNew) setContactPrefill(null);
     if (route.view !== 'contacts') setContactQuery('');
   }
@@ -522,6 +532,8 @@ export function App() {
             inbox={committeeMail ? committeeMail.canOpen : inboxEntry && inboxCount > 0}
             inboxLocked={mailLocked}
             inboxUnhandledTotal={committeeMail?.unhandledTotal ?? null}
+            approvals={committeeMail?.approvals ?? null}
+            onOpenApprovals={() => navigate({ ...EMPTY_ROUTE, approval: 'list' })}
             refresh={refresh}
             onRefresh={bump}
             onOpenTasks={() => navigate({ ...EMPTY_ROUTE, view: 'tasks' })}
@@ -713,7 +725,18 @@ export function App() {
   // The synthetic inbox sends administrators to the access screen; the committee mailbox is read by everyone.
   const isAdminView = !committeeMail && (route.view === 'admin' || user.canManageAccess);
   const composing = !lineTab && !isAdminView && canSendMail && route.mailCompose;
-  const inboxDetail = !isAdminView && (lineTab ? !!route.conversationId || !!broadcastAccount : !!route.threadId || composing);
+  // Approval before sending (2026-11-11): the waiting mail has its own list in the mail tab, when the server has it.
+  const approvalCounts = committeeMail?.approvals ?? null;
+  const approvalTotal = (approvalCounts?.toReview ?? 0) + (approvalCounts?.returned ?? 0);
+  const approvalView = !lineTab && !isAdminView && !!approvalCounts && !!route.approval && !composing;
+  const approvalId = approvalView && route.approval !== 'list' ? route.approval : null;
+  const approvalEntry = !!approvalCounts && (canSendMail || approvalTotal > 0 || approvalView);
+  const approvalBadge = approvalTotal > 0 && (
+    <span className="count-badge" aria-label={[approvalCounts?.toReview ? `承認待ち ${approvalCounts.toReview} 件` : '', approvalCounts?.returned ? `差し戻し ${approvalCounts.returned} 件` : ''].filter(Boolean).join('・')}>
+      {approvalTotal}
+    </span>
+  );
+  const inboxDetail = !isAdminView && (lineTab ? !!route.conversationId || !!broadcastAccount : !!route.threadId || composing || !!approvalId);
   // One message in two mailboxes counts once in the committee total; the per-mailbox counts would count it twice.
   const mailUnhandled = committeeMail?.unhandledTotal ?? mailboxList.reduce((n, m) => n + m.unhandledCount, 0);
   const lineUnhandled = lineList.reduce((n, a) => n + a.unhandledCount, 0);
@@ -941,8 +964,10 @@ export function App() {
 
   const openCompose = () => {
     setComposeTo(null);
-    navigate({ ...route, threadId: null, mailCompose: true });
+    navigate({ ...route, threadId: null, approval: null, mailCompose: true });
   };
+  const openApprovals = () => navigate({ ...EMPTY_ROUTE, approval: 'list' });
+  const resubmitting = composing && resubmitOf ? resubmitDraft(resubmitOf) : null;
   return (
     <div className="app">
       {bar}
@@ -950,15 +975,25 @@ export function App() {
       <div className={`layout inbox-layout ${inboxDetail ? 'has-detail' : ''}`}>
         <div className="sidebar">
           {/* Sending apart from the mailboxes: a new-mail button above the list reads as part of the inbox. */}
-          {canSendMail && !isAdminView && (
+          {(canSendMail || approvalEntry) && !isAdminView && (
             <section className="sidebar-send" aria-labelledby="sidebar-send-title">
               <h2 className="sidebar-title" id="sidebar-send-title">
                 送信
               </h2>
-              <button type="button" className={`send-entry ${composing ? 'active' : ''}`} aria-current={composing ? 'page' : undefined} onClick={openCompose} data-testid="compose-new">
-                メールを送信
-              </button>
-              <p className="hint">委員会のアドレスから送ります。</p>
+              {canSendMail && (
+                <>
+                  <button type="button" className={`send-entry ${composing ? 'active' : ''}`} aria-current={composing ? 'page' : undefined} onClick={openCompose} data-testid="compose-new">
+                    メールを送信
+                  </button>
+                  <p className="hint">委員会のアドレスから送ります。</p>
+                </>
+              )}
+              {approvalEntry && (
+                <button type="button" className={`nav-item ${approvalView ? 'active' : ''}`} aria-current={approvalView ? 'page' : undefined} onClick={openApprovals} data-testid="approvals-open">
+                  <span className="mailbox-name">承認待ち</span>
+                  {approvalBadge}
+                </button>
+              )}
             </section>
           )}
           <nav aria-label="受信箱">
@@ -969,8 +1004,8 @@ export function App() {
               <>
                 <button
                   type="button"
-                  className={`nav-item ${route.view === 'mail' && route.mailboxId === null && !composing ? 'active' : ''}`}
-                  aria-current={route.mailboxId === null && !composing ? 'page' : undefined}
+                  className={`nav-item ${route.view === 'mail' && route.mailboxId === null && !composing && !approvalView ? 'active' : ''}`}
+                  aria-current={route.mailboxId === null && !composing && !approvalView ? 'page' : undefined}
                   onClick={() => navigate({ ...EMPTY_ROUTE })}
                 >
                   <span className="mailbox-name">{allMailTitle}</span>
@@ -983,8 +1018,8 @@ export function App() {
                     <li key={m.id}>
                       <button
                         type="button"
-                        className={`nav-item ${route.mailboxId === m.id && !composing ? 'active' : ''}`}
-                        aria-current={route.mailboxId === m.id && !composing ? 'page' : undefined}
+                        className={`nav-item ${route.mailboxId === m.id && !composing && !approvalView ? 'active' : ''}`}
+                        aria-current={route.mailboxId === m.id && !composing && !approvalView ? 'page' : undefined}
                         title={`${m.name}（${m.address}）`}
                         onClick={() => navigate({ ...EMPTY_ROUTE, mailboxId: m.id })}
                         data-mailbox-id={m.id}
@@ -1009,16 +1044,26 @@ export function App() {
           <>
             <section className="list-pane" aria-label="スレッド一覧">
               {/* Below 1200px the side column is folded: sending shows here, marked apart from the mailbox list below. */}
-              {canSendMail && (
+              {(canSendMail || approvalEntry) && (
                 <section className="list-compose" aria-labelledby="list-send-title">
                   <h2 className="list-compose-label" id="list-send-title">
                     送信
                   </h2>
-                  <button type="button" className="secondary" onClick={openCompose} data-testid="compose-new-list">
-                    メールを送信
-                  </button>
+                  {canSendMail && (
+                    <button type="button" className="secondary" onClick={openCompose} data-testid="compose-new-list">
+                      メールを送信
+                    </button>
+                  )}
+                  {approvalEntry && !approvalView && (
+                    <button type="button" className="secondary" onClick={openApprovals} data-testid="approvals-open-list">
+                      承認待ち{approvalBadge}
+                    </button>
+                  )}
                 </section>
               )}
+              {approvalView ? (
+                <MailApprovalList refresh={refresh} selectedId={approvalId} onSelect={(id) => navigate({ ...EMPTY_ROUTE, approval: id })} onBack={() => navigate({ ...EMPTY_ROUTE })} />
+              ) : (
               <ThreadList
                 key={scopeKey}
                 mailboxId={route.mailboxId}
@@ -1045,19 +1090,42 @@ export function App() {
                   )
                 }
               />
+              )}
             </section>
-            <section className="detail-pane" aria-label="スレッド詳細">
+            <section className="detail-pane" aria-label={approvalView ? '依頼の内容' : 'スレッド詳細'}>
               {inboxDetail && (
-                <button type="button" className="back-link" onClick={() => navigate({ ...route, threadId: null, mailCompose: false })}>
+                <button type="button" className="back-link" onClick={() => navigate({ ...route, threadId: null, mailCompose: false, approval: route.approval ? 'list' : null })}>
                   ← 一覧に戻る
                 </button>
               )}
-              {composing && sendOptions ? (
+              {composing && sendOptions && resubmitting && resubmitOf ? (
+                <MailCompose
+                  key={`resubmit:${resubmitOf.id}`}
+                  options={sendOptions}
+                  initial={resubmitting.initial}
+                  mode={resubmitting.mode}
+                  resubmit={resubmitting.resubmit}
+                  initialReplyDue={resubmitting.replyDue}
+                  initialMarkDone={resubmitting.markDone}
+                  onCancel={() => navigate({ ...EMPTY_ROUTE, approval: resubmitOf.id })}
+                  onSent={() => undefined}
+                  onSubmitted={(detail) => {
+                    navigate({ ...EMPTY_ROUTE, approval: detail.id });
+                    bump();
+                  }}
+                />
+              ) : composing && sendOptions ? (
                 <MailCompose
                   key={draftToSend && !draftToSend.reply ? 'bot-draft' : composeTo ? `to:${composeTo}` : 'new'}
                   options={sendOptions}
                   initial={newDraft(sendOptions, route.mailboxId ?? undefined, draftToSend && !draftToSend.reply ? draftToSend : undefined, draftToSend ? '' : (composeTo ?? ''))}
                   mode="new"
+                  onSubmitted={(detail) => {
+                    clearDraftToSend();
+                    setComposeTo(null);
+                    navigate({ ...EMPTY_ROUTE, approval: detail.id });
+                    bump();
+                  }}
                   onCancel={() => {
                     clearDraftToSend();
                     setComposeTo(null);
@@ -1070,6 +1138,19 @@ export function App() {
                     if (result.threadId) setNewMailNote({ threadId: result.threadId, text: sentNoteText(result) });
                     bump();
                   }}
+                />
+              ) : approvalId ? (
+                <MailApprovalDetailView
+                  key={approvalId}
+                  id={approvalId}
+                  refresh={refresh}
+                  options={sendOptions}
+                  onChanged={bump}
+                  onResubmit={(detail) => {
+                    setResubmitOf(detail);
+                    navigate({ ...EMPTY_ROUTE, mailCompose: true });
+                  }}
+                  onOpenThread={(threadId) => navigate({ ...EMPTY_ROUTE, threadId })}
                 />
               ) : route.threadId ? (
                 <ThreadDetail
@@ -1101,8 +1182,8 @@ export function App() {
                 />
               ) : (
                 <div className="detail-placeholder">
-                  <h2>受信内容を選択</h2>
-                  <p>一覧から選ぶと、本文と対応状況・担当・ラベル・内部メモがここに出ます。</p>
+                  <h2>{approvalView ? '依頼を選択' : '受信内容を選択'}</h2>
+                  <p>{approvalView ? '一覧から選ぶと、送る内容と、承認・差し戻しなどの操作がここに出ます。' : '一覧から選ぶと、本文と対応状況・担当・ラベル・内部メモがここに出ます。'}</p>
                 </div>
               )}
             </section>

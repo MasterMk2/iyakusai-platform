@@ -36,6 +36,8 @@ import type { OutgoingAttachment } from './compose.js';
 import type { MailboxConfig, MailSendConfig } from './config.js';
 import { fetchPublicImage, type RemoteImageFetch } from './images.js';
 import { attachMailIngest } from './ingest.js';
+import { MailApprovals } from './approval.js';
+import { registerApprovalFormRoutes, registerApprovalRoutes, type ApprovalRouteDeps } from './approval-routes.js';
 import { MailSender } from './send.js';
 import { registerSignatureRoutes, SignatureStore } from './signature.js';
 import { DEFAULT_ORGANIZATION } from '../../shared/signature.js';
@@ -140,7 +142,9 @@ const threadStatusBody = z.strictObject({ status: z.enum(HANDLING_STATUSES) });
 const noteBody = z.strictObject({ body: z.string().max(LIMITS.noteMaxLength * 2) });
 // eslint-disable-next-line no-control-regex
 const department = z.string().trim().min(1).max(40).regex(/^[^\u0000-\u001f\u007f・]+$/);
-// A person (userId) or a department, and one of edit / send.
+// A person (userId) or a department, and one of edit / send / review / approval (2026-11-11: review is the grant to
+// approve waiting mail; approval marks a person whose mail always waits for one, so it has no department form).
+const GRANT_KINDS = ['edit', 'send', 'review', 'approval'] as const;
 const grantBody = z
   .strictObject({
     userId: z.string().min(1).max(40).regex(/^[a-z0-9-]+$/).optional(),
@@ -148,9 +152,12 @@ const grantBody = z
     mailboxId: shortId,
     edit: z.boolean().optional(),
     send: z.boolean().optional(),
+    review: z.boolean().optional(),
+    approval: z.boolean().optional(),
   })
-  .refine((b) => (b.edit === undefined) !== (b.send === undefined), { message: 'edit か send のどちらか 1 つを指定してください' })
-  .refine((b) => (b.userId === undefined) !== (b.department === undefined), { message: 'userId か department のどちらか 1 つを指定してください' });
+  .refine((b) => GRANT_KINDS.filter((k) => b[k] !== undefined).length === 1, { message: 'edit・send・review・approval のどれか 1 つを指定してください' })
+  .refine((b) => (b.userId === undefined) !== (b.department === undefined), { message: 'userId か department のどちらか 1 つを指定してください' })
+  .refine((b) => b.approval === undefined || b.department === undefined, { message: '承認必須は委員ごとに指定してください' });
 const recipientList = z.array(z.string().max(400)).max(100);
 const sendBody = z.strictObject({
   clientToken: z.string().regex(/^[A-Za-z0-9_-]{16,64}$/),
@@ -198,6 +205,8 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
   // EHLO says the app's public host (2026-11-03, review M6); the SMTP account itself is in the configuration.
   const ehloHost = deps.publicOrigin ? new URL(deps.publicOrigin).hostname : undefined;
   const sender = sendConfig ? new MailSender(rt.store, rt.addresses, { ...rt.config, send: sendConfig }, rt.transport ?? smtpTransport({ ...sendConfig.smtp, ...(ehloHost ? { ehloHost } : {}) }), service) : null;
+  // Approval before sending (2026-11-11): exists with sending.
+  const approvals = sender ? new MailApprovals(rt.store, rt.addresses, deps.people, service, sender) : null;
   const now = deps.now ?? Date.now;
   const idleMs = rt.config.idleHours * 3_600_000;
   const preview = new Set(rt.config.previewDiscordUserIds);
@@ -448,7 +457,9 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
     const { session } = signedIn(request);
     const canOpen = opens(session.discordUserId);
     const reauthRequired = canOpen && idle(session, now());
-    return { enabled: true, canOpen, reauthRequired, idleHours: rt.config.idleHours, unhandledTotal: canOpen && !reauthRequired ? service.unhandledTotal() : null };
+    const open = canOpen && !reauthRequired;
+    // The approval counts exist only with sending (absent otherwise, as on a server before 2026-11-11).
+    return { enabled: true, canOpen, reauthRequired, idleHours: rt.config.idleHours, unhandledTotal: open ? service.unhandledTotal() : null, ...(approvals ? { approvals: open ? approvals.counts(deps.requireUser(request)) : null } : {}) };
   });
 
   // Mailbox names and counts (home screen and side bar): needs the idle limit, but is not mail use.
@@ -584,9 +595,11 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
     const user = administrator(request);
     const body = deps.parse(grantBody, request.body);
     if (body.department !== undefined) {
-      const kind = body.send !== undefined ? 'send' : 'edit';
-      return service.setDepartmentGrant(user, body.department, body.mailboxId, kind, (body.send ?? body.edit)!, deps.clock());
+      const kind = body.review !== undefined ? 'review' : body.send !== undefined ? 'send' : 'edit';
+      return service.setDepartmentGrant(user, body.department, body.mailboxId, kind, (body.review ?? body.send ?? body.edit)!, deps.clock());
     }
+    if (body.review !== undefined) return service.setApprovalGrant(user, body.userId!, body.mailboxId, 'review', body.review, deps.clock());
+    if (body.approval !== undefined) return service.setApprovalGrant(user, body.userId!, body.mailboxId, 'approval', body.approval, deps.clock());
     if (body.send !== undefined) return service.setSendGrant(user, body.userId!, body.mailboxId, body.send, deps.clock());
     return service.setGrant(user, body.userId!, body.mailboxId, body.edit!, deps.clock());
   });
@@ -599,44 +612,60 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
     if (!sender) return { enabled: false, from: [], fromName: '', bcc: null, maxAttachmentBytes: 0, maxRecipients: 0, senderName: user.displayName };
     // The committee's signature (2026-11-10); without its settings file, the name alone.
     const signature = signatures?.parts(user, organization) ?? { organization, name: user.displayName, title: '', address: '', contactEmail: '', personalEmail: '' };
-    return { ...sender.options(user), signature };
+    const options = sender.options(user);
+    // The mailboxes where this person's mail waits for an approval are From choices too (2026-11-11), in mailbox
+    // order with the ones they send from at once.
+    const approval = service.writeMailboxes(user).approval;
+    const direct = new Set(options.from.map((f) => f.mailboxId));
+    const from = rt.addresses.mailboxes.filter((m) => direct.has(m.id) || approval.has(m.id)).map((m) => ({ mailboxId: m.id, name: m.name, address: m.address }));
+    const editable = service.grantedMailboxes(user, 'edit');
+    return { ...options, from, approvalMailboxIds: from.filter((f) => approval.has(f.mailboxId)).map((f) => f.mailboxId), dueMailboxIds: from.filter((f) => editable.has(f.mailboxId)).map((f) => f.mailboxId), signature };
   });
 
   // One message: the "message" part (JSON, MailSendRequest) and up to ten "attachments" files.
   if (sender && sendConfig) {
+    /** The "message" part (JSON) and the "attachments" files of a send form. */
+    const readForm = async (request: FastifyRequest): Promise<{ message: unknown; files: OutgoingAttachment[] }> => {
+      if (!request.isMultipart()) throw new DomainError('validation', 'multipart/form-data 形式で送信してください。');
+      let message: unknown;
+      const files: OutgoingAttachment[] = [];
+      let total = 0;
+      try {
+        for await (const part of request.parts()) {
+          if (part.fieldname === 'message' && part.type === 'field' && message === undefined && !part.valueTruncated) {
+            try {
+              message = JSON.parse(String(part.value));
+            } catch {
+              throw new DomainError('validation', '送信データを読み取れませんでした。');
+            }
+          } else if (part.fieldname === 'attachments' && part.type === 'file') {
+            const content = await part.toBuffer();
+            total += content.length;
+            if (total > sendConfig.maxAttachmentBytes) throw new DomainError('validation', `添付ファイルは合わせて ${Math.floor(sendConfig.maxAttachmentBytes / 1024 / 1024)} MB までです。`, { field: 'attachments' });
+            files.push({ filename: attachmentName(part.filename), contentType: attachmentType(part.mimetype), content });
+          } else {
+            throw new DomainError('validation', '送信フィールドを確認してください。');
+          }
+        }
+      } catch (err) {
+        sendFormError(err, sendConfig);
+      }
+      if (message === undefined) throw new DomainError('validation', '送信データ（message）がありません。');
+      return { message, files };
+    };
+    const approvalDeps: ApprovalRouteDeps | null = approvals ? { approvals, reader, parse: deps.parse, now, readForm } : null;
+    if (approvalDeps) registerApprovalRoutes(app, approvalDeps);
     void app.register(async (scope) => {
       await scope.register(multipart, {
         limits: { fileSize: sendConfig.maxAttachmentBytes, files: MAIL_ATTACHMENTS_MAX, fields: 1, fieldSize: 512 * 1024, parts: MAIL_ATTACHMENTS_MAX + 1 },
       });
-      scope.post('/api/mail/send', { bodyLimit: sendConfig.maxAttachmentBytes + 1024 * 1024 }, async (request) => {
+      const bodyLimit = sendConfig.maxAttachmentBytes + 1024 * 1024;
+      scope.post('/api/mail/send', { bodyLimit }, async (request) => {
         const user = reader(request, true);
-        if (!request.isMultipart()) throw new DomainError('validation', 'multipart/form-data 形式で送信してください。');
-        let message: unknown;
-        const files: OutgoingAttachment[] = [];
-        let total = 0;
-        try {
-          for await (const part of request.parts()) {
-            if (part.fieldname === 'message' && part.type === 'field' && message === undefined && !part.valueTruncated) {
-              try {
-                message = JSON.parse(String(part.value));
-              } catch {
-                throw new DomainError('validation', '送信データを読み取れませんでした。');
-              }
-            } else if (part.fieldname === 'attachments' && part.type === 'file') {
-              const content = await part.toBuffer();
-              total += content.length;
-              if (total > sendConfig.maxAttachmentBytes) throw new DomainError('validation', `添付ファイルは合わせて ${Math.floor(sendConfig.maxAttachmentBytes / 1024 / 1024)} MB までです。`, { field: 'attachments' });
-              files.push({ filename: attachmentName(part.filename), contentType: attachmentType(part.mimetype), content });
-            } else {
-              throw new DomainError('validation', '送信フィールドを確認してください。');
-            }
-          }
-        } catch (err) {
-          sendFormError(err, sendConfig);
-        }
-        if (message === undefined) throw new DomainError('validation', '送信データ（message）がありません。');
+        const { message, files } = await readForm(request);
         return sender.sendMail(user, deps.parse(sendBody, message), files, new Date(now()));
       });
+      if (approvalDeps) registerApprovalFormRoutes(scope, approvalDeps, bodyLimit);
     });
   }
 

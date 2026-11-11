@@ -7,6 +7,7 @@ import type { User } from '../domain/types.js';
 import { setLineCommitteeGrant } from '../line/committee.js';
 import type { LineStore } from '../line/store.js';
 import { setLineGrant } from '../line/triage.js';
+import { approvalRequired, departmentReviewGrants, reviewGrants, setApprovalRequired, setDepartmentReviewGrant, setReviewGrant } from '../mailbox/approval-store.js';
 import type { MailboxStore } from '../mailbox/store.js';
 import { RentalAccess } from '../rental/access.js';
 import type { RentalPermission, RentalStore } from '../rental/store.js';
@@ -97,6 +98,35 @@ export function committeeMailSource(store: MailboxStore, mailboxes: { id: string
         permission: g.kind === 'send' ? '送信（部局）' : '編集（内部メモ・部局）',
         reason: null,
         revoke: (actor: User, now: string) => store.setDepartmentGrant(g.department, g.mailbox_id, g.kind, false, actor.id, now),
+      })),
+      // Approval before sending (2026-11-11): the review grants, and the people marked 承認必須 (a restriction, listed so
+      // that it does not stay on someone's account unseen).
+      ...reviewGrants(store).map((g) => ({
+        key: `mail|review|${userKey(g.user_id)}|${g.mailbox_id}`,
+        holder: { kind: 'person' as const, id: g.user_id },
+        sourceLabel: MAIL,
+        target: name(g.mailbox_id),
+        permission: '校閲（承認・差し戻し）',
+        reason: null,
+        revoke: (actor: User, now: string) => setReviewGrant(store, g.user_id, g.mailbox_id, false, actor.id, now),
+      })),
+      ...departmentReviewGrants(store).map((g) => ({
+        key: `mail|review|${deptKey(g.department)}|${g.mailbox_id}`,
+        holder: { kind: 'department' as const, name: g.department },
+        sourceLabel: MAIL,
+        target: name(g.mailbox_id),
+        permission: '校閲（承認・差し戻し・部局）',
+        reason: null,
+        revoke: (actor: User, now: string) => setDepartmentReviewGrant(store, g.department, g.mailbox_id, false, actor.id, now),
+      })),
+      ...approvalRequired(store).map((g) => ({
+        key: `mail|approval|${userKey(g.user_id)}|${g.mailbox_id}`,
+        holder: { kind: 'person' as const, id: g.user_id },
+        sourceLabel: MAIL,
+        target: name(g.mailbox_id),
+        permission: '承認必須（送信の前に校閲者の承認）',
+        reason: null,
+        revoke: (actor: User, now: string) => setApprovalRequired(store, g.user_id, g.mailbox_id, false, actor.id, now),
       })),
     ],
   };

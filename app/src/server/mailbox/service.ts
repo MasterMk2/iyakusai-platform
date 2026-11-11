@@ -9,6 +9,7 @@ import { AUTO_ACTOR, AUTO_ACTOR_NAME, dueEntries, loadDue, messageDueView, NO_DU
 import type { MailboxDefinition } from './config.js';
 import { contentIdOf, eachLimited, imageSources, MAIL_IMAGE_MAX_BYTES, MAIL_IMAGES_TOTAL_BYTES, MAIL_REMOTE_IMAGES_MAX, remoteImageUrl, sniffMailImage, type RemoteImageFetch } from './images.js';
 import { SIGN_IN_MAIL_SUBJECT, SIGN_IN_MAIL_TEXT } from './restricted.js';
+import { approvalRequired, approvalRequiredMailboxesOf, departmentReviewGrants, departmentReviewMailboxes, reviewedMailboxes, reviewGrants, reviewMailboxesOf, setApprovalRequired, setDepartmentReviewGrant, setReviewGrant } from './approval-store.js';
 import { normalizeForSearch, type AttachmentRow, type ListFilter, type MailboxStore, type MessageRow } from './store.js';
 
 // What the committee mailbox shows. Every signed-in committee member reads every configured mailbox
@@ -94,12 +95,33 @@ export class MailboxService {
     };
   }
 
-  /** Mailboxes this person may edit (or send from): their own grants and their departments' (2026-10-26). */
-  grantedMailboxes(user: User, kind: 'edit' | 'send'): Set<string> {
+  /** Mailboxes this person may edit (or send from, or review): their own grants and their departments' (2026-10-26). */
+  grantedMailboxes(user: User, kind: 'edit' | 'send' | 'review'): Set<string> {
     if (user.disabled) return new Set();
-    const own = kind === 'edit' ? this.store.editMailboxesOf(user.id) : this.store.sendMailboxesOf(user.id);
     const departments = departmentsOfLabel(user.roleLabel).filter((d) => d !== TEMPORARY_STAFF_DEPARTMENT);
+    if (kind === 'review') return new Set([...reviewMailboxesOf(this.store, user.id), ...departmentReviewMailboxes(this.store, departments)]);
+    const own = kind === 'edit' ? this.store.editMailboxesOf(user.id) : this.store.sendMailboxesOf(user.id);
     return new Set([...own, ...this.store.departmentMailboxes(departments, kind)]);
+  }
+
+  /**
+   * The From mailboxes of this person (2026-11-11), among those the server can send from. `direct`: they send at once
+   * (a send grant, and not marked 承認必須 there). `approval`: their mail waits for a reviewer, which is every other
+   * mailbox that has a reviewer at all, so nothing waits where nobody could approve it. Temporary staff write no mail.
+   */
+  writeMailboxes(user: User): { direct: Set<string>; approval: Set<string> } {
+    const direct = new Set<string>();
+    const approval = new Set<string>();
+    if (user.disabled || !this.sendable || departmentsOfLabel(user.roleLabel).includes(TEMPORARY_STAFF_DEPARTMENT)) return { direct, approval };
+    const send = this.grantedMailboxes(user, 'send');
+    const required = approvalRequiredMailboxesOf(this.store, user.id);
+    const reviewed = reviewedMailboxes(this.store);
+    for (const id of this.sendable) {
+      if (!this.mailbox(id)) continue;
+      if (send.has(id) && !required.has(id)) direct.add(id);
+      else if (reviewed.has(id)) approval.add(id);
+    }
+    return { direct, approval };
   }
 
   canEdit(user: User, linked: string[]): boolean {
@@ -464,7 +486,12 @@ export class MailboxService {
       sendGrants: this.store.sendGrants().filter((g) => known.has(g.user_id)).map((g) => ({ userId: g.user_id, mailboxId: g.mailbox_id })),
       sendable: this.sendable ? [...this.sendable] : null,
       departments: this.departments(people),
-      departmentGrants: this.store.departmentGrants().map((g) => ({ department: g.department, mailboxId: g.mailbox_id, kind: g.kind })),
+      departmentGrants: [
+        ...this.store.departmentGrants().map((g) => ({ department: g.department, mailboxId: g.mailbox_id, kind: g.kind })),
+        ...departmentReviewGrants(this.store).map((g) => ({ department: g.department, mailboxId: g.mailbox_id, kind: 'review' as const })),
+      ],
+      reviewGrants: reviewGrants(this.store).filter((g) => known.has(g.user_id)).map((g) => ({ userId: g.user_id, mailboxId: g.mailbox_id })),
+      approvalRequired: approvalRequired(this.store).filter((g) => known.has(g.user_id)).map((g) => ({ userId: g.user_id, mailboxId: g.mailbox_id })),
       ingest: { messages: summary.messages, latestStoredAt: summary.latestStoredAt, sources: summary.sources },
     };
   }
@@ -481,13 +508,27 @@ export class MailboxService {
    * department someone is in (not temporary staff), and sending a mailbox the server can send from; removing is
    * always allowed.
    */
-  setDepartmentGrant(actor: User, department: string, mailboxId: string, kind: 'edit' | 'send', on: boolean, now: string): MailAccessResponse {
+  setDepartmentGrant(actor: User, department: string, mailboxId: string, kind: 'edit' | 'send' | 'review', on: boolean, now: string): MailAccessResponse {
     if (!this.mailbox(mailboxId)) throw new DomainError('validation', '存在しない受信箱です。');
     if (on) {
       if (!this.departments(this.people.list()).includes(department)) throw new DomainError('validation', 'この部局には今、委員がいません（Discord のロールで部局が決まります）。');
-      if (kind === 'send' && !this.sendable?.includes(mailboxId)) throw new DomainError('validation', 'この受信箱のアドレスからは送信できない設定です（サーバーの send.mailboxes にありません）。');
+      if (kind !== 'edit' && !this.sendable?.includes(mailboxId)) throw new DomainError('validation', 'この受信箱のアドレスからは送信できない設定です（サーバーの send.mailboxes にありません）。');
     }
-    this.store.setDepartmentGrant(department, mailboxId, kind, on, actor.id, now);
+    if (kind === 'review') setDepartmentReviewGrant(this.store, department, mailboxId, on, actor.id, now);
+    else this.store.setDepartmentGrant(department, mailboxId, kind, on, actor.id, now);
+    return this.accessMatrix();
+  }
+
+  /**
+   * A person's review grant (`review`) or their 承認必須 mark (`approval`), for a mailbox the server can send from
+   * (2026-11-11). Taking one away needs no current account, as for a send grant.
+   */
+  setApprovalGrant(actor: User, userId: string, mailboxId: string, kind: 'review' | 'approval', on: boolean, now: string): MailAccessResponse {
+    if (!this.mailbox(mailboxId)) throw new DomainError('validation', '存在しない受信箱です。');
+    if (on && !this.sendable?.includes(mailboxId)) throw new DomainError('validation', 'この受信箱のアドレスからは送信できない設定です（サーバーの send.mailboxes にありません）。');
+    if (on && !this.people.lookup(userId)) throw new DomainError('validation', 'このアカウントは見つからないか、利用できない状態です。');
+    if (kind === 'review') setReviewGrant(this.store, userId, mailboxId, on, actor.id, now);
+    else setApprovalRequired(this.store, userId, mailboxId, on, actor.id, now);
     return this.accessMatrix();
   }
 

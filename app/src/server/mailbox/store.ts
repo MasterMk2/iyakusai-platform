@@ -3,6 +3,7 @@ import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, re
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { Address, HandlingStatus } from '../../shared/api.js';
+import { APPROVAL_SCHEMA } from './approval-store.js';
 import { DUE_SCHEMA, dueFilterSql, nearestDueSql } from './due.js';
 import type { ParsedMail } from './parse.js';
 import { isSignInMail } from './restricted.js';
@@ -182,6 +183,7 @@ CREATE TABLE IF NOT EXISTS department_grants(department TEXT NOT NULL, mailbox_i
 `;
 // Sending and department grants (2026-10-26) only added tables: an older version of the app still opens the file (schema 1).
 // Deadlines (2026-11-03, DUE_SCHEMA in due.ts) add one more table the same way; no column of an existing table changes.
+// Approval before sending (2026-11-11, APPROVAL_SCHEMA in approval-store.ts) adds its tables the same way.
 
 const SCHEMA_VERSION = '1';
 
@@ -215,7 +217,7 @@ export class MailboxStore {
     this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;');
     // Decided when read, not stored: a changed rule or sender list applies to the mail already kept.
     this.db.function('sign_in_mail', { deterministic: true }, (subject, from, text) => (isSignInMail(String(subject), String(from), String(text), this.signInSenders) ? 1 : 0));
-    this.db.exec(SCHEMA + DUE_SCHEMA);
+    this.db.exec(SCHEMA + DUE_SCHEMA + APPROVAL_SCHEMA);
     const version = this.db.prepare("SELECT value FROM meta WHERE key='schema'").get() as { value: string } | undefined;
     if (!version) this.db.prepare("INSERT INTO meta(key,value) VALUES('schema',?)").run(SCHEMA_VERSION);
     else if (version.value !== SCHEMA_VERSION) {

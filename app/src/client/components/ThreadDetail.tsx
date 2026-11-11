@@ -10,7 +10,7 @@ import { MailBody } from './MailBody';
 import { botReplyRequest, type BotReplyRequest, type DraftToSend } from '../../shared/mailHandoff';
 import type { ContactAddressMatch } from '../../shared/contacts';
 import type { ContactPrefill } from './contacts/ContactsView';
-import { MailCompose, replyDraft, sentNoteText } from './MailCompose';
+import { MailCompose, replyDraft, sentNoteText, SUBMITTED_NOTE } from './MailCompose';
 import { Notes } from './Notes';
 import { ThreadStatusButtons } from './ThreadStatusButtons';
 import { DONE_HINT, TriageForm } from './TriageForm';
@@ -307,6 +307,12 @@ export function ThreadDetail({
     setSentNote(sentNoteText(result));
     onChanged();
   };
+  // The reply waits for a reviewer's approval (2026-11-11): nothing was sent yet.
+  const submitted = () => {
+    closeCompose();
+    setSentNote(SUBMITTED_NOTE);
+    onChanged();
+  };
 
   return (
     <div className="thread-detail">
@@ -374,6 +380,7 @@ export function ThreadDetail({
                 mode={compose.mode}
                 onCancel={closeCompose}
                 onSent={sent}
+                onSubmitted={submitted}
               />
             </div>
           )}

@@ -4,6 +4,7 @@ import {
   MAIL_BODY_MAX,
   MAIL_SUBJECT_MAX,
   parseRecipient,
+  APPROVAL_NEEDED,
   SEND_DUPLICATE,
   SEND_UNKNOWN,
   splitRecipients,
@@ -53,12 +54,19 @@ export class MailSender {
     return this.config.send;
   }
 
-  /** Mailboxes this person may send from: a send grant (theirs or a department's) and the server's list, in mailbox order. */
+  /**
+   * Mailboxes this person sends from at once, in mailbox order: a send grant (theirs or a department's), the server's
+   * list, and not marked 承認必須 there (2026-11-11: such mail goes through approval.ts).
+   */
   private fromMailboxes(user: User): MailboxDefinition[] {
     if (user.disabled) return [];
-    const granted = this.service.grantedMailboxes(user, 'send');
-    const sendable = new Set(this.send.mailboxIds);
-    return this.addresses.mailboxes.filter((m) => sendable.has(m.id) && granted.has(m.id));
+    const { direct } = this.service.writeMailboxes(user);
+    return this.addresses.mailboxes.filter((m) => direct.has(m.id));
+  }
+
+  /** A mailbox the server can send from, whoever asks (approval.ts checks the people). */
+  sendableMailbox(mailboxId: string): MailboxDefinition | null {
+    return this.addresses.mailboxes.find((m) => m.id === mailboxId && this.send.mailboxIds.includes(m.id)) ?? null;
   }
 
   options(user: User): MailSendOptions {
@@ -120,18 +128,56 @@ export class MailSender {
     const known = this.store.outgoingByToken(request.clientToken);
     if (known && known.status !== 'failed') return this.answerKnown(user, request.clientToken, now);
     const from = this.fromMailboxes(user).find((m) => m.id === request.mailboxId);
-    if (!from) throw new DomainError('forbidden', 'この受信箱のアドレスから送る権限がありません。権限管理者に、受信箱の送信権限を依頼してください。');
-    // A reply deadline is checked before anything is sent: it must be a real day from today, and the sender
-    // must also hold the mailbox's edit grant (the same right as the deadlines on the screen).
-    const replyDue = request.replyDue ?? null;
-    if (replyDue !== null) {
-      if (!isDueDate(replyDue)) throw validation('回答期限は、実在する日付（例：2026-11-10）で指定してください。', 'replyDue');
-      if (replyDue < jstDay(now)) throw validation('回答期限は今日以降の日付にしてください。', 'replyDue');
-      if (!this.service.grantedMailboxes(user, 'edit').has(from.id)) {
-        throw new DomainError('forbidden', 'この受信箱で回答期限を付ける権限がありません。期限を付けずに送るか、権限管理者に編集権限を依頼してください。');
+    if (!from) {
+      // Their mail from this mailbox waits for a reviewer (a screen opened before the mark was set still sends here).
+      if (this.service.writeMailboxes(user).approval.has(request.mailboxId)) {
+        throw new HttpError(403, { error: APPROVAL_NEEDED, message: 'この受信箱から送るメールは、校閲者の承認が要ります。画面を読み込み直して、「承認を依頼する」から出してください。' });
       }
+      throw new DomainError('forbidden', 'この受信箱のアドレスから送る権限がありません。権限管理者に、受信箱の送信権限を依頼してください。');
     }
+    return this.deliver(user, [user], from, request, attachments, now);
+  }
 
+  /**
+   * The one send of an approved request (approval.ts): From a mailbox the server can send from, with the author as
+   * the sender of record (the send's row, the hourly limit, the thread's status and the reply wait are theirs).
+   * `request.clientToken` is the request's own token, so approving twice never sends twice.
+   */
+  async sendApproved(author: User, approver: User, request: MailSendRequest, attachments: OutgoingAttachment[], now: Date): Promise<MailSendResponse> {
+    if (author.disabled) throw new DomainError('forbidden', '書いた人のアカウントが利用できないため、送れません。差し戻すか、書いた人に確かめてください。');
+    const known = this.store.outgoingByToken(request.clientToken);
+    if (known && known.status !== 'failed') return this.answerKnown(author, request.clientToken, now);
+    const from = this.sendableMailbox(request.mailboxId);
+    if (!from) throw new DomainError('forbidden', 'この受信箱のアドレスからは送信できない設定です。');
+    return this.deliver(author, [author, approver], from, request, attachments, now);
+  }
+
+  /**
+   * Checks a mail that is only kept for now (a request for approval) by the rules of a send; nothing is sent.
+   * `dueHolders`: a reply deadline needs the mailbox's edit grant of one of them.
+   */
+  check(dueHolders: User[], from: MailboxDefinition, request: Omit<MailSendRequest, 'clientToken'>, attachments: Pick<OutgoingAttachment, 'content'>[], now: Date): void {
+    this.checkDue(dueHolders, from, request.replyDue ?? null, now);
+    this.prepare(from, request, attachments);
+    if (request.replyToReceiptId) this.replyContext(request.replyToReceiptId);
+  }
+
+  /**
+   * A reply deadline is checked before anything is sent: it must be a real day from today, and the sender (or, for
+   * an approved request, its author or approver) must also hold the mailbox's edit grant, the same right as the
+   * deadlines on the screen.
+   */
+  private checkDue(holders: User[], from: MailboxDefinition, replyDue: string | null, now: Date): void {
+    if (replyDue === null) return;
+    if (!isDueDate(replyDue)) throw validation('回答期限は、実在する日付（例：2026-11-10）で指定してください。', 'replyDue');
+    if (replyDue < jstDay(now)) throw validation('回答期限は今日以降の日付にしてください。', 'replyDue');
+    if (!holders.some((u) => this.service.grantedMailboxes(u, 'edit').has(from.id))) {
+      throw new DomainError('forbidden', 'この受信箱で回答期限を付ける権限がありません。期限を付けずに送るか、権限管理者に編集権限を依頼してください。');
+    }
+  }
+
+  /** The recipients, subject, text and files of a mail, checked and as they go out. */
+  private prepare(from: MailboxDefinition, request: Omit<MailSendRequest, 'clientToken'>, attachments: Pick<OutgoingAttachment, 'content'>[]) {
     const to = this.recipients(request.to, 'to');
     const cc = this.recipients(request.cc, 'cc');
     const bcc = this.recipients(request.bcc, 'bcc');
@@ -161,6 +207,14 @@ export class MailSender {
     if (attachments.length > MAIL_ATTACHMENTS_MAX) throw validation(`添付ファイルは ${MAIL_ATTACHMENTS_MAX} 個までです。`, 'attachments');
     const size = attachments.reduce((n, a) => n + a.content.length, 0);
     if (size > this.send.maxAttachmentBytes) throw validation(`添付ファイルは合わせて ${Math.floor(this.send.maxAttachmentBytes / 1024 / 1024)} MB までです。`, 'attachments');
+    return { toOnce, ccOnce, bccOnce, count, subject, replyTo };
+  }
+
+  /** Sends one checked mail with `user` as the sender of record. */
+  private async deliver(user: User, dueHolders: User[], from: MailboxDefinition, request: MailSendRequest, attachments: OutgoingAttachment[], now: Date): Promise<MailSendResponse> {
+    const replyDue = request.replyDue ?? null;
+    this.checkDue(dueHolders, from, replyDue, now);
+    const { toOnce, ccOnce, bccOnce, count, subject, replyTo } = this.prepare(from, request, attachments);
 
     const reply = request.replyToReceiptId ? this.replyContext(request.replyToReceiptId) : null;
     if (this.store.sendsSince(user.id, new Date(now.getTime() - 3_600_000).toISOString()) >= SENDS_PER_HOUR) {
