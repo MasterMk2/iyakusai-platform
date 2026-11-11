@@ -152,6 +152,29 @@ def remind_create_input(payload: dict, *, now: datetime | None = None) -> dict:
     }
 
 
+NOTICE_TARGETS_MAX = 30
+
+
+def notice_input(payload: dict) -> dict:
+    """統合アプリからの個人あての知らせ(2026-11-11)。対象は "discord-<ID>" を 1〜30 人、本文は 1〜500 字(改行可)。
+
+    対象は <ID> の数字だけにして返す(同じ人は 1 回)。委員かどうかは連携口が確かめる。
+    """
+    _only(payload, {"targetIds", "text"})
+    raw = payload.get("targetIds")
+    if not isinstance(raw, list) or not 1 <= len(raw) <= NOTICE_TARGETS_MAX:
+        raise InputError(f"対象は 1〜{NOTICE_TARGETS_MAX} 人で指定してください")
+    targets: list[str] = []
+    for value in raw:
+        target = user_id_text(value, field="対象")
+        if target not in targets:
+            targets.append(target)
+    return {
+        "targetIds": targets,
+        "text": clean_text(payload.get("text"), field="内容", max_len=500, min_len=1, multiline=True),
+    }
+
+
 def screening_input(action: str, payload: dict) -> dict:
     _only(payload, {"comment"})
     if action not in SCREENING_ACTIONS:

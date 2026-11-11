@@ -78,6 +78,7 @@ ROUTES = (
     ("GET", r"/reminders", "list_reminders"),
     ("POST", r"/reminders", "create_reminder"),
     ("POST", r"/reminders/([^/]*)/(done|delete)", "reminder_action"),
+    ("POST", r"/notices", "create_notice"),
     ("GET", r"/candidates", "candidates"),
     ("POST", r"/candidates/([^/]*)/([^/]*)", "candidate_action"),
 )
@@ -698,6 +699,26 @@ class AssistantGateway:
             reminder_id = self.logic.reminder_id(reminder_id)
         self._require_feature(self._capabilities(), "remind")
         job = self._enqueue(context, client_op, "remind", action, {"reminderId": reminder_id})
+        return self._settle(job)
+
+    def _route_create_notice(self, context, raw, payload):
+        """統合アプリからの個人あての知らせ(2026-11-11)。Bot が DM で届ける。ジョブは remind の op=notice。
+
+        ジョブ表の kind を増やさない(表の作り直しが要らない)。知らせを扱える Bot は capabilities.notice を
+        true と書くので、古い Bot には積まない(積むと「リマインドの操作が正しくありません」で失敗するだけ)。
+        """
+        self._params(raw, set())
+        body = self._body(payload, {"clientOperationId", "targetIds", "text"})
+        client_op = self._client_op(body.get("clientOperationId"))
+        caps = self._capabilities()
+        self._require_feature(caps, "remind")
+        if caps.get("notice") is not True:
+            raise AssistantError(400, "FEATURE_UNAVAILABLE", "この機能はいまの設定では使えません。")
+        with self._input_guard():
+            validated = self.logic.notice_input({key: body[key] for key in ("targetIds", "text") if key in body})
+        if any(context.committee_role(target) is None for target in validated["targetIds"]):
+            _invalid("対象は委員から選んでください")
+        job = self._enqueue(context, client_op, "remind", "notice", validated)
         return self._settle(job)
 
     def _route_candidates(self, context, raw, payload):

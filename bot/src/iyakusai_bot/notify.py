@@ -23,6 +23,7 @@ NOTIFY_KINDS: dict[str, tuple[str, bool]] = {
     "haiku_digest": ("俳句の転記(digest)", True),
     "collect_staleness": ("収集の遅れの知らせ", True),
     "app_share": ("統合アプリ発の依頼の投稿", True),
+    "app_notice": ("統合アプリからの個人あての知らせ(DM で届かない人へのメンション)", True),
 }
 
 

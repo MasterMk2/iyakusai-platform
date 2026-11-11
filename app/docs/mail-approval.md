@@ -90,12 +90,28 @@
 - `GET /api/mail/status` の `approvals` に、自分が承認する件数と、差し戻された自分の依頼の件数が入ります。
 - `PUT /api/mail/admin/access` は、`review`（委員・部局）と `approval`（委員）も受け付けます。
 
+## Discord への知らせ
+
+Bot の連携（`SMM_ASSISTANT_*`）が有効なサーバーでは、次のときに Bot が DM で知らせます。
+
+| とき | 知らせる相手 |
+|---|---|
+| 承認を依頼した・直して出し直した | その受信箱の校閲者（書いた本人を除く。30 人まで） |
+| 承認されて送信された | 書いた人 |
+| 差し戻された | 書いた人 |
+
+- 文面は「だれの・どの受信箱の依頼か」と、アプリの承認待ちへのリンクだけです。アドレス・件名・本文・差し戻しの理由は入れません（DM を受け取らない設定の人には、Bot がチャンネルでその人にメンションして同じ文を出すため）。
+- Discord のアカウントと結び付いていない人には送りません。
+- 知らせは操作のあとに投げるだけで、結果を待ちません。Bot に届かなくても、依頼・承認・送信はそのまま進みます。アプリの中の件数表示が正の記録です。
+- 取り下げ・校閲者の修正・送信の失敗では知らせません。
+- Bot との取り決めは [docs/contracts/bot-front.md](../../docs/contracts/bot-front.md) の `POST /assistant/notices`、チャンネルの振り分けは `bot/docs/notify-routing.md` の `app_notice`。
+
 ## まだ無いもの
 
-- Discord への知らせ（依頼が来た・承認された・差し戻された）。いまはアプリの中の件数表示だけです。
 - 団体への一斉メールと公式LINE の承認。「承認必須」の付いた人は、その受信箱から一斉メールを送れません。
 
 ## 試験
 
 - サーバー：`tests/mailbox/approval.test.ts`（承認待ちになる条件、依頼・承認・送信、差し戻しと出し直し、校閲者の修正、取り下げ、送信の失敗と接続切れ、部局の校閲、年度の切り替えの一覧）
 - 画面：`tests/e2e/mail-approval.spec.ts`（作成欄からの依頼、校閲者の一覧・修正・承認・差し戻し、差し戻されたメールの出し直し、権限の画面）
+- 知らせ：`tests/mailbox/approval.test.ts` の「telling people on Discord」（相手・文面・中身を入れないこと・Bot に届かないとき）、Bot 側は `bot/tests/test_assistant_gateway.py`・`bot/tests/test_assistant_cog.py` の notice の試験

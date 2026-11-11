@@ -39,6 +39,7 @@ Bot の投稿の箇所は、`grep` で `.send(`・`send_message`・`channel.send
 | `haiku_digest` | 俳句の転記（`haiku.mode` が `digest` / `both`） | `haiku.channel_id` | はい | `haiku.py` の `_target_channel` |
 | `collect_staleness` | 収集の遅れの知らせ（1 日 1 回） | `collect.staleness_channel_id` | はい | `collector.py` |
 | `app_share` | 統合アプリ発の依頼（/ask・/doc・画像）の投稿と結果 | `assistant.share_channel_id`（#bottest） | はい | `assistant_cog.py` の `_share_channel`・`web_interaction.py` |
+| `app_notice` | 統合アプリからの個人あての知らせ（メールの承認依頼など）のうち、DM を受け取らない人へのメンション。DM で届いた人の分は投稿しない | `assistant.share_channel_id`（#bottest） | はい | `assistant_cog.py` の `_notice`・`_notice_channel` |
 
 ### 対象外（送り先を変えない）
 

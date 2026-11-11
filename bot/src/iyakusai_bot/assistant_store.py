@@ -14,7 +14,7 @@ Bot 起動時に残っていた running は INTERRUPTED で failed にする(単
 前の Bot の残り=中断扱いで正しい)。
 
 meta の既定キー(Bot が起動時と定期に書き、連携口が読む):
-- capabilities: {"features":{ask,doc,image,remind,screening: bool}, "gemini": bool,
+- capabilities: {"features":{ask,doc,image,remind,screening: bool}, "gemini": bool, "notice": bool,
   "maxActivePerUser": int, "reminderChannels": [{"id","name"}], "shareChannel": {"id","name"}|None,
   "updatedAt": ISO}
 reminder_snapshot.body の形: {"takenAt": ISO, "reminders": [未完了のリマインド]}(役員の判定は連携口が本人の権限で行う)

@@ -19,6 +19,7 @@ import {
 import { DomainError, notFound, type User } from '../domain/types.js';
 import { HttpError } from '../http/http-error.js';
 import type { CommitteeAddresses } from './addresses.js';
+import { APPROVAL_NOTICE_MAX_TARGETS, type ApprovalNoticeKind, type ApprovalNotifier } from './approval-notice.js';
 import {
   changeRequest,
   finishedRequestsOf,
@@ -82,7 +83,32 @@ export class MailApprovals {
     private readonly people: People,
     private readonly service: MailboxService,
     private readonly sender: MailSender,
+    /** Tells people on Discord (approval-notice.ts); absent: only the counts on the screens tell. */
+    private readonly notifier: ApprovalNotifier | null = null,
   ) {}
+
+  /** The reviewers of a request's mailbox, its author left out. */
+  private reviewersOf(row: SendRequestRow): User[] {
+    return this.people
+      .list()
+      .filter((u) => !u.disabled && u.id !== row.author_id && this.service.grantedMailboxes(u, 'review').has(row.mailbox_id))
+      .slice(0, APPROVAL_NOTICE_MAX_TARGETS);
+  }
+
+  /** Tells the reviewers (a request arrived) or the author (approved, returned). Never fails the step it follows. */
+  private notify(kind: ApprovalNoticeKind, actor: User, id: string): void {
+    if (!this.notifier) return;
+    try {
+      const row = requestById(this.store, id);
+      const author = row ? this.people.lookup(row.author_id) : undefined;
+      if (!row) return;
+      const targets = kind === 'requested' ? this.reviewersOf(row) : author && !author.disabled ? [author] : [];
+      if (targets.length === 0) return;
+      this.notifier({ kind, requestId: row.id, version: row.version, actor, targets, mailboxName: this.mailboxOf(row).name, authorName: this.name(row.author_id) });
+    } catch {
+      // The step is done; the screens show it.
+    }
+  }
 
   private name(userId: string): string {
     return this.people.lookup(userId)?.displayName ?? '（不明な利用者）';
@@ -223,6 +249,7 @@ export class MailApprovals {
       stored(attachments),
       now.toISOString(),
     );
+    this.notify('requested', user, id);
     return this.detail(user, requestById(this.store, id)!, now);
   }
 
@@ -254,6 +281,7 @@ export class MailApprovals {
       now.toISOString(),
     );
     if (!done) throw conflict();
+    this.notify('requested', user, row.id);
     return this.detail(user, requestById(this.store, row.id)!, now);
   }
 
@@ -295,6 +323,7 @@ export class MailApprovals {
     if (text.length > MAIL_APPROVAL_COMMENT_MAX) throw validation(`差し戻しの理由は ${MAIL_APPROVAL_COMMENT_MAX} 文字以内にしてください。`, 'comment');
     const at = now.toISOString();
     if (!changeRequest(this.store, row.id, row.version, ['pending'], { state: 'returned', return_comment: text, decided_by: user.id, decided_at: at }, { actorId: user.id, action: 'returned', detail: text }, at)) throw conflict();
+    this.notify('returned', user, row.id);
     return this.detail(user, requestById(this.store, row.id)!, now);
   }
 
@@ -324,6 +353,7 @@ export class MailApprovals {
     try {
       const result = await this.sender.sendApproved(author, user, { ...message, clientToken: row.send_token, mailboxId: row.mailbox_id }, files, now);
       changeRequest(this.store, row.id, null, ['sending'], { state: 'sent', sent_thread_id: result.threadId, dropAttachments: true }, { actorId: user.id, action: 'sent' }, new Date().toISOString());
+      this.notify('approved', user, row.id);
     } catch (err) {
       const code = err instanceof HttpError ? err.body.error : null;
       if (code === SEND_UNKNOWN) {
