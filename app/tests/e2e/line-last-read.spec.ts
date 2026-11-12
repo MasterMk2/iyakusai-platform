@@ -140,6 +140,10 @@ test('the list shows how many messages came since the person last read, and open
   await openAccount(page);
   const row = lineItem(page, '顧客サンプルL1');
   await expect(row.getByTestId('line-unread-count')).toHaveText('未読 1');
+  // The sidebar shows the account's total and the total of all accounts.
+  const account = page.locator('button[data-line-account-id="line-oa-support"]');
+  await expect(account.getByTestId('line-account-unread')).toHaveText('未読 1');
+  await expect(page.getByTestId('line-all-unread')).toHaveText('未読 1');
   // The date stays at the end of the first line.
   await expect(row.locator('.row-line .date')).toBeVisible();
 
@@ -147,5 +151,7 @@ test('the list shows how many messages came since the person last read, and open
   await row.click();
   await expect(page.getByTestId('line-unread-divider')).toHaveText('ここから未読');
   await expect(row.getByTestId('line-unread-count')).toHaveCount(0);
+  await expect(account.getByTestId('line-account-unread')).toHaveCount(0);
+  await expect(page.getByTestId('line-all-unread')).toHaveCount(0);
   await expect(page.getByTestId('line-unread-divider')).toHaveCount(1);
 });

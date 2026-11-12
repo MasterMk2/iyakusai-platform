@@ -86,7 +86,25 @@ export interface UnreadPlaces {
  */
 export function unreadOf(messages: LineMessage[], place: string): number {
   const seen = Date.parse(place);
-  return messages.filter((m) => m.direction === 'inbound' && m.provenance.source !== 'oa_history' && m.content.kind !== 'unsent' && Date.parse(m.sentAt) > seen).length;
+  return messages.filter((m) => countsAsUnread(m) && Date.parse(m.sentAt) > seen).length;
+}
+
+const countsAsUnread = (m: LineMessage): boolean => m.direction === 'inbound' && m.provenance.source !== 'oa_history' && m.content.kind !== 'unsent';
+
+/** Unread messages in each of the given conversations, in one pass over the messages (the accounts' totals). */
+function unreadByConversation(state: LineState, conversationIds: ReadonlySet<string>, unread: UnreadPlaces): Map<string, number> {
+  const places = new Map<string, number>();
+  const counts = new Map<string, number>();
+  for (const m of state.messages) {
+    if (!conversationIds.has(m.conversationId) || !countsAsUnread(m)) continue;
+    let place = places.get(m.conversationId);
+    if (place === undefined) {
+      place = Date.parse(unread.places.get(m.conversationId) ?? unread.since);
+      places.set(m.conversationId, place);
+    }
+    if (Date.parse(m.sentAt) > place) counts.set(m.conversationId, (counts.get(m.conversationId) ?? 0) + 1);
+  }
+  return counts;
 }
 
 export function collectLineItems(state: LineState, names: NameOf, user: User, q: LineQuery, unread?: UnreadPlaces | null): LineInboxItem[] {
@@ -135,11 +153,12 @@ export function lineLabelFacets(state: LineState, user: User, accountId?: string
   return [...counts.entries()].map(([label, count]) => ({ label, count }));
 }
 
-export function lineAccountSummaries(state: LineState, user: User): LineAccountSummary[] {
+export function lineAccountSummaries(state: LineState, user: User, unread?: UnreadPlaces | null): LineAccountSummary[] {
   return state.accounts
     .filter((a) => canReadLine(state, user, a.id))
     .map((a) => {
       const convs = permittedConversations(state, user, a.id);
+      const unreadCounts = unread ? unreadByConversation(state, new Set(convs.map((c) => c.id)), unread) : null;
       return {
         id: a.id,
         name: a.name,
@@ -149,6 +168,7 @@ export function lineAccountSummaries(state: LineState, user: User): LineAccountS
         sending: sendingOf(a),
         conversationCount: convs.length,
         unhandledCount: convs.filter((c) => c.triage.status === 'unhandled').length,
+        ...(unreadCounts ? { unreadCount: [...unreadCounts.values()].reduce((n, c) => n + c, 0) } : {}),
       };
     });
 }

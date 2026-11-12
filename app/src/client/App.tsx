@@ -435,13 +435,14 @@ export function App() {
   const loadLineAccounts = useCallback(
     (signal: AbortSignal) => {
       void refresh;
+      void lineReadTick;
       if (!user || !mailStatusSettled || !lineOpen) return Promise.resolve([] as LineAccountSummary[]);
       return api<LineAccountSummary[]>('GET', '/api/line/accounts', undefined, signal).catch((err: unknown) => {
         if (err instanceof ApiFailure && err.status === 404) return [] as LineAccountSummary[];
         throw err;
       });
     },
-    [refresh, user, mailStatusSettled, lineOpen],
+    [refresh, lineReadTick, user, mailStatusSettled, lineOpen],
   );
   const lineAccounts = useLoader(loadLineAccounts);
 
@@ -744,6 +745,12 @@ export function App() {
   // One message in two mailboxes counts once in the committee total; the per-mailbox counts would count it twice.
   const mailUnhandled = committeeMail?.unhandledTotal ?? mailboxList.reduce((n, m) => n + m.unhandledCount, 0);
   const lineUnhandled = lineList.reduce((n, a) => n + a.unhandledCount, 0);
+  const lineUnread = lineList.reduce((n, a) => n + (a.unreadCount ?? 0), 0);
+  /** 「（未対応 3・未読 2）」 for the narrow-width choice; empty when both are 0. */
+  const lineCounts = (unhandled: number, unread: number) => {
+    const parts = [unhandled > 0 ? `未対応 ${unhandled}` : '', unread > 0 ? `未読 ${unread}` : ''].filter(Boolean);
+    return parts.length > 0 ? `（${parts.join('・')}）` : '';
+  };
   const allMailTitle = committeeMail ? 'すべての受信箱' : 'すべての許可された受信箱';
   const scopeKey = lineTab ? (lineAccountId ? `l:${lineAccountId}` : 'line') : route.mailboxId ? `m:${route.mailboxId}` : 'all';
   const scopeAddress = !lineTab && route.mailboxId ? (mailboxList.find((m) => m.id === route.mailboxId)?.address ?? null) : null;
@@ -754,12 +761,12 @@ export function App() {
         <span className="sr-only">表示する LINE アカウント</span>
         <select value={scopeKey} onChange={(e) => navigate({ ...EMPTY_ROUTE, view: 'line', lineAccountId: e.target.value.startsWith('l:') ? e.target.value.slice(2) : null })}>
           <option value="line">
-            すべての LINE{lineUnhandled > 0 ? `（未対応 ${lineUnhandled}）` : ''}
+            すべての LINE{lineCounts(lineUnhandled, lineUnread)}
           </option>
           {lineList.map((a) => (
             <option key={a.id} value={`l:${a.id}`}>
               {a.name}
-              {a.unhandledCount > 0 ? `（未対応 ${a.unhandledCount}）` : ''}
+              {lineCounts(a.unhandledCount, a.unreadCount ?? 0)}
             </option>
           ))}
         </select>
@@ -872,6 +879,11 @@ export function App() {
                       onClick={() => navigate({ ...EMPTY_ROUTE, view: 'line' })}
                     >
                       <span className="mailbox-name">すべての LINE</span>
+                      {lineUnread > 0 && (
+                        <span className="unread-count" data-testid="line-all-unread">
+                          未読 {lineUnread}
+                        </span>
+                      )}
                       {lineUnhandled > 0 && <span className="count-badge" aria-label={`未対応 ${lineUnhandled} 件`}>{lineUnhandled}</span>}
                     </button>
                   )}
@@ -880,8 +892,9 @@ export function App() {
                       <li key={a.id}>
                         <button
                           type="button"
-                          className={`nav-item ${lineAccountId === a.id && !broadcastAccount ? 'active' : ''}`}
+                          className={`nav-item line-account ${lineAccountId === a.id && !broadcastAccount ? 'active' : ''}`}
                           aria-current={lineAccountId === a.id && !broadcastAccount ? 'page' : undefined}
+                          title={a.name}
                           onClick={() => navigate({ ...EMPTY_ROUTE, view: 'line', lineAccountId: a.id })}
                           data-line-account-id={a.id}
                         >
@@ -890,6 +903,11 @@ export function App() {
                             {committeeMail ? (a.access === 'edit' ? 'メモ可' : '閲覧・対応') : a.access === 'edit' ? '編集可' : '閲覧のみ'}
                             {a.kind === 'legacy_archive' || a.sending === 'none' ? '・返信不可' : a.canReply ? (a.sending === 'mock' ? '・返信可（模擬）' : '・送信可') : '・返信権限なし'}
                           </span>
+                          {(a.unreadCount ?? 0) > 0 && (
+                            <span className="unread-count" data-testid="line-account-unread">
+                              未読 {a.unreadCount}
+                            </span>
+                          )}
                           {a.unhandledCount > 0 && <span className="count-badge" aria-label={`未対応 ${a.unhandledCount} 件`}>{a.unhandledCount}</span>}
                         </button>
                       </li>

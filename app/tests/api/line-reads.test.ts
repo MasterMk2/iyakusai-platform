@@ -111,6 +111,8 @@ describe('a server that does not keep places', () => {
       expect('readSince' in d).toBe(false);
       const list = (await plain.call(EDITOR_C, 'GET', `/api/inbox?lineAccountId=${LINE_SUPPORT}`)).json;
       expect(list.items.some((i: object) => 'unreadCount' in i)).toBe(false);
+      const accounts = (await plain.call(EDITOR_C, 'GET', '/api/line/accounts')).json;
+      expect(accounts.some((a: object) => 'unreadCount' in a)).toBe(false);
       expect((await plain.call(EDITOR_C, 'PUT', `/api/line/conversations/${CONV.l1}/read`, { at: newestOf(d) })).status).toBe(404);
     } finally {
       await plain.app.close();
@@ -184,5 +186,29 @@ describe('unread counts in the LINE list', () => {
     reads = new LineReadStore(join(dir, `late-${n}`), '2026-12-01T00:00:00.000Z');
     t = await makeLineApp({ reads });
     expect(Object.values(await unread(EDITOR_C)).every((v) => v === 0)).toBe(true);
+  });
+});
+
+describe('unread totals of the accounts (the sidebar)', () => {
+  const totals = async (user: string) =>
+    Object.fromEntries(((await t.call(user, 'GET', '/api/line/accounts')).json as { id: string; unreadCount: number }[]).map((a) => [a.id, a.unreadCount]));
+  const listSum = async (user: string, accountId: string) =>
+    ((await t.call(user, 'GET', `/api/inbox?lineAccountId=${accountId}&pageSize=100`)).json.items as { unreadCount: number }[]).reduce((n, i) => n + i.unreadCount, 0);
+
+  it('are the sum of the rows, for each account the person can read', async () => {
+    const before = await totals(EDITOR_C);
+    expect(Object.keys(before).length).toBeGreaterThan(1);
+    for (const id of Object.keys(before)) expect(before[id], id).toBe(await listSum(EDITOR_C, id));
+    expect(before[LINE_SUPPORT]).toBeGreaterThanOrEqual(3);
+
+    await markRead(EDITOR_C, newestOf(await detail(EDITOR_C)));
+    expect((await totals(EDITOR_C))[LINE_SUPPORT]).toBe(before[LINE_SUPPORT]! - 3);
+    // Someone else's totals are their own; an account they cannot read is not listed.
+    expect((await totals(VIEWER_B))[LINE_SUPPORT]).toBe(await listSum(VIEWER_B, LINE_SUPPORT));
+    expect(await totals(NOACCESS_D)).toEqual({});
+
+    expect((await t.call(ADMIN, 'POST', '/api/demo/line/release')).status).toBe(200);
+    const after = await totals(EDITOR_C);
+    for (const id of Object.keys(after)) expect(after[id], id).toBe(await listSum(EDITOR_C, id));
   });
 });

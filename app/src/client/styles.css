@@ -300,6 +300,12 @@ html { scroll-padding-top: 64px; }
 .line-msg { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; display: flex; flex-direction: column; max-width: 90%; }
 .line-msg.mine { align-self: flex-end; background: var(--mint-bg); }
 /* Messages from the other side since the viewer last read the conversation (2026-11-13). Not the red of 未対応. */
+.nav-item .unread-count { flex: 0 0 auto; font-size: 14px; line-height: 1.55; }
+/* A LINE account (2026-11-13): the name and its counts on the first line, what the person may do on the second, so
+   the counts do not squeeze the name out of a narrow side column. */
+.nav-item.line-account { flex-wrap: wrap; row-gap: 0; }
+.nav-item.line-account .mailbox-meta { order: 3; flex: 1 0 100%; }
+.nav-item.line-account .mailbox-name { flex: 1 1 0; white-space: normal; overflow-wrap: anywhere; }
 .unread-count { padding: 0 6px; border-radius: 10px; background: var(--info-bg); color: var(--navy); font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
 /* A conversation opens with this place a little below the fixed menu (html scroll-padding-top covers the menu):
    the end of what was read stays in view above it, what came since below (2026-11-13). */

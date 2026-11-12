@@ -210,7 +210,8 @@ export function registerLineRoutes(app: FastifyInstance, ctx: LineRouteContext):
 
   app.get('/api/line/accounts', async (request) => {
     const user = requireUser(request);
-    return store.read((s) => lineAccountSummaries(s, user));
+    const reads = line.reads ? { places: line.reads.placesOf(user.id), since: line.reads.since } : null;
+    return store.read((s) => lineAccountSummaries(s, user, reads));
   });
 
   app.get('/api/line/conversations/:conversationId', async (request) => {
