@@ -61,6 +61,8 @@ jobs:
           exit 1
       - name: コミットのラベル
         run: test "$(docker inspect -f '{{ index .Config.Labels "org.opencontainers.image.revision" }}' iyakusai-app:ci)" = "${{ github.sha }}"
+      - name: 実行のイメージに npm などが無い
+        run: docker run --rm --entrypoint sh iyakusai-app:ci -c '! command -v npm && ! command -v npx && ! command -v corepack && ! command -v yarn'
 
   bot:
     name: Bot・タスク API・登録
