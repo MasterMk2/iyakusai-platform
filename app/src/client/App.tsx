@@ -545,7 +545,7 @@ export function App() {
             onOpenInbox={(filter) => navigate({ ...EMPTY_ROUTE, inboxFilter: filter ?? null })}
             onOpenMailbox={(mailboxId) => navigate({ ...EMPTY_ROUTE, mailboxId, inboxFilter: 'unhandled' })}
             onOpenThread={(threadId) => navigate({ ...EMPTY_ROUTE, threadId, inboxFilter: 'unhandled' })}
-            onOpenLine={(lineAccountId) => navigate({ ...EMPTY_ROUTE, view: 'line', lineAccountId: lineAccountId ?? null, inboxFilter: 'unhandled' })}
+            onOpenLine={(lineAccountId, filter) => navigate({ ...EMPTY_ROUTE, view: 'line', lineAccountId: lineAccountId ?? null, inboxFilter: filter === undefined ? 'unhandled' : filter })}
             onOpenBot={(section) => navigate({ ...EMPTY_ROUTE, view: 'bot', botSection: section ?? 'ask' })}
             onOpenBoard={() => navigate({ ...EMPTY_ROUTE, view: 'board' })}
             onOpenContacts={
