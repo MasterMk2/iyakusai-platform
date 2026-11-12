@@ -25,6 +25,8 @@ export interface LineAccountSummary {
   sending: LineSending;
   conversationCount: number;
   unhandledCount: number;
+  /** Unread messages in the account's conversations, as the list counts them per row (2026-11-13); absent when this server does not keep places. */
+  unreadCount?: number;
 }
 
 export interface LineInboxItem {
