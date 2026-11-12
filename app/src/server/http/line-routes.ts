@@ -94,7 +94,8 @@ const triageBody = z
   })
   .refine((b) => b.status !== undefined || b.assigneeId !== undefined || b.labels !== undefined, { message: '変更内容がありません' });
 const noteBody = z.strictObject({ body: z.string().max(LIMITS.noteMaxLength * 2) });
-const readBody = z.strictObject({ at: z.iso.datetime({ offset: true }) });
+// A row's time as the conversation gave it (older history files are not always strict ISO); stored as UTC ISO.
+const readBody = z.strictObject({ at: z.string().min(1).max(64).refine((v) => !Number.isNaN(Date.parse(v)), '日時ではありません') });
 const previewBody = z.strictObject({ draftId, draftVersion: version, publicDays: z.union([z.literal(1), z.literal(7), z.literal(30)]).optional() });
 // No recipient, method or "confirmed" flag is accepted from the client: strict schemas reject them.
 const sendBody = z.strictObject({

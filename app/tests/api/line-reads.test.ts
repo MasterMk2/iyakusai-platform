@@ -66,6 +66,13 @@ describe('the place each person read up to', () => {
     expect((await markRead(EDITOR_C, sentAt)).json.lastReadAt).toBe(new Date(sentAt).toISOString());
   });
 
+  it('takes a time written the way an older history file writes it', async () => {
+    const newest = newestOf(await detail(EDITOR_C));
+    const d = new Date(Date.parse(newest) - 60_000);
+    const loose = `${d.getUTCFullYear()}/${d.getUTCMonth() + 1}/${d.getUTCDate()} ${d.getUTCHours()}:${String(d.getUTCMinutes()).padStart(2, '0')}:00 UTC`;
+    expect((await markRead(EDITOR_C, loose)).json.lastReadAt).toBe(d.toISOString().replace(/\.\d{3}Z$/, '.000Z'));
+  });
+
   it('keeps times in UTC whatever offset the screen sends', async () => {
     const newest = newestOf(await detail(EDITOR_C));
     const jst = new Date(Date.parse(newest) + 9 * 3600_000).toISOString().replace('Z', '+09:00');
