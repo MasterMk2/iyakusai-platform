@@ -5,7 +5,7 @@ import { DecisionRegisterLink } from './decisions/DecisionRegisterLink';
 import { japanDay, todayInJapan } from './decisions/decisionLinks';
 import { api, fmtDate, toFailure } from '../api';
 import { useLoader } from '../useLoader';
-import { newestAt, readPlace, rememberedRead, rememberRead } from './lineLastRead';
+import { isLater, laterOf, newestAt, readPlace, rememberedRead, rememberRead } from './lineLastRead';
 import { LineReplyPanel } from './LineReplyPanel';
 import { LoadStatus } from './LoadStatus';
 import { Notes } from './Notes';
@@ -218,7 +218,8 @@ export function LineConversation({
   const basePath = `/api/line/conversations/${conversationId}`;
   const canTriage = d ? (d.canTriage ?? d.access === 'edit') : false;
 
-  // Where this person stopped last time, read once before this visit is remembered (2026-11-13).
+  // Where this person stopped last time on this device, read once before this visit is remembered (2026-11-13); the
+  // server's place (any device) comes with the conversation, and the later of the two counts.
   const [remembered] = useState(() => (userId ? rememberedRead(userId, conversationId) : null));
   const rows = d ? timeline(d) : [];
   const ats = rows.map((e) => e.at);
@@ -227,7 +228,7 @@ export function LineConversation({
   // in while it is open (a reply sent from here) stay below it or, with nothing new, add no line. null: nothing new.
   const [firstUnread, setFirstUnread] = useState<string | null | undefined>(undefined);
   if (d && firstUnread === undefined) {
-    const place = readPlace(ats, remembered);
+    const place = readPlace(ats, laterOf(d.lastReadAt ?? null, remembered));
     setFirstUnread(place.unread > 0 ? rowKey(rows[place.lastRead + 1]!) : null);
   }
   const placeRef = useRef<HTMLElement | null>(null);
@@ -242,10 +243,15 @@ export function LineConversation({
     placed.current = true;
     return openAt(placeRef.current, timelineRef.current);
   }, [d]);
-  // What was on the screen counts as read, as in the LINE app; rows that come in while it is open too.
+  // What was on the screen counts as read, as in the LINE app; rows that come in while it is open too. The server is told
+  // only when it keeps places (undefined: it does not) and has an older one; a failure leaves this device's copy.
+  const serverPlace = d?.lastReadAt;
   useEffect(() => {
-    if (userId && newest) rememberRead(userId, conversationId, newest);
-  }, [userId, conversationId, newest]);
+    if (!userId || !newest) return;
+    rememberRead(userId, conversationId, newest);
+    if (serverPlace === undefined || (serverPlace !== null && !isLater(newest, serverPlace))) return;
+    void api('PUT', `/api/line/conversations/${encodeURIComponent(conversationId)}/read`, { at: newest }).catch(() => undefined);
+  }, [userId, conversationId, newest, serverPlace]);
 
   return (
     <div className="thread-detail">

@@ -1,3 +1,4 @@
+import { dirname } from 'node:path';
 import multipart from '@fastify/multipart';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
@@ -27,6 +28,7 @@ import { attachmentDisposition } from '../http/content-disposition.js';
 import { HttpError } from '../http/http-error.js';
 import { registerLineRoutes } from '../http/line-routes.js';
 import { LineFileRefused, openCommitteeLine, type CommitteeLine } from '../line/committee-runtime.js';
+import { openLineReads } from '../line/reads.js';
 import type { LinePushConnector } from '../line/connector.js';
 import { departmentsOfLabel, TEMPORARY_STAFF_DEPARTMENT } from '../../shared/mailbox.js';
 import type { Fetch } from '../line/messaging-api.js';
@@ -393,8 +395,11 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
       const user = deps.people.list().find((p) => !p.disabled && deps.discordUserIdOf(p.id) === discordUserId);
       return user && !departmentsOfLabel(user.roleLabel).includes(TEMPORARY_STAFF_DEPARTMENT) ? user : null;
     };
+    // Where each person last read each conversation, beside line-state.json (2026-11-13).
+    const reads = openLineReads(dirname(lineConfig.dataFile));
+    if (reads) app.addHook('onClose', async () => reads.close());
     const handle = registerLineRoutes(app, {
-      line: { store: opened.store, connector: opened.connector, seed: () => opened.store.current, inboundImages: opened.inboundImages },
+      line: { store: opened.store, connector: opened.connector, seed: () => opened.store.current, inboundImages: opened.inboundImages, reads },
       mail: {
         get current() {
           return { users: deps.people.list() };

@@ -1,6 +1,7 @@
 // Where an official LINE conversation opens (2026-11-13): just below where this person last read, as the LINE app does.
-// "Read" is only this browser's note of the newest row that was on the screen when the conversation was last open;
-// nothing goes to LINE (the sender sees no 既読) and other members and devices keep their own place.
+// "Read" is the time of the newest row that was on the screen when the conversation was last open. The server keeps it
+// per person so every device opens at the same place (line-reads.sqlite3); this browser keeps its own copy too, for a
+// server that does not keep it and for a place the server did not get. Nothing goes to LINE (the sender sees no 既読).
 
 const KEY_PREFIX = 'iyakusai.line.lastRead.';
 /** Conversations remembered per person; the least recently opened are forgotten first. */
@@ -32,6 +33,16 @@ export function readPlace(ats: readonly string[], remembered: string | null): Re
     if (time(at) <= seen) lastRead = i;
   });
   return { lastRead, unread: ats.length - 1 - lastRead };
+}
+
+/** a is later than b. */
+export const isLater = (a: string, b: string): boolean => time(a) > time(b);
+
+/** The later of two remembered places (this device's and the server's); null when neither has one. */
+export function laterOf(a: string | null, b: string | null): string | null {
+  if (a === null) return b;
+  if (b === null) return a;
+  return isLater(b, a) ? b : a;
 }
 
 /** The newest time among the rows (what is "read" once the conversation has been open). */
