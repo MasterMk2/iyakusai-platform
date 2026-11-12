@@ -138,6 +138,11 @@ function Item({ item, selectedId, filtered, showSource, showMailbox, onSelect }:
       </span>
       <span className="row-meta">
         <span className="source-badge source-line">LINE</span>
+        {(item.unreadCount ?? 0) > 0 && (
+          <span className="unread-count" data-testid="line-unread-count">
+            未読 {item.unreadCount}
+          </span>
+        )}
         {showMailbox && <span className="mailbox-names">{item.account.name}</span>}
         <span>{TARGET_LABEL[item.targetType]}</span>
         <span>{item.messageCount} 件{filtered && item.matchCount !== item.messageCount ? `（一致 ${item.matchCount}）` : ''}</span>

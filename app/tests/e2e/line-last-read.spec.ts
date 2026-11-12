@@ -125,3 +125,27 @@ test('another device of the same person opens at the place read on the first', a
     await other.close();
   }
 });
+
+test('the list shows how many messages came since the person last read, and opening the conversation clears it', async ({ page, request }) => {
+  await loginAs(page, 'u-editor-c');
+  await openAccount(page);
+  // Nothing is unread at first: the synthetic messages came before counting began.
+  await expect(page.getByTestId('line-unread-count')).toHaveCount(0);
+  await openConversation(page, '顧客サンプルL1');
+  const conv = new URLSearchParams(new URL(page.url()).hash.split('?')[1] ?? '').get('conv')!;
+  await expect.poll(async () => (await (await page.request.get(`/api/line/conversations/${conv}`)).json()).lastReadAt).not.toBeNull();
+
+  expect((await request.post('/api/session', { data: { userId: 'u-admin' } })).ok()).toBe(true);
+  expect((await request.post('/api/demo/line/release')).ok()).toBe(true);
+  await openAccount(page);
+  const row = lineItem(page, '顧客サンプルL1');
+  await expect(row.getByTestId('line-unread-count')).toHaveText('未読 1');
+  // The date stays at the end of the first line.
+  await expect(row.locator('.row-line .date')).toBeVisible();
+
+  // Opening it clears the count in the list, without reloading the page; the conversation keeps its place.
+  await row.click();
+  await expect(page.getByTestId('line-unread-divider')).toHaveText('ここから未読');
+  await expect(row.getByTestId('line-unread-count')).toHaveCount(0);
+  await expect(page.getByTestId('line-unread-divider')).toHaveCount(1);
+});

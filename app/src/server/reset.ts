@@ -19,8 +19,8 @@ if (config.line.mode === 'mock') {
   const lineSeed = createLineSeedState(new Date().toISOString(), { replyGrants: true });
   new LineStore(lineSeed, config.line.dataFile).replace(lineSeed);
   // Where each person read up to goes with the conversations it pointed into.
-  const reads = openLineReads(path.dirname(config.line.dataFile));
-  reads?.clear();
+  const reads = openLineReads(path.dirname(config.line.dataFile), new Date().toISOString());
+  reads?.clear(new Date().toISOString());
   reads?.close();
 }
 console.log('合成サンプルデータを初期化しました。');

@@ -75,6 +75,10 @@ function timeline(d: LineConversationDetail): ({ kind: 'message'; at: string; m:
 
 type TimelineEntry = ReturnType<typeof timeline>[number];
 
+/** A row that can be unread: a message from the other side, as the list counts them (not a send, a withdrawn message or the admin screen's history). */
+const countsAsUnread = (e: TimelineEntry): boolean =>
+  e.kind === 'message' && e.m.direction === 'inbound' && e.m.provenance !== 'oa_history' && e.m.content.kind !== 'unsent';
+
 const rowKey = (e: TimelineEntry): string => (e.kind === 'message' ? e.m.id : `sent-${e.o.id}`);
 
 function TimelineRow({ entry: e, accountName }: { entry: TimelineEntry; accountName: string }) {
@@ -196,6 +200,7 @@ export function LineConversation({
   onChanged,
   caseTasks = false,
   userId,
+  onRead,
 }: {
   conversationId: string;
   refresh: number;
@@ -204,6 +209,8 @@ export function LineConversation({
   caseTasks?: boolean;
   /** Whose place is remembered on this browser; none: opens at the latest and remembers nothing. */
   userId: string | null;
+  /** The server now has a newer place (the list's unread count changed). */
+  onRead?: () => void;
 }) {
   const load = useCallback(
     (signal: AbortSignal) => {
@@ -228,7 +235,8 @@ export function LineConversation({
   // in while it is open (a reply sent from here) stay below it or, with nothing new, add no line. null: nothing new.
   const [firstUnread, setFirstUnread] = useState<string | null | undefined>(undefined);
   if (d && firstUnread === undefined) {
-    const place = readPlace(ats, laterOf(d.lastReadAt ?? null, remembered));
+    // Without a place on the server, rows up to readSince count as read (as in the list's unread count).
+    const place = readPlace(ats, laterOf(d.lastReadAt ?? d.readSince ?? null, remembered), rows.map(countsAsUnread));
     setFirstUnread(place.unread > 0 ? rowKey(rows[place.lastRead + 1]!) : null);
   }
   const placeRef = useRef<HTMLElement | null>(null);
@@ -250,8 +258,11 @@ export function LineConversation({
     if (!userId || !newest) return;
     rememberRead(userId, conversationId, newest);
     if (serverPlace === undefined || (serverPlace !== null && !isLater(newest, serverPlace))) return;
-    void api('PUT', `/api/line/conversations/${encodeURIComponent(conversationId)}/read`, { at: newest }).catch(() => undefined);
-  }, [userId, conversationId, newest, serverPlace]);
+    void api('PUT', `/api/line/conversations/${encodeURIComponent(conversationId)}/read`, { at: newest }).then(
+      () => onRead?.(),
+      () => undefined,
+    );
+  }, [userId, conversationId, newest, serverPlace, onRead]);
 
   return (
     <div className="thread-detail">

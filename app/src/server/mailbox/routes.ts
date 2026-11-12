@@ -383,6 +383,10 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
       console.error(err.message);
     }
   }
+  // Where each person last read each conversation, beside line-state.json (2026-11-13): the conversation's line and the
+  // list's unread counts.
+  const lineReads = line ? openLineReads(dirname(rt.config.line!.dataFile), deps.clock()) : null;
+  if (lineReads) app.addHook('onClose', async () => lineReads.close());
   if (line) {
     const opened = line;
     const lineConfig = rt.config.line!;
@@ -395,11 +399,8 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
       const user = deps.people.list().find((p) => !p.disabled && deps.discordUserIdOf(p.id) === discordUserId);
       return user && !departmentsOfLabel(user.roleLabel).includes(TEMPORARY_STAFF_DEPARTMENT) ? user : null;
     };
-    // Where each person last read each conversation, beside line-state.json (2026-11-13).
-    const reads = openLineReads(dirname(lineConfig.dataFile));
-    if (reads) app.addHook('onClose', async () => reads.close());
     const handle = registerLineRoutes(app, {
-      line: { store: opened.store, connector: opened.connector, seed: () => opened.store.current, inboundImages: opened.inboundImages, reads },
+      line: { store: opened.store, connector: opened.connector, seed: () => opened.store.current, inboundImages: opened.inboundImages, reads: lineReads },
       mail: {
         get current() {
           return { users: deps.people.list() };
@@ -497,7 +498,7 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
     // Deadlines (2026-11-03) are mail only: a deadline filter or order leaves the LINE conversations out.
     const lineItems =
       line && q.source !== 'email' && q.mailboxId === undefined && q.due === undefined && q.sort === 'latest'
-        ? collectLineItems(line.store.current, lineNames(), user, { accountId: q.lineAccountId, q: q.q, status: q.status, label: q.label, assignee: q.assignee })
+        ? collectLineItems(line.store.current, lineNames(), user, { accountId: q.lineAccountId, q: q.q, status: q.status, label: q.label, assignee: q.assignee }, lineReads ? { places: lineReads.placesOf(user.id), since: lineReads.since } : null)
         : [];
     if (lineItems.length === 0) {
       const list = withMail ? service.listThreads(user, q) : { items: [], total: 0 };

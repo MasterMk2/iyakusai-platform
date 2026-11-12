@@ -26,13 +26,21 @@ describe('readPlace', () => {
     expect(readPlace(rows, at(0))).toEqual({ lastRead: -1, unread: 4 });
   });
 
-  it('counts a late row with an older time as read', () => {
-    expect(readPlace([at(1), at(5), at(3)], at(4))).toEqual({ lastRead: 2, unread: 0 });
+  it('counts a late row with an older time as read (rows are in time order, so it sits before the place)', () => {
+    // at(3) came in after the place was kept at at(4), but is older: read. Only at(5) is new.
+    expect(readPlace([at(1), at(3), at(5)], at(4))).toEqual({ lastRead: 1, unread: 1 });
   });
 
   it('has no place in an empty conversation', () => {
     expect(readPlace([], at(1))).toEqual({ lastRead: -1, unread: 0 });
     expect(readPlace([], null)).toEqual({ lastRead: -1, unread: 0 });
+  });
+
+  it('puts the line before the first new row that counts (the committee’s own sends never do)', () => {
+    // Rows 3 (own send) and 4 (the other side) are new; the line goes before row 4.
+    expect(readPlace(rows, at(2), [true, true, false, true])).toEqual({ lastRead: 2, unread: 1 });
+    // Only own sends are new: nothing unread, open at the latest.
+    expect(readPlace(rows, at(2), [true, true, false, false])).toEqual({ lastRead: 3, unread: 0 });
   });
 
   it('compares times, not strings (an offset or a missing fraction)', () => {

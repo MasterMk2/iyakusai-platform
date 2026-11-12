@@ -393,6 +393,10 @@ describe('the official LINE account in the committee inbox', () => {
     expect((await call('GET', `/api/line/conversations/${taro.conversationId}`, { cookie: member.cookie })).json.lastReadAt).toBe(newest);
     expect((await call('GET', `/api/line/conversations/${taro.conversationId}`, { cookie: other.cookie })).json.lastReadAt).toBeNull();
     expect(existsSync(path.join(dir, 'mail', 'line-reads.sqlite3'))).toBe(true);
+    // The list counts unread messages per person (2026-11-13); these came before counting began, so none.
+    expect(detail.readSince).toEqual(expect.any(String));
+    const listed = (await call('GET', '/api/inbox?source=line', { cookie: other.cookie })).json.items as { unreadCount?: number }[];
+    expect(listed.map((i) => i.unreadCount)).toEqual([0, 0]);
 
     // Status by anyone; a note needs the edit grant; the grant screen is the access manager's.
     expect((await call('PATCH', `/api/line/conversations/${taro.conversationId}/triage`, { cookie: member.cookie, body: { expectedVersion: 1, status: 'in_progress' } })).status).toBe(200);

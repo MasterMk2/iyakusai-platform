@@ -73,7 +73,23 @@ function triageMatches(conv: LineConversation, user: User, q: LineQuery): boolea
   return true;
 }
 
-export function collectLineItems(state: LineState, names: NameOf, user: User, q: LineQuery): LineInboxItem[] {
+/** Where the person read up to in each conversation (2026-11-13), for the unread count; `since` where they have no place. */
+export interface UnreadPlaces {
+  places: Map<string, string>;
+  since: string;
+}
+
+/**
+ * Messages from the other side after the place (2026-11-13). The committee's own sends do not count, nor a withdrawn
+ * message, nor a row of the admin screen's history (it repeats what the receiver brought, and pictures are not
+ * matched up with it).
+ */
+export function unreadOf(messages: LineMessage[], place: string): number {
+  const seen = Date.parse(place);
+  return messages.filter((m) => m.direction === 'inbound' && m.provenance.source !== 'oa_history' && m.content.kind !== 'unsent' && Date.parse(m.sentAt) > seen).length;
+}
+
+export function collectLineItems(state: LineState, names: NameOf, user: User, q: LineQuery, unread?: UnreadPlaces | null): LineInboxItem[] {
   const terms = q.q ? normalizeForSearch(q.q).split(/\s+/).filter(Boolean) : [];
   const items: LineInboxItem[] = [];
   for (const conv of permittedConversations(state, user, q.accountId)) {
@@ -107,6 +123,7 @@ export function collectLineItems(state: LineState, names: NameOf, user: User, q:
       assignees: conv.triage.assigneeId ? [names(conv.triage.assigneeId)] : [],
       canSetStatus: canTriageLine(state, user, conv.accountId),
       triageVersion: conv.triage.version,
+      ...(unread ? { unreadCount: unreadOf(messages, unread.places.get(conv.id) ?? unread.since) } : {}),
     });
   }
   return items;

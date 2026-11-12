@@ -304,7 +304,7 @@ export async function composeServer(config: ServerConfig, overrides: ComposeOver
   if (config.line.mode === 'mock') {
     const lineStore = new LineStore(lineExisting ?? createLineSeedState(now, lineSeedOptions), config.line.dataFile);
     if (!lineExisting) lineStore.replace(lineStore.current);
-    line = { store: lineStore, connector: new MockLinePushConnector(), seed: (at) => createLineSeedState(at, lineSeedOptions), inboundImages: new MockInboundImages(), reads: openLineReads(path.dirname(config.line.dataFile)) };
+    line = { store: lineStore, connector: new MockLinePushConnector(), seed: (at) => createLineSeedState(at, lineSeedOptions), inboundImages: new MockInboundImages(), reads: openLineReads(path.dirname(config.line.dataFile), now) };
   }
 
   let rental: RentalRuntime | null = null;
