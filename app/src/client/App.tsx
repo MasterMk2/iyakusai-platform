@@ -947,7 +947,7 @@ export function App() {
                 {broadcastAccount ? (
                   <LineBroadcast key={broadcastAccount.id} accountId={broadcastAccount.id} refresh={refresh} onSent={bump} onClose={() => navigate({ ...route, lineBroadcast: false })} />
                 ) : route.conversationId ? (
-                  <LineConversation key={route.conversationId} conversationId={route.conversationId} refresh={refresh} onChanged={bump} caseTasks={caseTasks} />
+                  <LineConversation key={route.conversationId} conversationId={route.conversationId} refresh={refresh} onChanged={bump} caseTasks={caseTasks} userId={user?.id ?? null} />
                 ) : (
                   <div className="detail-placeholder">
                     <h2>会話を選択</h2>
