@@ -1,6 +1,6 @@
 """Inactive bounded HTTPS registration issuer; anonymous factories are injectable.
 
-Verified aiohttp 3.14.3 public signatures support this composition. No session,
+Verified aiohttp public signatures (SUPPORTED_AIOHTTP_VERSION) support this composition. No session,
 network request or credential is created at module import/constructor time.
 """
 
@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 
 from iyakusai_dm_sdk.controller import PurposeKey, canonical_bytes
 
+from .aiohttp_server import SUPPORTED_AIOHTTP_VERSION
 from .bootstrap import AuthenticatedSelfReference
 from .member import MAX_SAFE_INTEGER
 from .policy import RegistrationScope, checked_registration_scope
@@ -95,7 +96,7 @@ class AiohttpIssuerTransport:
     the existing Bot client and its SDK HTTP session are never used or closed.
     """
     def __init__(self, *, aiohttp_module, ssl_context, timeout=10, close_timeout=0.25, session_factory=None, origin=ISSUER_ORIGIN):
-        valid = (getattr(aiohttp_module, "__version__", None) == "3.14.3"
+        valid = (getattr(aiohttp_module, "__version__", None) == SUPPORTED_AIOHTTP_VERSION
                  and callable(getattr(aiohttp_module, "ClientTimeout", None))
                  and callable(getattr(aiohttp_module, "ClientSession", None))
                  and _verified_context(ssl_context) and origin == ISSUER_ORIGIN

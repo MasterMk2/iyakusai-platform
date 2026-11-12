@@ -14,7 +14,10 @@ from collections.abc import Mapping
 from typing import Any
 
 
-SUPPORTED_AIOHTTP_VERSION = "3.14.3"
+# The one aiohttp release this runtime (server and issuer) accepts. Any other installed
+# version makes start() fail closed, which leaves the login member check unavailable, so
+# raise it together with bot/src/requirements.txt (tests/test_aiohttp_version.py).
+SUPPORTED_AIOHTTP_VERSION = "3.14.4"
 
 
 class ServerLifecycleError(RuntimeError):
