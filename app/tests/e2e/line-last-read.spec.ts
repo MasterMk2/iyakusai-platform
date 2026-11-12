@@ -144,6 +144,15 @@ test('the list shows how many messages came since the person last read, and open
   const account = page.locator('button[data-line-account-id="line-oa-support"]');
   await expect(account.getByTestId('line-account-unread')).toHaveText('未読 1');
   await expect(page.getByTestId('line-all-unread')).toHaveText('未読 1');
+
+  // The home screen shows the total too; it opens the 公式LINE tab on the account that has them, without a filter.
+  await page.getByRole('navigation', { name: '機能' }).getByRole('link', { name: 'ホーム' }).click();
+  const homeUnread = page.getByTestId('attention-line-unread');
+  await expect(homeUnread).toContainText('1');
+  await expect(homeUnread).toContainText('公式LINE の未読');
+  await homeUnread.click();
+  await expect(page).toHaveURL(/#\/line\/line-oa-support$/);
+  await expect(row.getByTestId('line-unread-count')).toHaveText('未読 1');
   // The date stays at the end of the first line.
   await expect(row.locator('.row-line .date')).toBeVisible();
 
@@ -154,4 +163,7 @@ test('the list shows how many messages came since the person last read, and open
   await expect(account.getByTestId('line-account-unread')).toHaveCount(0);
   await expect(page.getByTestId('line-all-unread')).toHaveCount(0);
   await expect(page.getByTestId('line-unread-divider')).toHaveCount(1);
+  await page.getByRole('navigation', { name: '機能' }).getByRole('link', { name: 'ホーム' }).click();
+  await expect(page.getByTestId('home-attention')).toBeVisible();
+  await expect(page.getByTestId('attention-line-unread')).toHaveCount(0);
 });

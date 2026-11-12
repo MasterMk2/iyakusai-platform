@@ -81,7 +81,8 @@ export function HomeView({
   onOpenMailbox?: (mailboxId: string) => void;
   onOpenThread?: (threadId: string) => void;
   /** The official LINE tab, on one account or on all of them. */
-  onOpenLine?: (accountId?: string) => void;
+  /** Opens the 公式LINE tab: unhandled conversations unless `filter` says otherwise (null: all, for the unread ones). */
+  onOpenLine?: (accountId?: string, filter?: InboxFilter | null) => void;
   onOpenBot: (section?: 'candidates' | 'remind') => void;
   /** The notice board tab. */
   onOpenBoard: () => void;
@@ -160,6 +161,13 @@ export function HomeView({
   if (mailOpen && mailDue && mailDue.replyOverdue > 0) items.push({ key: 'mail-due', label: '返事待ちで期限を過ぎたメール', n: mailDue.replyOverdue, tone: 'error', onOpen: scrollTo('home-mail-due'), testId: 'attention-mail-due' });
   const lineTotal = lineAccounts.reduce((n, a) => n + a.unhandledCount, 0);
   if (mailOpen && onOpenLine && lineTotal > 0) items.push({ key: 'line', label: '未対応の公式LINE', n: lineTotal, tone: 'error', onOpen: () => onOpenLine(), testId: 'attention-line' });
+  // Messages from the other side since this person last read (2026-11-13), as the 公式LINE tab counts them. Opens the
+  // one account that has them, else all accounts, without the unhandled filter (an unread one may be handled already).
+  const lineUnread = lineAccounts.filter((a) => (a.unreadCount ?? 0) > 0);
+  const lineUnreadTotal = lineUnread.reduce((n, a) => n + (a.unreadCount ?? 0), 0);
+  if (mailOpen && onOpenLine && lineUnreadTotal > 0) {
+    items.push({ key: 'line-unread', label: '公式LINE の未読', n: lineUnreadTotal, tone: 'info', onOpen: () => onOpenLine(lineUnread.length === 1 ? lineUnread[0]!.id : undefined, null), testId: 'attention-line-unread' });
+  }
   if (b) {
     if (b.pendingCandidates > 0) items.push({ key: 'cand', label: '承認待ちのタスク候補', n: b.pendingCandidates, tone: 'warning', onOpen: () => onOpenBot('candidates'), testId: 'attention-candidates' });
     if (b.reminders.overdue > 0) items.push({ key: 'remind', label: '期限超過のリマインド', n: b.reminders.overdue, tone: 'error', onOpen: () => onOpenBot('remind'), testId: 'attention-reminders' });
@@ -381,7 +389,8 @@ function InboxCard({
   onOpenInbox: (filter?: InboxFilter) => void;
   onOpenMailbox?: (mailboxId: string) => void;
   onOpenThread?: (threadId: string) => void;
-  onOpenLine?: (accountId?: string) => void;
+  /** Opens the 公式LINE tab: unhandled conversations unless `filter` says otherwise (null: all, for the unread ones). */
+  onOpenLine?: (accountId?: string, filter?: InboxFilter | null) => void;
 }) {
   // Only mailboxes with something to do, most first; a mailbox with none is left out.
   const boxes = [...mailboxes.map((m) => ({ id: m.id, name: m.name, kind: 'メール', unhandled: m.unhandledCount, mail: true })), ...lineAccounts.map((a) => ({ id: a.id, name: a.name, kind: 'LINE', unhandled: a.unhandledCount, mail: false }))]
