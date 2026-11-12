@@ -1,10 +1,11 @@
-import { useCallback, useState } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { STATUS_LABELS } from '../../shared/api';
 import type { LineConversationDetail, LineHistoryView, LineMessageView, OutboxView } from '../../shared/line';
 import { DecisionRegisterLink } from './decisions/DecisionRegisterLink';
 import { japanDay, todayInJapan } from './decisions/decisionLinks';
 import { api, fmtDate, toFailure } from '../api';
 import { useLoader } from '../useLoader';
+import { newestAt, readPlace, rememberedRead, rememberRead } from './lineLastRead';
 import { LineReplyPanel } from './LineReplyPanel';
 import { LoadStatus } from './LoadStatus';
 import { Notes } from './Notes';
@@ -72,6 +73,69 @@ function timeline(d: LineConversationDetail): ({ kind: 'message'; at: string; m:
   return [...received, ...sent].sort((a, b) => a.at.localeCompare(b.at));
 }
 
+type TimelineEntry = ReturnType<typeof timeline>[number];
+
+function TimelineRow({ entry: e, accountName }: { entry: TimelineEntry; accountName: string }) {
+  if (e.kind === 'message') {
+    return (
+      <li className={`line-msg ${e.m.direction === 'outbound_legacy' ? 'mine' : ''}`} data-message-id={e.m.id}>
+        <span className="note-meta">
+          {sender(e.m, accountName)} ・ {fmtDate(e.m.sentAt)}
+          {e.m.provenance === 'oa_history' && (
+            <span className="history-badge" title="公式アカウントの管理画面の履歴から取り込んだ行です（返信の対象にはなりません）" data-testid="line-history-badge">
+              管理画面の履歴より
+            </span>
+          )}
+        </span>
+        <Content m={e.m} />
+      </li>
+    );
+  }
+  return (
+    <li className="line-msg mine" data-outbox-message={e.o.id}>
+      <span className="note-meta">
+        {accountName}（{e.o.actorName}）・ {fmtDate(e.o.createdAt)} ・ {e.o.statusLabel}
+        {e.o.broadcastId ? ' ・ 一斉送信' : ''}
+        {e.o.via === 'discord' ? ' ・ Discord から' : ''}
+      </span>
+      <span className="line-text">{e.o.body}</span>
+      {sentImages(e.o).map((img, i) => (
+        <img key={img.previewUrl} className="line-image-thumb" src={img.previewUrl} alt={`送った画像 ${i + 1}`} />
+      ))}
+    </li>
+  );
+}
+
+/** How long after opening a picture that finishes loading above the place may still move it back (unless the person moved). */
+const HOLD_PLACE_MS = 3000;
+
+/**
+ * Puts `place` a little below the header (its scroll-margin) and keeps it there while received pictures load,
+ * until the person scrolls, touches or types. Returns the cleanup.
+ */
+function openAt(place: HTMLElement, timeline: HTMLElement | null): () => void {
+  place.scrollIntoView({ block: 'start' });
+  const pending = [...(timeline?.querySelectorAll('img') ?? [])].filter((img) => !img.complete);
+  if (pending.length === 0) return () => {};
+  const again = () => place.scrollIntoView({ block: 'start' });
+  const moves = ['wheel', 'touchstart', 'keydown', 'pointerdown'] as const;
+  const stop = () => {
+    clearTimeout(timer);
+    pending.forEach((img) => {
+      img.removeEventListener('load', again);
+      img.removeEventListener('error', again);
+    });
+    moves.forEach((m) => window.removeEventListener(m, stop));
+  };
+  const timer = setTimeout(stop, HOLD_PLACE_MS);
+  pending.forEach((img) => {
+    img.addEventListener('load', again);
+    img.addEventListener('error', again);
+  });
+  moves.forEach((m) => window.addEventListener(m, stop, { passive: true }));
+  return stop;
+}
+
 function OutboxItem({ item, canRetry, onChanged }: { item: OutboxView; canRetry: boolean; onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -129,12 +193,15 @@ export function LineConversation({
   refresh,
   onChanged,
   caseTasks = false,
+  userId,
 }: {
   conversationId: string;
   refresh: number;
   onChanged: () => void;
   /** Show linked tasks and the create-task form (Task gateway enabled and user bound). */
   caseTasks?: boolean;
+  /** Whose place is remembered on this browser; none: opens at the latest and remembers nothing. */
+  userId: string | null;
 }) {
   const load = useCallback(
     (signal: AbortSignal) => {
@@ -148,6 +215,29 @@ export function LineConversation({
   const d = conv.data;
   const basePath = `/api/line/conversations/${conversationId}`;
   const canTriage = d ? (d.canTriage ?? d.access === 'edit') : false;
+
+  // Where this person stopped last time, read once before this visit is remembered (2026-11-13).
+  const [remembered] = useState(() => (userId ? rememberedRead(userId, conversationId) : null));
+  const rows = d ? timeline(d) : [];
+  const ats = rows.map((e) => e.at);
+  const place = readPlace(ats, remembered);
+  const newest = newestAt(ats);
+  const placeRef = useRef<HTMLElement | null>(null);
+  const setPlace = useCallback((el: HTMLElement | null) => {
+    placeRef.current = el;
+  }, []);
+  const timelineRef = useRef<HTMLOListElement | null>(null);
+  const placed = useRef(false);
+  // Only on the first showing: a reload after a status change or a reply keeps where the person is.
+  useLayoutEffect(() => {
+    if (!d || placed.current || !placeRef.current) return;
+    placed.current = true;
+    return openAt(placeRef.current, timelineRef.current);
+  }, [d]);
+  // What was on the screen counts as read, as in the LINE app; rows that come in while it is open too.
+  useEffect(() => {
+    if (userId && newest) rememberRead(userId, conversationId, newest);
+  }, [userId, conversationId, newest]);
 
   return (
     <div className="thread-detail">
@@ -215,35 +305,20 @@ export function LineConversation({
               </div>
             )}
           </section>
-          <ol className="line-timeline" aria-label="メッセージ">
-            {timeline(d).map((e) =>
-              e.kind === 'message' ? (
-                <li key={e.m.id} className={`line-msg ${e.m.direction === 'outbound_legacy' ? 'mine' : ''}`} data-message-id={e.m.id}>
-                  <span className="note-meta">
-                    {sender(e.m, d.account.name)} ・ {fmtDate(e.m.sentAt)}
-                    {e.m.provenance === 'oa_history' && (
-                      <span className="history-badge" title="公式アカウントの管理画面の履歴から取り込んだ行です（返信の対象にはなりません）" data-testid="line-history-badge">
-                        管理画面の履歴より
-                      </span>
-                    )}
-                  </span>
-                  <Content m={e.m} />
-                </li>
-              ) : (
-                <li key={e.o.id} className="line-msg mine" data-outbox-message={e.o.id}>
-                  <span className="note-meta">
-                    {d.account.name}（{e.o.actorName}）・ {fmtDate(e.o.createdAt)} ・ {e.o.statusLabel}
-                    {e.o.broadcastId ? ' ・ 一斉送信' : ''}
-                    {e.o.via === 'discord' ? ' ・ Discord から' : ''}
-                  </span>
-                  <span className="line-text">{e.o.body}</span>
-                  {sentImages(e.o).map((img, i) => (
-                    <img key={img.previewUrl} className="line-image-thumb" src={img.previewUrl} alt={`送った画像 ${i + 1}`} />
-                  ))}
-                </li>
-              ),
-            )}
+          <ol className="line-timeline" aria-label="メッセージ" ref={timelineRef}>
+            {rows.map((e, index) => (
+              <Fragment key={e.kind === 'message' ? e.m.id : `sent-${e.o.id}`}>
+                {place.unread > 0 && index === place.lastRead + 1 && (
+                  <li className="line-unread-divider" ref={setPlace} data-testid="line-unread-divider">
+                    ここから未読
+                  </li>
+                )}
+                <TimelineRow entry={e} accountName={d.account.name} />
+              </Fragment>
+            ))}
           </ol>
+          {/* Nothing new: the place is the end of the messages, with the last of them above it and the reply below. */}
+          {place.unread === 0 && <div className="line-read-place" ref={setPlace} aria-hidden="true" />}
           <LineReplyPanel detail={d} onSent={onChanged} />
           {d.outbox.length > 0 && (
             <section className="line-outbox" aria-label="返信の送信記録">

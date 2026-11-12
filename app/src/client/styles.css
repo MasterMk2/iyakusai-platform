@@ -299,6 +299,11 @@ html { scroll-padding-top: 64px; }
 .line-timeline { list-style: none; padding: 0; margin: 8px 0; display: flex; flex-direction: column; gap: 6px; }
 .line-msg { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; display: flex; flex-direction: column; max-width: 90%; }
 .line-msg.mine { align-self: flex-end; background: var(--mint-bg); }
+/* A conversation opens with this place a little below the fixed menu (html scroll-padding-top covers the menu):
+   the end of what was read stays in view above it, what came since below (2026-11-13). */
+.line-unread-divider, .line-read-place { scroll-margin-top: clamp(72px, 25vh, 200px); }
+.line-unread-divider { display: flex; align-items: center; gap: 10px; margin: 6px 0; color: var(--navy); font-size: 14px; font-weight: 700; }
+.line-unread-divider::before, .line-unread-divider::after { content: ''; flex: 1; border-top: 1px solid var(--line); }
 .line-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; }
 .line-placeholder { color: var(--muted); font-size: 14px; font-style: italic; }
 .line-outbox { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; margin: 10px 0; display: flex; flex-direction: column; gap: 6px; }
