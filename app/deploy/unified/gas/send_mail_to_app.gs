@@ -53,12 +53,16 @@ const CONFIG = {
 
   // 自動実行の間隔（分）。GAS の許容値は 1 / 5 / 10 / 15 / 30。
   TRIGGER_MINUTES: 10,
+
+  // 取りこぼしたメールを送り直すとき（resendMissed を手で実行）だけ使う: Message-ID（<…> の中身）。
+  // 送り直したら空に戻してよい（残っていても、もう一度実行したときに受け口が「重複」と返すだけ）。
+  RESEND_MESSAGE_IDS: [],
 };
 // ==============================================================
 
 const PROP = {
   key: 'INGEST_KEY',
-  watermark: 'sendWatermarkMs', // collector: ここまで送った受信時刻（ミリ秒）
+  watermark: 'sendWatermarkMs', // collector: 前回、検索結果を最後まで送り終えたときの検索の時刻（ミリ秒）
   recent: 'sendRecentIds', // collector: 直近に送った ID（重なり分の二重送信よけ）
   backfillCursor: 'sendBackfillCursorEpoch', // 過去分: ここより古い分が残っている（秒）
   backfillDone: 'sendBackfillDone',
@@ -67,6 +71,9 @@ const PROP = {
 };
 
 const OVERLAP_MS = 10 * 60 * 1000;
+// Date ヘッダーの時刻より遅れて届いたメールを拾う幅。これより古い Date のメールは、新しい返信で
+// 検索に出てきたスレッドの過去のメールとみなして送らない。
+const LATE_ARRIVAL_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** トリガーと手動実行の入口。 */
 function run() {
@@ -122,15 +129,20 @@ function forward_(key, started) {
     return 0;
   }
   const recent = JSON.parse(props.getProperty(PROP.recent) || '[]');
+  // Gmail の検索（after:）は届いた時刻で絞るが、getDate() は差出人が書いた Date ヘッダーの時刻。
+  // だから透かしは「検索した時刻」で持ち、Date では LATE_ARRIVAL_MS より古いものだけを除く。
+  // （2026-11-06: 添付を暗号化する仕組みに 72 分止められ、Date より遅れて届いたメールを、
+  //  Date で区切っていた版が取りこぼした。Date が未来のメールで透かしが先へ飛ぶこともなくなる。）
+  const searchedAt = Date.now();
   const since = watermark - OVERLAP_MS;
+  const oldest = since - LATE_ARRIVAL_MS;
   const query = '-in:draft after:' + Math.floor(since / 1000);
   let sent = 0;
-  let newest = watermark;
   let complete = false;
   const keep = [];
   const save = function () {
-    // 透かし（ここまで送った時刻）は、検索結果を最後まで送り終えたときだけ進める。
-    if (complete) props.setProperty(PROP.watermark, String(newest));
+    // 透かしは、検索結果を最後まで送り終えたときだけ、その検索の時刻へ進める。
+    if (complete) props.setProperty(PROP.watermark, String(searchedAt));
     props.setProperty(PROP.recent, JSON.stringify(keep.concat(recent).slice(0, 300)));
   };
   for (let start = 0; Date.now() - started < CONFIG.MAX_RUNTIME_MS; start += CONFIG.PAGE_THREADS) {
@@ -139,8 +151,7 @@ function forward_(key, started) {
       const msgs = threads[i].getMessages();
       for (let j = 0; j < msgs.length; j++) {
         const m = msgs[j];
-        const at = m.getDate().getTime();
-        if (at < since || m.isDraft()) continue;
+        if (m.getDate().getTime() < oldest || m.isDraft()) continue;
         const id = m.getId();
         if (recent.indexOf(id) >= 0 || keep.indexOf(id) >= 0) continue;
         if (!send_(key, m)) {
@@ -149,7 +160,6 @@ function forward_(key, started) {
         }
         sent++;
         keep.push(id);
-        if (at > newest) newest = at;
       }
     }
     if (threads.length < CONFIG.PAGE_THREADS) {
@@ -222,12 +232,68 @@ function backfill_(key, started) {
 /** 1 通を送る。true: 受け口が受け取った（保存・重複・対象外を含む）。false: 送れなかった（次回やり直す）。 */
 function send_(key, m) {
   const id = m.getId();
-  if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) return true;
-  const raw = Utilities.newBlob(m.getRawContent()).getBytes();
-  if (raw.length > CONFIG.MAX_RAW_BYTES) {
+  const r = post_(key, m);
+  if (r.code === 'badid') return true;
+  if (r.code === 'large') {
     remember_(PROP.failed, id + ':large');
     return true;
   }
+  if (r.code === null) return false;
+  if (r.code === 200) return true;
+  if (r.code === 422 || r.code === 413) {
+    remember_(PROP.failed, id + ':' + r.code);
+    return true;
+  }
+  // 401（鍵の違い・時刻のずれ）や 5xx は止めて、次回やり直す。内容は記録しない。
+  Logger.log('受け口が %s を返しました。次回やり直します。', r.code);
+  return false;
+}
+
+/**
+ * 取りこぼしたメールを送り直す（GAS の画面でこの関数を選んで 1 回実行する）。
+ * CONFIG.RESEND_MESSAGE_IDS の Message-ID で探し、受け口の応答をログに出す。
+ * 200 で stored（保存した）か duplicate（取り込み済み）なら済み。413・422 は大きさ・形式で断られた。
+ */
+function resendMissed() {
+  const key = ingestKey_();
+  const wanted = (CONFIG.RESEND_MESSAGE_IDS || []).map(function (v) {
+    return String(v).trim().replace(/^</, '').replace(/>$/, '');
+  }).filter(function (v) {
+    return v !== '';
+  });
+  if (wanted.length === 0) {
+    Logger.log('CONFIG.RESEND_MESSAGE_IDS が空です。');
+    return;
+  }
+  wanted.forEach(function (want, n) {
+    let found = 0;
+    GmailApp.search('rfc822msgid:' + want, 0, 10).forEach(function (t) {
+      t.getMessages().forEach(function (m) {
+        if (String(m.getHeader('Message-ID') || '').trim().replace(/^</, '').replace(/>$/, '') !== want) return;
+        found++;
+        const r = post_(key, m);
+        let status = '';
+        try {
+          status = r.response ? String(JSON.parse(r.response.getContentText()).status || '') : '';
+        } catch (e) {
+          status = '';
+        }
+        Logger.log('%s 件目: 受け口の応答 %s %s', n + 1, r.code, status);
+      });
+    });
+    if (found === 0) Logger.log('%s 件目: このアカウントの Gmail に見つかりませんでした。', n + 1);
+  });
+}
+
+/**
+ * 1 通を署名して受け口へ送る。code: 応答コード、'badid'（ID の形が違う）、'large'（大きすぎて送らない）、
+ * null（通信できなかった）。response: 受け口の応答（code が数値のときだけ）。
+ */
+function post_(key, m) {
+  const id = m.getId();
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) return { code: 'badid', response: null };
+  const raw = Utilities.newBlob(m.getRawContent()).getBytes();
+  if (raw.length > CONFIG.MAX_RAW_BYTES) return { code: 'large', response: null };
   const path = '/v1/mail/ingest?source=' + CONFIG.SOURCE + '&id=' + id + '&at=' + m.getDate().getTime();
   const timestamp = String(Date.now());
   const nonce = Utilities.getUuid().replace(/-/g, '');
@@ -247,17 +313,9 @@ function send_(key, m) {
     });
   } catch (e) {
     Logger.log('送信できませんでした（通信）: %s', e);
-    return false;
+    return { code: null, response: null };
   }
-  const code = res.getResponseCode();
-  if (code === 200) return true;
-  if (code === 422 || code === 413) {
-    remember_(PROP.failed, id + ':' + code);
-    return true;
-  }
-  // 401（鍵の違い・時刻のずれ）や 5xx は止めて、次回やり直す。内容は記録しない。
-  Logger.log('受け口が %s を返しました。次回やり直します。', code);
-  return false;
+  return { code: res.getResponseCode(), response: res };
 }
 
 // ---------------------------------------------------------------- 判定と補助

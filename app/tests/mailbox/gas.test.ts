@@ -24,7 +24,10 @@ const toBuffer = (bytes: Signed) => Buffer.from(bytes.map((b) => (b < 0 ? b + 25
 
 interface FakeMessage {
   id: string;
+  /** The Date header (what getDate() answers). */
   date: Date;
+  /** When Gmail received it (what search's after:/before: look at); the Date header when absent. */
+  arrived?: Date;
   raw: Buffer;
   from: string;
   to: string;
@@ -43,15 +46,27 @@ class FakeGmail {
   search(query: string, start: number, max: number) {
     const after = Number(/after:(\d+)/.exec(query)?.[1] ?? 0);
     const before = Number(/before:(\d+)/.exec(query)?.[1] ?? Infinity);
-    // Gmail: a thread matches when one of its messages does; newest activity first.
+    const msgid = /rfc822msgid:(\S+)/.exec(query)?.[1];
+    const received = (m: FakeMessage) => (m.arrived ?? m.date).getTime();
+    // Gmail: a thread matches when one of its messages does (by the time it was received); newest activity first.
     const hits = this.threads
-      .filter((t) => t.some((m) => m.date.getTime() / 1000 > after && m.date.getTime() / 1000 < before))
-      .sort((a, b) => Math.max(...b.map((m) => m.date.getTime())) - Math.max(...a.map((m) => m.date.getTime())));
+      .filter((t) => t.some((m) => (msgid ? `${m.id}@partner.example` === msgid : received(m) / 1000 > after && received(m) / 1000 < before)))
+      .sort((a, b) => Math.max(...b.map(received)) - Math.max(...a.map(received)));
     return hits.slice(start, start + max).map((t) => ({
       getMessages: () =>
         [...t]
-          .sort((a, b) => a.date.getTime() - b.date.getTime())
-          .map((m) => ({ getId: () => m.id, getDate: () => m.date, isDraft: () => false, getRawContent: () => m.raw.toString('latin1'), getFrom: () => m.from, getTo: () => m.to, getCc: () => m.cc, getSubject: () => m.subject, getHeader: (name: string) => (name === 'List-Id' ? m.listId : '') })),
+          .sort((a, b) => received(a) - received(b))
+          .map((m) => ({
+            getId: () => m.id,
+            getDate: () => m.date,
+            isDraft: () => false,
+            getRawContent: () => m.raw.toString('latin1'),
+            getFrom: () => m.from,
+            getTo: () => m.to,
+            getCc: () => m.cc,
+            getSubject: () => m.subject,
+            getHeader: (name: string) => (name === 'List-Id' ? m.listId : name === 'Message-ID' ? `<${m.id}@partner.example>` : ''),
+          })),
     }));
   }
 }
@@ -79,14 +94,15 @@ function loadScript(gmail: FakeGmail, props: Map<string, string>, respond: (req:
       const req = { url, headers: o.headers, body: typeof o.payload === 'string' ? Buffer.from(o.payload) : toBuffer(o.payload) };
       const code = respond(req);
       if (code === 200) sent.push(req);
-      return { getResponseCode: () => code };
+      return { getResponseCode: () => code, getContentText: () => (code === 200 ? '{"status":"stored"}' : '{}') };
     },
   };
   const LockService = { getScriptLock: () => ({ tryLock: () => true, releaseLock: () => {} }) };
-  const Logger = { log: () => {} };
-  const factory = new Function('Utilities', 'PropertiesService', 'UrlFetchApp', 'LockService', 'Logger', 'GmailApp', 'ScriptApp', `${SCRIPT}\nreturn { run, CONFIG };`);
-  const api = factory(Utilities, PropertiesService, UrlFetchApp, LockService, Logger, gmail, {}) as { run: () => void; CONFIG: Record<string, unknown> };
-  return { ...api, sent };
+  const logs: string[] = [];
+  const Logger = { log: (format: string, ...args: unknown[]) => void logs.push(args.reduce<string>((s, a) => s.replace('%s', String(a)), format)) };
+  const factory = new Function('Utilities', 'PropertiesService', 'UrlFetchApp', 'LockService', 'Logger', 'GmailApp', 'ScriptApp', `${SCRIPT}\nreturn { run, resendMissed, CONFIG };`);
+  const api = factory(Utilities, PropertiesService, UrlFetchApp, LockService, Logger, gmail, {}) as { run: () => void; resendMissed: () => void; CONFIG: Record<string, unknown> };
+  return { ...api, sent, logs };
 }
 
 let dir: string;
@@ -127,9 +143,10 @@ async function deliver(requests: Captured[]) {
   return out;
 }
 
-const message = (id: string, iso: string, o: { from?: string; to: string; cc?: string; subject?: string; listId?: string }): FakeMessage => ({
+const message = (id: string, iso: string, o: { from?: string; to: string; cc?: string; subject?: string; listId?: string; arrived?: string }): FakeMessage => ({
   id,
   date: new Date(iso),
+  ...(o.arrived ? { arrived: new Date(o.arrived) } : {}),
   raw: rawMail({ messageId: `${id}@partner.example`, from: o.from ?? OUTSIDE, to: o.to, cc: o.cc, date: new Date(iso).toUTCString(), subject: o.subject ?? '合成テストの件名', ...(o.listId ? { listId: o.listId } : {}) }),
   from: o.from ?? OUTSIDE,
   to: o.to,
@@ -198,5 +215,63 @@ describe('the collector script', () => {
     expect(byId.old0).toEqual(['taro']);
     expect(byId.old1).toEqual(['contact']);
     expect(byId.new1).toEqual(['sponsorship', 'adm']);
+  });
+
+  /** A collector past its first run and its walk back through old mail, last searched `ago` ms before now. */
+  function following(gmail: FakeGmail, ago: number) {
+    const props = new Map([
+      ['INGEST_KEY', key.toString('hex')],
+      ['sendWatermarkMs', String(Date.now() - ago)],
+      ['sendBackfillDone', 'true'],
+    ]);
+    const gas = loadScript(gmail, props, () => 200);
+    Object.assign(gas.CONFIG, { SOURCE: 'collector', ENDPOINT: 'https://app.example.invalid/v1/mail/ingest' });
+    return { gas, props };
+  }
+  const iso = (offsetMs: number) => new Date(Date.now() + offsetMs).toISOString();
+  const MIN = 60_000;
+
+  it('takes mail that arrives long after its Date header, and a Date in the future does not move the starting point', async () => {
+    const gmail = new FakeGmail();
+    const { gas, props } = following(gmail, 10 * MIN);
+    // Held 72 minutes by the sender's attachment encryption (2026-11-06): Date 72 minutes old, received a minute ago.
+    gmail.add([message('late', iso(-72 * MIN), { to: SPONSOR, arrived: iso(-1 * MIN) })]);
+    // A sender's clock a day ahead.
+    gmail.add([message('ahead', iso(24 * 60 * MIN), { to: CONTACT, arrived: iso(-2 * MIN) })]);
+    const before = Date.now();
+    gas.run();
+    expect(gas.sent.map((r) => new URL(r.url).searchParams.get('id')).sort()).toEqual(['ahead', 'late']);
+    const watermark = Number(props.get('sendWatermarkMs'));
+    expect(watermark).toBeGreaterThanOrEqual(before);
+    expect(watermark).toBeLessThanOrEqual(Date.now());
+
+    // Mail received after that run is still taken; nothing is sent twice.
+    gmail.add([message('next', iso(-30 * MIN), { to: SPONSOR, arrived: iso(1 * MIN) })]);
+    gas.run();
+    gas.run();
+    expect(gas.sent.map((r) => new URL(r.url).searchParams.get('id')).sort()).toEqual(['ahead', 'late', 'next']);
+    const results = await deliver(gas.sent);
+    expect(results.map((r) => r.json.status)).toEqual(['stored', 'stored', 'stored']);
+  });
+
+  it('does not send the old mail of a thread that a new reply brings back', () => {
+    const gmail = new FakeGmail();
+    const { gas } = following(gmail, 10 * MIN);
+    gmail.add([message('first', iso(-30 * 24 * 60 * MIN), { to: SPONSOR }), message('reply', iso(-1 * MIN), { to: SPONSOR })]);
+    gas.run();
+    expect(gas.sent.map((r) => new URL(r.url).searchParams.get('id'))).toEqual(['reply']);
+  });
+
+  it('sends one missed message again by its Message-ID and logs the answer', async () => {
+    const gmail = new FakeGmail();
+    const { gas } = following(gmail, 10 * MIN);
+    gmail.add([message('missed', '2026-11-06T07:17:28Z', { to: SPONSOR, arrived: '2026-11-06T08:29:13Z' })]);
+    gmail.add([message('other', '2026-11-06T07:20:00Z', { to: SPONSOR })]);
+    gas.CONFIG.RESEND_MESSAGE_IDS = ['<missed@partner.example>', 'absent@partner.example'];
+    gas.resendMissed();
+    expect(gas.sent.map((r) => new URL(r.url).searchParams.get('id'))).toEqual(['missed']);
+    expect(gas.logs).toEqual(['1 件目: 受け口の応答 200 stored', '2 件目: このアカウントの Gmail に見つかりませんでした。']);
+    const results = await deliver(gas.sent);
+    expect(results.map((r) => [r.status, r.json.status])).toEqual([[200, 'stored']]);
   });
 });
