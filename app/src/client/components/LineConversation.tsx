@@ -75,6 +75,8 @@ function timeline(d: LineConversationDetail): ({ kind: 'message'; at: string; m:
 
 type TimelineEntry = ReturnType<typeof timeline>[number];
 
+const rowKey = (e: TimelineEntry): string => (e.kind === 'message' ? e.m.id : `sent-${e.o.id}`);
+
 function TimelineRow({ entry: e, accountName }: { entry: TimelineEntry; accountName: string }) {
   if (e.kind === 'message') {
     return (
@@ -220,8 +222,14 @@ export function LineConversation({
   const [remembered] = useState(() => (userId ? rememberedRead(userId, conversationId) : null));
   const rows = d ? timeline(d) : [];
   const ats = rows.map((e) => e.at);
-  const place = readPlace(ats, remembered);
   const newest = newestAt(ats);
+  // The line goes before the first row that came since, decided when the conversation is first shown: rows that come
+  // in while it is open (a reply sent from here) stay below it or, with nothing new, add no line. null: nothing new.
+  const [firstUnread, setFirstUnread] = useState<string | null | undefined>(undefined);
+  if (d && firstUnread === undefined) {
+    const place = readPlace(ats, remembered);
+    setFirstUnread(place.unread > 0 ? rowKey(rows[place.lastRead + 1]!) : null);
+  }
   const placeRef = useRef<HTMLElement | null>(null);
   const setPlace = useCallback((el: HTMLElement | null) => {
     placeRef.current = el;
@@ -306,9 +314,9 @@ export function LineConversation({
             )}
           </section>
           <ol className="line-timeline" aria-label="メッセージ" ref={timelineRef}>
-            {rows.map((e, index) => (
-              <Fragment key={e.kind === 'message' ? e.m.id : `sent-${e.o.id}`}>
-                {place.unread > 0 && index === place.lastRead + 1 && (
+            {rows.map((e) => (
+              <Fragment key={rowKey(e)}>
+                {rowKey(e) === firstUnread && (
                   <li className="line-unread-divider" ref={setPlace} data-testid="line-unread-divider">
                     ここから未読
                   </li>
@@ -318,7 +326,7 @@ export function LineConversation({
             ))}
           </ol>
           {/* Nothing new: the place is the end of the messages, with the last of them above it and the reply below. */}
-          {place.unread === 0 && <div className="line-read-place" ref={setPlace} aria-hidden="true" />}
+          {firstUnread === null && <div className="line-read-place" ref={setPlace} aria-hidden="true" />}
           <LineReplyPanel detail={d} onSent={onChanged} />
           {d.outbox.length > 0 && (
             <section className="line-outbox" aria-label="返信の送信記録">

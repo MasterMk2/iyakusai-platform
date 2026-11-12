@@ -77,6 +77,17 @@ for (const size of [
     await expect(page.locator('.line-read-place')).toHaveCount(1);
     await expect(page.getByTestId('line-unread-divider')).toHaveCount(0);
 
+    // A reply sent from here comes in below without a line (the line is decided when the conversation is opened).
+    const reply = page.getByRole('region', { name: 'LINE で返信（模擬送信）' });
+    await reply.getByRole('textbox', { name: '本文' }).fill('E2E の返信（合成）');
+    await reply.getByRole('button', { name: '送信内容を確認' }).click();
+    await page.getByLabel('この送信先と内容で送ります').check();
+    await page.getByRole('button', { name: '模擬送信する' }).click();
+    await expect(page.getByTestId('line-reply-message')).toContainText('受付済み（模擬）');
+    await expect(page.locator('.line-timeline > li[data-outbox-message]')).toHaveCount(1);
+    await expect(page.getByTestId('line-unread-divider')).toHaveCount(0);
+    await expect(page.locator('.line-read-place')).toHaveCount(1);
+
     // Another person on the same browser has their own place (nothing remembered yet: the end, no line).
     await loginAs(page, 'u-viewer-b');
     await openAccount(page);
