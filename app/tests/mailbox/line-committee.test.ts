@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
@@ -385,6 +385,14 @@ describe('the official LINE account in the committee inbox', () => {
     expect(detail).toMatchObject({ access: 'read', canTriage: true, sending: 'live', reply: { canReply: false, available: false } });
     expect(JSON.stringify(detail)).not.toContain(USER_A);
     expect((await call('GET', '/api/line/accounts', { cookie: member.cookie })).json).toEqual([expect.objectContaining({ id: 'oa', sending: 'live', canReply: false })]);
+
+    // Where each person read up to is kept on the server for every device (2026-11-13), beside line-state.json.
+    expect(detail.lastReadAt).toBeNull();
+    const newest = detail.messages.map((m: { sentAt: string }) => m.sentAt).sort().at(-1);
+    expect((await call('PUT', `/api/line/conversations/${taro.conversationId}/read`, { cookie: member.cookie, body: { at: newest } })).json).toEqual({ lastReadAt: newest });
+    expect((await call('GET', `/api/line/conversations/${taro.conversationId}`, { cookie: member.cookie })).json.lastReadAt).toBe(newest);
+    expect((await call('GET', `/api/line/conversations/${taro.conversationId}`, { cookie: other.cookie })).json.lastReadAt).toBeNull();
+    expect(existsSync(path.join(dir, 'mail', 'line-reads.sqlite3'))).toBe(true);
 
     // Status by anyone; a note needs the edit grant; the grant screen is the access manager's.
     expect((await call('PATCH', `/api/line/conversations/${taro.conversationId}/triage`, { cookie: member.cookie, body: { expectedVersion: 1, status: 'in_progress' } })).status).toBe(200);

@@ -18,6 +18,7 @@ import type { LineRuntime } from './http/line-routes.js';
 import { MockLinePushConnector } from './line/connector.js';
 import { MockInboundImages } from './line/inbound-media.js';
 import { createLineSeedState } from './line/seed.js';
+import { openLineReads } from './line/reads.js';
 import { LineStore } from './line/store.js';
 import type { LineState } from './line/types.js';
 import { FileLoginPersistence, fileAuditSink, LoginService, memoryAuditSink, REFERENCE_STORE_ACK, type LoginServiceOptions } from './login/index.js';
@@ -303,7 +304,7 @@ export async function composeServer(config: ServerConfig, overrides: ComposeOver
   if (config.line.mode === 'mock') {
     const lineStore = new LineStore(lineExisting ?? createLineSeedState(now, lineSeedOptions), config.line.dataFile);
     if (!lineExisting) lineStore.replace(lineStore.current);
-    line = { store: lineStore, connector: new MockLinePushConnector(), seed: (at) => createLineSeedState(at, lineSeedOptions), inboundImages: new MockInboundImages() };
+    line = { store: lineStore, connector: new MockLinePushConnector(), seed: (at) => createLineSeedState(at, lineSeedOptions), inboundImages: new MockInboundImages(), reads: openLineReads(path.dirname(config.line.dataFile)) };
   }
 
   let rental: RentalRuntime | null = null;
@@ -445,6 +446,10 @@ export async function composeServer(config: ServerConfig, overrides: ComposeOver
   }
   if (bulletin) {
     const opened = bulletin;
+    app.addHook('onClose', async () => opened.close());
+  }
+  if (line?.reads) {
+    const opened = line.reads;
     app.addHook('onClose', async () => opened.close());
   }
   if (dayof) {

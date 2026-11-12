@@ -3,6 +3,7 @@ import { expect, loginAs, resetSample, test } from './fixtures.js';
 
 // An official LINE conversation opens a little below where this person last read (2026-11-13), as the LINE app does:
 // the end of what was read stays in view above, what came since below. A reload while it is open does not move it.
+// The place is kept on the server per person, so another device of the same person opens at the same place.
 
 test.beforeEach(async ({ page }) => {
   await resetSample(page);
@@ -96,3 +97,31 @@ for (const size of [
     await expect(page.getByTestId('line-unread-divider')).toHaveCount(0);
   });
 }
+
+test('another device of the same person opens at the place read on the first', async ({ page, request }) => {
+  await loginAs(page, 'u-editor-c');
+  await openAccount(page);
+  await openConversation(page, '顧客サンプルL1');
+  await expect(page.locator('.line-read-place')).toHaveCount(1);
+  const conv = new URLSearchParams(new URL(page.url()).hash.split('?')[1] ?? '').get('conv')!;
+  // The screen tells the server once it has shown the rows.
+  await expect.poll(async () => (await (await page.request.get(`/api/line/conversations/${conv}`)).json()).lastReadAt).not.toBeNull();
+
+  expect((await request.post('/api/session', { data: { userId: 'u-admin' } })).ok()).toBe(true);
+  expect((await request.post('/api/demo/line/release')).ok()).toBe(true);
+
+  // A second browser (nothing kept on it) signed in as the same person.
+  const other = await page.context().browser()!.newContext({ baseURL: test.info().project.use.baseURL! });
+  try {
+    const second = await other.newPage();
+    expect(await second.evaluate(() => localStorage.length).catch(() => 0)).toBe(0);
+    await loginAs(second, 'u-editor-c');
+    await openAccount(second);
+    await openConversation(second, '顧客サンプルL1');
+    const divider = second.getByTestId('line-unread-divider');
+    await expect(divider).toHaveText('ここから未読');
+    await expect(divider.locator('xpath=following-sibling::li[1]')).toContainText('追加: 配送先を変更したいです。');
+  } finally {
+    await other.close();
+  }
+});

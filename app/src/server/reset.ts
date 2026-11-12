@@ -1,7 +1,9 @@
+import path from 'node:path';
 import { loadConfig } from './config.js';
 import { createSeedState } from './domain/seed.js';
 import { StateStore } from './domain/store.js';
 import { createLineSeedState } from './line/seed.js';
+import { openLineReads } from './line/reads.js';
 import { LineStore } from './line/store.js';
 
 // Overwrites the local demo data file with fresh synthetic sample data.
@@ -16,5 +18,9 @@ store.replace(store.current);
 if (config.line.mode === 'mock') {
   const lineSeed = createLineSeedState(new Date().toISOString(), { replyGrants: true });
   new LineStore(lineSeed, config.line.dataFile).replace(lineSeed);
+  // Where each person read up to goes with the conversations it pointed into.
+  const reads = openLineReads(path.dirname(config.line.dataFile));
+  reads?.clear();
+  reads?.close();
 }
 console.log('合成サンプルデータを初期化しました。');

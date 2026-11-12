@@ -8,6 +8,7 @@ import { BOT, LINE_GROUP, LINE_LEGACY, LINE_ROOM, LINE_SHOP, LINE_SUPPORT, LINE_
 import type { InboundImageSource } from '../src/server/line/inbound-media.js';
 import { conversationIdFor } from '../src/server/line/ingest.js';
 import { createLineSeedState } from '../src/server/line/seed.js';
+import type { LineReadStore } from '../src/server/line/reads.js';
 import { LineStore, type FileWriter } from '../src/server/line/store.js';
 import type { LineState } from '../src/server/line/types.js';
 import { PROXY_IP, PUBLIC_HOST, PUBLIC_ORIGIN, seedState, T0, TEST_HOST, TEST_PORT } from './helpers.js';
@@ -68,6 +69,8 @@ export interface LineAppOptions {
   startAt?: number;
   auth?: TrustedProxyAuth;
   inboundImages?: InboundImageSource;
+  /** Where each person last read (2026-11-13). Absent: not kept on the server. */
+  reads?: LineReadStore;
 }
 
 export async function makeLineApp(opts: LineAppOptions = {}): Promise<LineTestApp> {
@@ -81,7 +84,7 @@ export async function makeLineApp(opts: LineAppOptions = {}): Promise<LineTestAp
     listenPort: TEST_PORT,
     clock,
     ...(opts.auth ? { auth: opts.auth } : {}),
-    line: { store: line, connector, seed: (at) => createLineSeedState(at, { replyGrants: opts.replyGrants ?? true }), ...(opts.inboundImages ? { inboundImages: opts.inboundImages } : {}) },
+    line: { store: line, connector, seed: (at) => createLineSeedState(at, { replyGrants: opts.replyGrants ?? true }), ...(opts.inboundImages ? { inboundImages: opts.inboundImages } : {}), ...(opts.reads ? { reads: opts.reads } : {}) },
   });
   const call: LineTestApp['call'] = async (userId, method, url, body, headers = {}) => {
     const base = opts.auth

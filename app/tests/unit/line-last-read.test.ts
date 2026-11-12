@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { LAST_READ_LIMIT, newestAt, readPlace, rememberedRead, rememberRead } from '../../src/client/components/lineLastRead.js';
+import { isLater, LAST_READ_LIMIT, laterOf, newestAt, readPlace, rememberedRead, rememberRead } from '../../src/client/components/lineLastRead.js';
 
 // Where an official LINE conversation opens (2026-11-13): just below the last row this person read on this browser.
 
@@ -44,6 +44,18 @@ describe('newestAt', () => {
   it('is the latest time, wherever it is', () => {
     expect(newestAt([at(1), at(5), at(3)])).toBe(at(5));
     expect(newestAt([])).toBeNull();
+  });
+});
+
+describe('the later of this device’s and the server’s place', () => {
+  it('takes whichever is later, or the one there is', () => {
+    expect(laterOf(at(2), at(5))).toBe(at(5));
+    expect(laterOf(at(5), at(2))).toBe(at(5));
+    expect(laterOf(null, at(2))).toBe(at(2));
+    expect(laterOf(at(2), null)).toBe(at(2));
+    expect(laterOf(null, null)).toBeNull();
+    expect(isLater('2026-11-13T09:05:00+09:00', at(4))).toBe(true);
+    expect(isLater(at(4), at(4))).toBe(false);
   });
 });
 

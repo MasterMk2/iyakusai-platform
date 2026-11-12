@@ -31,6 +31,7 @@ import { sha256 } from '../line/normalize.js';
 import { lineAccountSummaries, lineConversationDetail, type LinePeople } from '../line/queries.js';
 import { beginRetry, beginSend, checkLineQuota, discardDraft, evaluateTarget, observeMemberCount, observeProfile, previewReply, pushRequestOf, recordAttempt, saveDraft, type PreviewQuota, type SendContext } from '../line/reply.js';
 import { releaseLineBatches } from '../line/seed.js';
+import type { LineReadStore } from '../line/reads.js';
 import type { LineStore } from '../line/store.js';
 import { addLineNote, getOutbox, lineAccessMatrix, lineAssigneeCandidates, lineAuditLog, setLineGrant, updateLineTriage } from '../line/triage.js';
 import type { LineState } from '../line/types.js';
@@ -44,6 +45,8 @@ export interface LineRuntime {
   seed: (now: string) => LineState;
   /** Received images (2026-11-04). Absent: shown as not imported. */
   inboundImages?: InboundImageSource;
+  /** Where each person last read each conversation (2026-11-13). Absent: the screen keeps it per device only. */
+  reads?: LineReadStore | null;
 }
 
 export interface LineRouteContext {
@@ -91,6 +94,8 @@ const triageBody = z
   })
   .refine((b) => b.status !== undefined || b.assigneeId !== undefined || b.labels !== undefined, { message: '変更内容がありません' });
 const noteBody = z.strictObject({ body: z.string().max(LIMITS.noteMaxLength * 2) });
+// A row's time as the conversation gave it (older history files are not always strict ISO); stored as UTC ISO.
+const readBody = z.strictObject({ at: z.string().min(1).max(64).refine((v) => !Number.isNaN(Date.parse(v)), '日時ではありません') });
 const previewBody = z.strictObject({ draftId, draftVersion: version, publicDays: z.union([z.literal(1), z.literal(7), z.literal(30)]).optional() });
 // No recipient, method or "confirmed" flag is accepted from the client: strict schemas reject them.
 const sendBody = z.strictObject({
@@ -149,6 +154,15 @@ export interface LineRoutesHandle {
 
 const RESULT_NOT_SAVED = '送信要求の結果を保存できませんでした。結果不明として扱います。再試行は同じ再送キーを使うため二重には送られません。';
 
+/** The time of the conversation's newest row (a message, or a send made from the app), in milliseconds. */
+function newestRowTime(state: LineState, conversationId: string): number | null {
+  const times = [
+    ...state.messages.filter((m) => m.conversationId === conversationId).map((m) => Date.parse(m.sentAt)),
+    ...state.outbox.filter((o) => o.conversationId === conversationId).map((o) => Date.parse(o.createdAt)),
+  ].filter((t) => !Number.isNaN(t));
+  return times.length > 0 ? Math.max(...times) : null;
+}
+
 export function registerLineRoutes(app: FastifyInstance, ctx: LineRouteContext): LineRoutesHandle {
   const { line, mail, clock, parse, requireUser } = ctx;
   const store = line.store;
@@ -202,7 +216,23 @@ export function registerLineRoutes(app: FastifyInstance, ctx: LineRouteContext):
   app.get('/api/line/conversations/:conversationId', async (request) => {
     const user = requireUser(request);
     const { conversationId } = parse(convParams, request.params);
-    return lineConversationDetail(store.current, mail.current, user, conversationId, clock(), inFlight, imageBaseUrl !== null, line.inboundImages !== undefined, attachmentFiles !== null);
+    const detail = lineConversationDetail(store.current, mail.current, user, conversationId, clock(), inFlight, imageBaseUrl !== null, line.inboundImages !== undefined, attachmentFiles !== null);
+    // The place before this visit: opening does not move it (the screen sends the new place once it has shown the rows).
+    return line.reads ? { ...detail, lastReadAt: line.reads.get(user.id, conversationId) } : detail;
+  });
+
+  // Where this person has read up to (2026-11-13): the newest row the screen showed. Only forward, and never past the
+  // conversation's newest row, so a wrong clock cannot hide messages that come later.
+  app.put('/api/line/conversations/:conversationId/read', async (request) => {
+    const user = requireUser(request);
+    const { conversationId } = parse(convParams, request.params);
+    const { at } = parse(readBody, request.body);
+    if (!line.reads) throw new DomainError('not_found', '既読の位置はこのサーバーでは保存していません。');
+    const conv = readableConversation(store.current, user, conversationId);
+    const newest = newestRowTime(store.current, conv.id);
+    if (newest === null) return { lastReadAt: line.reads.get(user.id, conv.id) };
+    const place = new Date(Math.min(Date.parse(at), newest)).toISOString();
+    return { lastReadAt: line.reads.advance(user.id, conv.id, place, new Date(Date.parse(clock())).toISOString()) };
   });
 
   // A received image, for those who may read the conversation (never public; see inbound-media.ts).
@@ -622,6 +652,7 @@ export function registerLineRoutes(app: FastifyInstance, ctx: LineRouteContext):
     busy: () => inFlight.size > 0,
     reset: (now) => {
       store.replace(line.seed(now));
+      line.reads?.clear();
       if (line.connector instanceof MockLinePushConnector) line.connector.reset();
     },
     sweepMedia,

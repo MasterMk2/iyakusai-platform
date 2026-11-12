@@ -191,6 +191,12 @@ export interface LineConversationDetail {
   history: LineHistoryView[];
   reply: LineReplyState;
   outbox: OutboxView[];
+  /**
+   * Where the signed-in person last read this conversation, on any device (2026-11-13): the time of the newest row
+   * they had on the screen; null when they have not opened it yet. Absent: this server does not keep it (the screen
+   * keeps it per device). Opening the conversation does not change it; the screen moves it with PUT …/read.
+   */
+  lastReadAt?: string | null;
 }
 
 export interface LinePreviewResponse {
