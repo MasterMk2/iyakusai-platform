@@ -1,4 +1,5 @@
 discord.py>=2.7
+aiohttp==3.14.4    # 登録の仕組みが受け付ける版だけ(registration/.../aiohttp_server.py の SUPPORTED_AIOHTTP_VERSION と同時に変える)
 python-docx>=1.2
 tzdata>=2025.1 ; sys_platform == "win32"
 numpy>=1.26        # /ask の意味検索(vector)用。Ollama/bge-m3 が無い環境では未使用でよい
