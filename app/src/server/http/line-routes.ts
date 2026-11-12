@@ -218,7 +218,7 @@ export function registerLineRoutes(app: FastifyInstance, ctx: LineRouteContext):
     const { conversationId } = parse(convParams, request.params);
     const detail = lineConversationDetail(store.current, mail.current, user, conversationId, clock(), inFlight, imageBaseUrl !== null, line.inboundImages !== undefined, attachmentFiles !== null);
     // The place before this visit: opening does not move it (the screen sends the new place once it has shown the rows).
-    return line.reads ? { ...detail, lastReadAt: line.reads.get(user.id, conversationId) } : detail;
+    return line.reads ? { ...detail, lastReadAt: line.reads.get(user.id, conversationId), readSince: line.reads.since } : detail;
   });
 
   // Where this person has read up to (2026-11-13): the newest row the screen showed. Only forward, and never past the
@@ -652,7 +652,7 @@ export function registerLineRoutes(app: FastifyInstance, ctx: LineRouteContext):
     busy: () => inFlight.size > 0,
     reset: (now) => {
       store.replace(line.seed(now));
-      line.reads?.clear();
+      line.reads?.clear(now);
       if (line.connector instanceof MockLinePushConnector) line.connector.reset();
     },
     sweepMedia,

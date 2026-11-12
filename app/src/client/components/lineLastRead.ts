@@ -8,9 +8,9 @@ const KEY_PREFIX = 'iyakusai.line.lastRead.';
 export const LAST_READ_LIMIT = 500;
 
 export interface ReadPlace {
-  /** Index of the last row already read; -1 when every row is new. */
+  /** Index of the row before the first unread one (the line goes after it); -1 when the first row is unread. */
   lastRead: number;
-  /** Rows after it that arrived since; 0 when nothing is new or nothing was remembered. */
+  /** Unread rows; 0 when nothing is new or nothing was remembered. */
   unread: number;
 }
 
@@ -20,19 +20,19 @@ const time = (at: string): number => {
 };
 
 /**
- * Where to open, from the rows' times in display order and the remembered time.
+ * Where to open, from the rows' times in display order and the remembered time. Only rows that `counts` marks (the
+ * other side's messages, as in the list's unread count) can be unread; the committee's own sends never are.
  * Nothing remembered (first open on this browser) or nothing new: the last row, so the latest is in view.
  */
-export function readPlace(ats: readonly string[], remembered: string | null): ReadPlace {
+export function readPlace(ats: readonly string[], remembered: string | null, counts?: readonly boolean[]): ReadPlace {
   if (ats.length === 0) return { lastRead: -1, unread: 0 };
   if (remembered === null) return { lastRead: ats.length - 1, unread: 0 };
   const seen = time(remembered);
   // Rows are in time order; one that came in late with an older time counts as read.
-  let lastRead = -1;
-  ats.forEach((at, i) => {
-    if (time(at) <= seen) lastRead = i;
-  });
-  return { lastRead, unread: ats.length - 1 - lastRead };
+  const unread = ats.map((at, i) => (counts?.[i] ?? true) && time(at) > seen);
+  const first = unread.indexOf(true);
+  if (first === -1) return { lastRead: ats.length - 1, unread: 0 };
+  return { lastRead: first - 1, unread: unread.filter(Boolean).length };
 }
 
 /** a is later than b. */

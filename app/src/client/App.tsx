@@ -262,6 +262,10 @@ export function App() {
   const [route, navigate] = useHashRoute();
   const [refresh, setRefresh] = useState(0);
   const bump = useCallback(() => setRefresh((n) => n + 1), []);
+  // The LINE list alone is read again once a conversation was marked read (2026-11-13): its unread count goes, while
+  // the open conversation (and the place it holds) is left as it is.
+  const [lineReadTick, setLineReadTick] = useState(0);
+  const lineRead = useCallback(() => setLineReadTick((n) => n + 1), []);
 
   const loadSession = useCallback(
     (signal: AbortSignal) => {
@@ -927,7 +931,7 @@ export function App() {
                   onReauthRequired={bump}
                   mailboxName={lineName}
                   selectedId={route.conversationId}
-                  refresh={refresh}
+                  refresh={refresh + lineReadTick}
                   onChanged={bump}
                   onSelect={(selection) =>
                     navigate(
@@ -947,7 +951,7 @@ export function App() {
                 {broadcastAccount ? (
                   <LineBroadcast key={broadcastAccount.id} accountId={broadcastAccount.id} refresh={refresh} onSent={bump} onClose={() => navigate({ ...route, lineBroadcast: false })} />
                 ) : route.conversationId ? (
-                  <LineConversation key={route.conversationId} conversationId={route.conversationId} refresh={refresh} onChanged={bump} caseTasks={caseTasks} userId={user?.id ?? null} />
+                  <LineConversation key={route.conversationId} conversationId={route.conversationId} refresh={refresh} onChanged={bump} onRead={lineRead} caseTasks={caseTasks} userId={user?.id ?? null} />
                 ) : (
                   <div className="detail-placeholder">
                     <h2>会話を選択</h2>

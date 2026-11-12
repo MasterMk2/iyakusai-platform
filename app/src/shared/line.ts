@@ -44,6 +44,11 @@ export interface LineInboxItem {
   /** The viewer may change the status here (list rows' buttons, 2026-11-04), and the version to change it from. */
   canSetStatus?: boolean;
   triageVersion?: number;
+  /**
+   * Messages from the other side that came after where the viewer read up to (2026-11-13); absent when this server
+   * does not keep places. A conversation the viewer has not opened counts from `readSince` of its detail.
+   */
+  unreadCount?: number;
 }
 
 export type InboxItem = ({ source: 'email' } & ThreadListItem) | LineInboxItem;
@@ -197,6 +202,11 @@ export interface LineConversationDetail {
    * keeps it per device). Opening the conversation does not change it; the screen moves it with PUT …/read.
    */
   lastReadAt?: string | null;
+  /**
+   * With lastReadAt (2026-11-13): when this server began counting unread messages. Without a place of the viewer's,
+   * rows up to this time count as read (the line and the list's unread count start here).
+   */
+  readSince?: string;
 }
 
 export interface LinePreviewResponse {

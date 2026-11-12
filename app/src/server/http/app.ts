@@ -683,7 +683,8 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     app.get('/api/inbox', async (request) => {
       const user = requireUser(request);
       const query = parse(inboxQuery, request.query);
-      return listInbox(store.current, lineRoutes ? options.line!.store.current : null, user, query);
+      const reads = lineRoutes ? (options.line!.reads ?? null) : null;
+      return listInbox(store.current, lineRoutes ? options.line!.store.current : null, user, query, reads ? { places: reads.placesOf(user.id), since: reads.since } : null);
     });
 
     app.get('/api/inbox/labels', async (request) => {

@@ -1,6 +1,6 @@
 import type { HandlingStatus, LabelFacet } from '../../shared/api.js';
 import type { InboxItem, InboxResponse } from '../../shared/line.js';
-import { collectLineItems, lineLabelFacets, namesFrom } from '../line/queries.js';
+import { collectLineItems, lineLabelFacets, namesFrom, type UnreadPlaces } from '../line/queries.js';
 import type { LineState } from '../line/types.js';
 import { collectThreadItems, labelFacets } from './queries.js';
 import { notFound, type AppState, type User } from './types.js';
@@ -25,7 +25,7 @@ export interface InboxQuery {
 const latestOf = (item: InboxItem) => (item.source === 'email' ? item.latestReceivedAt : item.latestAt);
 const idOf = (item: InboxItem) => (item.source === 'email' ? item.threadId : item.conversationId);
 
-export function listInbox(mail: AppState, line: LineState | null, user: User, query: InboxQuery): InboxResponse {
+export function listInbox(mail: AppState, line: LineState | null, user: User, query: InboxQuery, unread?: UnreadPlaces | null): InboxResponse {
   if (query.lineAccountId !== undefined && !line) throw notFound();
   const filters = { q: query.q, status: query.status, label: query.label, assignee: query.assignee };
   const email: InboxItem[] =
@@ -34,7 +34,7 @@ export function listInbox(mail: AppState, line: LineState | null, user: User, qu
       : [];
   const lineItems: InboxItem[] =
     line && query.source !== 'email' && query.mailboxId === undefined
-      ? collectLineItems(line, namesFrom(mail), user, { ...filters, accountId: query.lineAccountId })
+      ? collectLineItems(line, namesFrom(mail), user, { ...filters, accountId: query.lineAccountId }, unread)
       : [];
   const items = [...email, ...lineItems].sort((a, b) => latestOf(b).localeCompare(latestOf(a)) || idOf(a).localeCompare(idOf(b)));
   const start = (query.page - 1) * query.pageSize;
