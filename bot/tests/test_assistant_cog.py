@@ -981,6 +981,7 @@ class QuietShareTests(ImageEnabledTests):
     def test_history_is_exported_to_the_drive_folder(self):
         drive = self.dir / "drive" / "_目録"
         drive.mkdir(parents=True)
+        (drive / "INDEX.md").write_text("目録", encoding="utf-8")   # 空のフォルダはマウント外れとみなして書かない
         settings = self.settings()
         settings.history_dir = drive / "Bot履歴"
 

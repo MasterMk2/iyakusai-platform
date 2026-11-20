@@ -34,6 +34,7 @@ class HistoryExportTests(unittest.TestCase):
         self.files_dir = self.dir / "local" / "files"
         self.drive = self.dir / "drive" / "_目録"
         self.drive.mkdir(parents=True)
+        (self.drive / "INDEX.md").write_text("目録", encoding="utf-8")   # マウントされた _目録 の代わり(空でない)
         self.out = self.drive / "Bot履歴"
         self.state = H.state_path_for(self.store_path)
         self.counter = 0
@@ -196,6 +197,15 @@ class HistoryExportTests(unittest.TestCase):
             self.export()
         self.assertFalse(self.drive.exists())
         self.assertFalse(self.state.exists())   # カーソルを進めない
+
+    def test_empty_parent_folder_writes_nothing(self):
+        # 本番は _目録 そのものをマウントしている。外れると空のマウント先だけが残るので、空なら書かない
+        self.done("ask", self.ask())
+        (self.drive / "INDEX.md").unlink()   # 空のマウント先だけが残った形
+        with self.assertRaises(H.ExportError):
+            self.export()
+        self.assertEqual(list(self.drive.iterdir()), [])
+        self.assertFalse(self.state.exists())
 
     def test_broken_state_starts_over(self):
         job = self.done("ask", self.ask())
