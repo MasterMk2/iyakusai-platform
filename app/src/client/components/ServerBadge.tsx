@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { SYSTEM_HEADER_REFRESH_SECONDS, SYSTEM_LEVEL_LABELS, type SystemStatusResponse } from '../../shared/system';
 import { api, toFailure } from '../api';
-import { findings } from './SystemStatusPanel';
+import { bytesLabel, findings } from './SystemStatusPanel';
 
 // The server's state in the header (2026-11-21), on a PC only: a phone's header has no room, and every member's
-// screen asking would add up. One line: 「サーバー正常 · CPU 23% · メモリ 31%」, or what needs a look (yellow 注意, red
+// screen asking would add up. One line: 「サーバー正常 · CPU 23% · メモリ 31% · ディスク残り 700 GB」 (the disk with the
+// least free space when the data and the backups are on two), or what needs a look (yellow 注意, red
 // すぐ対応). It links to 設定 › サーバーの状態. Asked once a minute while the browser tab is visible; a server without
 // it (404) or a person who may not see it (403, temporary staff) shows nothing and is not asked again.
 
@@ -64,7 +65,12 @@ export function ServerBadge() {
   if (!wide || gone || !data) return null;
   const issues = findings(data);
   const state = issues.length === 0 ? 'サーバー正常' : `${SYSTEM_LEVEL_LABELS[data.level]}：${issues[0]!.short}${issues.length > 1 ? ` ほか ${issues.length - 1} 件` : ''}`;
-  const figures = [data.cpu.percent !== null ? `CPU ${pct(data.cpu.percent)}` : null, data.memory ? `メモリ ${pct(data.memory.usedPercent)}` : null].filter((f): f is string => f !== null);
+  const leastFree = data.disks.length > 0 ? Math.min(...data.disks.map((d) => d.freeBytes)) : null;
+  const figures = [
+    data.cpu.percent !== null ? `CPU ${pct(data.cpu.percent)}` : null,
+    data.memory ? `メモリ ${pct(data.memory.usedPercent)}` : null,
+    leastFree !== null ? `ディスク残り ${bytesLabel(leastFree)}` : null,
+  ].filter((f): f is string => f !== null);
   return (
     <a
       className={`server-badge ${data.level}${stale ? ' stale' : ''}`}
