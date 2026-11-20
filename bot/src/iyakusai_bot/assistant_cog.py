@@ -182,7 +182,11 @@ class Assistant(commands.Cog):
 
     async def export_history(self) -> dict | None:
         """1 回分の書き出し。前の回がまだ終わっていなければ(ドライブが固まっているなど)何もしない。"""
-        if self._history_running or self.settings.history_dir is None:
+        if self.settings.history_dir is None:
+            return None
+        if self._history_running:
+            # 黙って飛ばし続けると、ドライブが固まったことに誰も気づかない(周期ごとに 1 行だけ残す)
+            log.warning("前の回の履歴の書き出しがまだ終わっていないため、今回は飛ばします(ドライブのマウントを確かめる)")
             return None
         self._history_running = True
         try:
