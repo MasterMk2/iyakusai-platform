@@ -178,13 +178,21 @@ async function waitIdle(state, timeoutMs = 10_000) {
     }
     await new Promise((r) => setTimeout(r, 100));
   }
+  // 待ちきれなかった（遅い環境では録りこぼしの原因になる）。回数を要約に出す。
+  state.timeouts += 1;
 }
 
 /** 一覧の絞り込みの選択肢を 1 つずつ選び、終わったら元に戻す。 */
 async function driveFilters(page, state) {
+  // 折りたたみ（<details>）の中の絞り込みは、開かないと選べない。選ぶと描き直されて閉じることがあるので毎回開く。
+  const openDetails = () => page.$$eval('details', (ds) => ds.forEach((d) => {
+    if (d.querySelector('select')) d.open = true;
+  }));
+  await openDetails();
   const selects = page.locator(FILTER_SELECTS);
   const count = await selects.count();
   for (let i = 0; i < count; i += 1) {
+    await openDetails();
     const select = selects.nth(i);
     if (!(await select.isVisible()) || !(await select.isEnabled())) continue;
     const original = await select.inputValue();
@@ -206,7 +214,7 @@ async function driveFilters(page, state) {
 async function recordPersona(browser, origin, persona, maxVisits) {
   const context = await browser.newContext({ locale: 'ja-JP', timezoneId: 'Asia/Tokyo', viewport: { width: 1280, height: 900 } });
   const page = await context.newPage();
-  const state = { inflight: 0 };
+  const state = { inflight: 0, timeouts: 0 };
   const get = {};
   const write = {};
   let session = null;
@@ -273,7 +281,7 @@ async function recordPersona(browser, origin, persona, maxVisits) {
   await Promise.all(pending);
   await context.close();
   if (!session) throw new Error(`${persona.id} のログインの応答を録れませんでした。`);
-  return { session, get, write, visited, unvisited: queue.filter((h) => !seen.has(h)).length };
+  return { session, get, write, visited, unvisited: queue.filter((h) => !seen.has(h)).length, timeouts: state.timeouts };
 }
 
 /**
@@ -293,7 +301,7 @@ export async function record({ outDir, port = 5191, maxVisits = 400 }) {
       const result = await recordPersona(browser, server.origin, persona, maxVisits);
       await writeFile(path.join(outDir, `${persona.id}.json`), JSON.stringify({ session: result.session, get: result.get, write: result.write }));
       const errors = Object.entries(result.get).filter(([, e]) => e.status >= 400).map(([k, e]) => `${e.status} ${k}`);
-      summary.push({ persona: persona.id, visited: result.visited.length, unvisited: result.unvisited, get: Object.keys(result.get).length, write: Object.keys(result.write), errors });
+      summary.push({ persona: persona.id, visited: result.visited.length, unvisited: result.unvisited, get: Object.keys(result.get).length, write: Object.keys(result.write), errors, timeouts: result.timeouts });
     }
     await writeFile(
       path.join(outDir, 'index.json'),
@@ -311,7 +319,7 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const outDir = path.resolve(APP_DIR, args.out ?? '.tmp/pages-demo/data');
   const summary = await record({ outDir, port: Number(args.port ?? 5191), maxVisits: Number(args['max-visits'] ?? 400) });
   for (const s of summary) {
-    console.log(`${s.persona}: 画面 ${s.visited}（残り ${s.unvisited}）・GET ${s.get}・自動の書き込み ${s.write.length}${s.write.length ? `（${s.write.join(', ')}）` : ''}`);
+    console.log(`${s.persona}: 画面 ${s.visited}（残り ${s.unvisited}）・GET ${s.get}・待ちきれず ${s.timeouts}・自動の書き込み ${s.write.length}${s.write.length ? `（${s.write.join(', ')}）` : ''}`);
     for (const e of s.errors) console.log(`  ${e}`);
   }
   console.log(`書き出し先: ${outDir}`);

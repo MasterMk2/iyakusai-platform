@@ -29,7 +29,18 @@ await build({
 });
 
 const summary = await record({ outDir: path.join(OUT, 'demo-data') });
-for (const s of summary) console.log(`録画 ${s.persona}: 画面 ${s.visited}・GET ${s.get}・自動の書き込み ${s.write.length}`);
+for (const s of summary) console.log(`録画 ${s.persona}: 画面 ${s.visited}・GET ${s.get}・待ちきれず ${s.timeouts}・自動の書き込み ${s.write.length}`);
+
+// 録画が薄いまま公開しない歯止め。2026-11-21 の手元の録画は、ペルソナごとの GET が 47〜180 件、
+// 待ちきれなかった回数は 0 だった。遅い環境で要求を取りこぼすと、件数が減るか待ちきれない回数が増える。
+const MIN_GETS_PER_PERSONA = 35;
+const MAX_TIMEOUTS_PER_PERSONA = 5;
+const thin = summary.filter((s) => s.get < MIN_GETS_PER_PERSONA || s.timeouts > MAX_TIMEOUTS_PER_PERSONA);
+if (summary.length === 0 || thin.length > 0) {
+  for (const s of thin) console.error(`録画が薄い: ${s.persona}（GET ${s.get} 件・待ちきれず ${s.timeouts} 回）`);
+  console.error('録画を確かめてください。公開しません。');
+  process.exit(1);
+}
 
 const today = new Intl.DateTimeFormat('ja-JP', { timeZone: 'Asia/Tokyo', year: 'numeric', month: 'long', day: 'numeric' }).format(new Date());
 const htmlPath = path.join(OUT, 'index.html');
