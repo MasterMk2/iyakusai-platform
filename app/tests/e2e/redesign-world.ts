@@ -209,6 +209,9 @@ export async function installWorld(page: Page, options: WorldOptions = {}): Prom
     if (path === '/api/mail/send/options') return respond({ enabled: false, from: [], fromName: '', bcc: null, maxAttachmentBytes: 0, maxRecipients: 0, senderName: me.displayName });
     // Committee contacts (2026-10-26): the thread asks once which senders are contacts; none in this world.
     if (path === '/api/contacts/by-address') return respond([]);
+    // Free/busy (2026-11-20) is off on this world, as a server without availability.json answers.
+    if (path === '/api/availability/me') return respond({ enabled: false, serviceAccount: null, connection: null, challenge: null, choices: { departments: [], people: [] }, horizonDays: 0, refreshMinutes: 0 });
+    if (path === '/api/availability') return respond({ enabled: false, from: '2026-01-01', to: '2026-01-01', coveredTo: '2026-01-01', people: [] });
     if (path === '/api/mailboxes') return respond(MAILBOXES.map((b) => {
       const mine = threads.filter((t) => t.receipts.some((r) => (r.mailboxes ?? [r.mailbox]).some((m) => m.id === b.id)));
       return { ...b, access: officer ? 'edit' : 'read', threadCount: mine.length, unhandledCount: mine.filter((t) => t.receipts.some((r) => r.triage.status === 'unhandled')).length };

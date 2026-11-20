@@ -62,6 +62,9 @@ async function syntheticWorkspace(page: Page, options: { role?: 'viewer' | 'edit
     if (path === '/api/contacts/by-address') return respond([]);
     // The decision register (2026-11-03) is off on this synthetic server (no 「決定として登録」 in the thread).
     if (path === '/api/decisions/meta') return respond({ enabled: false, canRegister: false, canAdminister: false, departments: [] });
+    // Free/busy (2026-11-20) is off on this synthetic server, as a server without availability.json answers.
+    if (path === '/api/availability/me') return respond({ enabled: false, serviceAccount: null, connection: null, challenge: null, choices: { departments: [], people: [] }, horizonDays: 0, refreshMinutes: 0 });
+    if (path === '/api/availability') return respond({ enabled: false, from: '2026-01-01', to: '2026-01-01', coveredTo: '2026-01-01', people: [] });
     // The Bot (2026-11-09: the task view asks once whether it can draft tasks) is off on this synthetic server, as the
     // server answers without SMM_ASSISTANT_MODE: no 「Bot に下書きを頼む」 above the create form.
     if (path === '/api/assistant/meta' && request.method() === 'GET') return respond({ error: 'ASSISTANT_DISABLED', message: 'Bot 機能はこのサーバーでは有効になっていません。' }, 404);
