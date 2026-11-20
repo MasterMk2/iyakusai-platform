@@ -221,7 +221,7 @@ class Documents(commands.Cog):
                     + "-# 【◯◯】は要記入のプレースホルダ。送付前に必ず内容を確認してください。\n")
         log.info("%s 完了: 種類=%s fmt=%s model=%s %.1f秒 by %s", command, kind_name, fmt, model,
                  time.time() - t0, itx.user)
-        note = head + f"-# model: {model} / {res.tokens_note()} / {res.cost_note(self.usd_jpy)} / {elapsed_note(t0)}"
+        note = head + f"-# model: {res.model} / {res.tokens_note()} / {res.cost_note(self.usd_jpy)} / {elapsed_note(t0)}"
         # ファイル変換に失敗しても本文は届ける(欲しいのは中身であって形式ではない)。
         try:
             fname, data = docgen.to_file(fmt, title, body_md)
