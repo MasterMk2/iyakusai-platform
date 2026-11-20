@@ -20,6 +20,7 @@ import { AccountingAccessPanel } from './payments/AccountingAccessPanel';
 import { BankPanel } from './bank/BankPanel';
 import { Facts } from './books/common';
 import { DayOfSettingsPanel } from './dayof/DayOfSettingsPanel';
+import { SystemStatusPanel } from './SystemStatusPanel';
 import { storeTheme, THEME_LABELS, useTheme, type ThemeChoice } from '../theme';
 import './payments/payments.css';
 
@@ -28,7 +29,7 @@ import './payments/payments.css';
  * PC and in place of it on a phone (../docs/ui-guidelines.md §6): before, every part was on one page, some 20,000px
  * long for an access administrator, with five lists of every member one after another.
  */
-export const SETTINGS_SECTIONS = ['account', 'card', 'theme', 'signature', 'availability', 'managers', 'mail', 'line', 'accounting', 'rental', 'features', 'dayof', 'login', 'bank', 'rollover', 'directory'] as const;
+export const SETTINGS_SECTIONS = ['account', 'card', 'theme', 'signature', 'availability', 'managers', 'mail', 'line', 'accounting', 'rental', 'features', 'dayof', 'login', 'system', 'bank', 'rollover', 'directory'] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
 export function parseSettingsSection(value: string | undefined): SettingsSection | null {
@@ -141,6 +142,9 @@ export function SettingsView({
           ...(discord ? [{ key: 'login', group: 'ops', label: 'ログインの記録', body: <LoginActivityPanel /> } as Part] : []),
         ] as Part[])
       : []),
+    // The server's state (2026-11-21): every member (temporary staff are answered 403). Listed once the server answers (a
+    // server from before it answers 404). It asks again only while it is the part opened.
+    { key: 'system', group: 'ops', label: 'サーバーの状態', body: <SystemStatusPanel active={section === 'system'} onAvailable={report('system')} />, listedWhenKnown: true },
     // 権限管理者 and 会計を見る: the panel says which (its status answers 403 for everyone else).
     ...(discord && committeeMail ? [{ key: 'bank', group: 'ops', label: '銀行の連携', body: <BankPanel onAvailable={report('bank')} />, listedWhenKnown: !admin } as Part] : []),
     ...(admin ? [{ key: 'rollover', group: 'ops', label: '年度の切り替え', body: <RolloverPanel onAvailable={report('rollover')} /> } as Part] : []),

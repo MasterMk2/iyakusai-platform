@@ -1,5 +1,6 @@
 import { Fragment, type MouseEvent, type ReactNode } from 'react';
 import { nextTheme, storeTheme, THEME_LABELS, useTheme } from '../theme';
+import { ServerBadge } from './ServerBadge';
 
 /**
  * Common frame of every screen: the navy header and one row of module tabs. The rental phone screen
@@ -56,12 +57,16 @@ export function Brand() {
   );
 }
 
-/** Header without a signed-in user (test and demo modes add their own bar below it). */
-export function Masthead({ children }: { children?: ReactNode }) {
+/**
+ * Header without a signed-in user (test and demo modes add their own bar below it). `serverStatus`: a signed-in
+ * member's screen, which shows the server's state on a PC (ServerBadge, 2026-11-21).
+ */
+export function Masthead({ children, serverStatus = false }: { children?: ReactNode; serverStatus?: boolean }) {
   return (
     <header className="masthead">
       <Brand />
       <div className="masthead-tools">
+        {serverStatus && <ServerBadge />}
         <ThemeToggle />
         {children}
       </div>

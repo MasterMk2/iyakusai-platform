@@ -286,7 +286,7 @@ export function App() {
   // test and demo modes keep their own bar under a plain header.
   const bar = demoMode ? (
     <>
-      <Masthead />
+      <Masthead serverStatus={!!user} />
       <DemoBar user={user} onChanged={bump} />
     </>
   ) : discordSession ? (

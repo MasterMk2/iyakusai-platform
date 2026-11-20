@@ -1,0 +1,23 @@
+/* 設定 › サーバーの状態 (2026-11-21). The bar is for the eye only (the percent beside it says the same); its fill is
+   grey when fine and takes §4's yellow / red only when a reading needs a look. */
+.system-status .status { margin: 10px 0 6px; }
+.system-status-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; color: var(--muted); font-size: 14px; margin: 6px 0 4px; }
+.system-meters { display: grid; grid-template-columns: max-content minmax(120px, 1fr) max-content; gap: 4px 14px; align-items: center; margin: 14px 0 18px; max-width: 760px; }
+.system-meter { display: contents; }
+.system-meters dt { font-weight: 700; padding-top: 10px; }
+.system-meters dd { margin: 0; }
+.system-bar-cell { padding-top: 10px; }
+.system-bar { display: block; height: 12px; border-radius: 6px; background: var(--neutral-bg); border: 1px solid var(--line); overflow: hidden; }
+.system-bar > span { display: block; height: 100%; background: var(--field); }
+.system-bar.warn > span { background: var(--amber-line); }
+.system-bar.alert > span { background: var(--red); }
+.system-value { padding-top: 10px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; display: inline-flex; gap: 6px; justify-content: flex-end; align-items: center; }
+.system-detail { grid-column: 2 / -1; color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums; }
+.system-chip.warn { background: var(--amber-bg); color: var(--amber); border: 1px solid var(--amber-line); }
+.system-chip.alert { background: var(--red-bg); color: var(--red); border: 1px solid var(--red-line); }
+
+@media (max-width: 680px) {
+  .system-meters { grid-template-columns: minmax(0, 1fr) max-content; column-gap: 10px; }
+  .system-meters dt { grid-column: 1 / -1; }
+  .system-detail { grid-column: 1 / -1; }
+}
