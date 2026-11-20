@@ -33,7 +33,7 @@ Bot の投稿の箇所は、`grep` で `.send(`・`send_message`・`channel.send
 |---|---|---|---|---|
 | `weekly_tasks` | 週1回のタスク一覧（引き受けボタン付き） | `[weekly].channel_id` | はい | `weekly_cog.py`・`weekly_service.py` |
 | `weekly_follow_up` | 未割当タスクの追い投稿（引き受けボタン付き） | `[weekly].channel_id` | はい | `weekly_service.py` |
-| `task_candidates` | タスク候補の投稿（承認待ち・自動起票のお知らせ） | `task_screening` の部局ごとの経路（`routes[].channel_id`） | いいえ（部局ごとの経路を保つ） | `screening_cog.py` の `_publish`・`_channel` |
+| `task_candidates` | タスク候補の投稿（承認待ち・自動起票のお知らせ）。`[task_screening] post_to_discord = false` のときは投稿しない（2026-11-20。確認と操作は統合アプリの Bot タブ） | `task_screening` の部局ごとの経路（`routes[].channel_id`） | いいえ（部局ごとの経路を保つ） | `screening_cog.py` の `_publish`・`_channel` |
 | `reminder` | リマインドの通知（前日・期限・超過の催促） | `/remind` を登録したチャンネル | いいえ（登録した人のチャンネル） | `reminders.py` の `_notify` |
 | `reminder`（アプリ発） | アプリで登録・完了・削除したリマインドの確認の投稿 | 依頼で選んだ通知先（`assistant.reminder_channel_ids`） | いいえ | `assistant_cog.py` の `_remind_create`・`_remind_change` |
 | `haiku_digest` | 俳句の転記（`haiku.mode` が `digest` / `both`） | `haiku.channel_id` | はい | `haiku.py` の `_target_channel` |

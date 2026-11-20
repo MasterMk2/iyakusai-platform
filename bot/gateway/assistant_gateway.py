@@ -358,10 +358,11 @@ class AssistantGateway:
             con = self._ledger()
             try:
                 if state == "open":
+                    # Discord に投稿しない設定(task_screening.post_to_discord = false・2026-11-20)の候補は
+                    # message_id が無いまま posted / created になるので、投稿の有無では絞らない
                     found = con.execute(
                         f"SELECT {columns} FROM candidates WHERE "
-                        "(state='posted' AND message_id IS NOT NULL) OR "
-                        "(state='created' AND decision='auto' AND message_id IS NOT NULL) ORDER BY id"
+                        "state='posted' OR (state='created' AND decision='auto') ORDER BY id"
                     ).fetchall()
                 else:
                     # ScreeningStore.recent(7) と同じ条件(created_at の書式も同じ UTC の ISO)
@@ -376,9 +377,10 @@ class AssistantGateway:
         return [self.screening.CandidateRow(*row) for row in found]
 
     def _candidate_out(self, row) -> dict:
-        # 押せるボタンは Discord の投稿があるときだけ(投稿が無ければ Bot も処理できない)。
-        posted = row.state == "posted" and row.message_id is not None
-        auto = row.state == "created" and row.decision == "auto" and row.message_id is not None
+        # 押せるボタンは状態だけで決める。Discord の投稿が無くても Bot は処理できる
+        # (投稿があれば書き換え、無ければ台帳とタスクだけを変える。assistant_cog._do_screening)。
+        posted = row.state == "posted"
+        auto = row.state == "created" and row.decision == "auto"
         actions = ["ok", "ng", "return"] if posted else ["undo", "return"] if auto else []
         sources = []
         for source in row.source_list:
