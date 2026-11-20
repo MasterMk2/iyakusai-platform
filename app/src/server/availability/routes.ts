@@ -69,9 +69,30 @@ const rangeQuery = z.strictObject({ from: z.string().max(10), to: z.string().max
 const challengeBody = z.strictObject({ calendarId: z.unknown(), audience: z.unknown(), detail: z.unknown() });
 const settingsBody = z.strictObject({ audience: z.unknown(), detail: z.unknown() });
 
-/** The check's event: two days ahead, starting between 03:00 and 04:59, for 25 minutes (an hour nobody books). */
+/**
+ * The check's event: 25 minutes starting between 03:00 and 05:00 (an hour nobody books), on the first day from two days
+ * ahead that has such a free time. Two weeks are looked at in one query: a calendar can be busy for days on end (an
+ * all-day event marked busy, a trip), and the check must still find a time.
+ */
 const SLOT_DAYS_AHEAD = 2;
+const SLOT_DAYS_SEARCHED = 14;
 const SLOT_MINUTES = 25;
+
+/**
+ * The first free check time on the days given: a random start in the first two hours when it is free, else the first
+ * free start on a 5-minute step from 03:00 to 05:00. Null when every day is busy in those hours.
+ */
+export function freeCheckSlot(busy: readonly { start: number; end: number }[], days: readonly string[], randomMinute: () => number): { start: number; end: number } | null {
+  for (const day of days) {
+    const base = Date.parse(jstMidnight(day)) + 3 * 3600_000;
+    for (const minute of [randomMinute(), ...Array.from({ length: 25 }, (_, i) => i * 5)]) {
+      const start = base + minute * 60_000;
+      const end = start + SLOT_MINUTES * 60_000;
+      if (!busy.some((p) => p.start < end && p.end > start)) return { start, end };
+    }
+  }
+  return null;
+}
 /** A check not finished within this time is dropped (start again). */
 const CHALLENGE_TTL_MS = 7 * 86_400_000;
 
@@ -209,21 +230,22 @@ export function registerAvailabilityRoutes(app: FastifyInstance, runtime: Availa
     const owner = store.ownerOfCalendar(calendarId);
     if (owner !== null && owner !== user.id) throw new DomainError('conflict', 'このカレンダーは、ほかの委員がすでにつないでいます。自分のカレンダーの ID か確かめてください。');
     if (!challenges.take(user.id, Date.parse(deps.clock()))) throw new HttpError(429, { error: 'rate_limited', message: '確かめる手続きを何度も始めています。1 時間ほど待ってから、もう一度始めてください。' });
-    const day = addDays(jstDate(new Date(deps.clock())), SLOT_DAYS_AHEAD);
-    for (let attempt = 0; attempt < 4; attempt += 1) {
-      const startMs = Date.parse(jstMidnight(day)) + (3 * 60 + randomInt(0, 120)) * 60_000;
-      const slotStart = new Date(startMs).toISOString();
-      const slotEnd = new Date(startMs + SLOT_MINUTES * 60_000).toISOString();
-      const check = await service.checkSlot(calendarId, slotStart, slotEnd);
-      if (check.kind === 'not_shared') {
-        throw new DomainError('validation', `このカレンダーは、まだ委員会のアカウント（${service.serviceAccount}）に共有されていません。Google カレンダーの「設定と共有」→「特定のユーザーまたはグループと共有する」で、このアドレスを「予定の表示（時間枠のみ、詳細は非表示）」で追加してから、もう一度押してください。`, { field: 'calendarId' });
-      }
-      if (check.kind === 'error') throw new HttpError(503, { error: 'google_unavailable', message: 'Google カレンダーを読めませんでした。少し待ってから、もう一度押してください。' });
-      if (check.overlapped) continue;
-      store.putChallenge({ userId: user.id, calendarId, slotStart, slotEnd, audience, detail, createdAt: deps.clock() });
-      return me(user);
+    const first = addDays(jstDate(new Date(deps.clock())), SLOT_DAYS_AHEAD);
+    const days = Array.from({ length: SLOT_DAYS_SEARCHED }, (_, i) => addDays(first, i));
+    const answer = await service.busyBetween(calendarId, jstMidnight(first), jstMidnight(addDays(first, SLOT_DAYS_SEARCHED)));
+    if (answer.kind === 'not_shared') {
+      throw new DomainError('validation', `このカレンダーは、まだ委員会のアカウント（${service.serviceAccount}）に共有されていません。Google カレンダーの「設定と共有」→「特定のユーザーまたはグループと共有する」で、このアドレスを「予定の表示（時間枠のみ、詳細は非表示）」で追加してから、もう一度押してください。`, { field: 'calendarId' });
     }
-    throw new HttpError(503, { error: 'no_free_slot', message: '確かめに使える空いた時間が見つかりませんでした。少し待ってから、もう一度押してください。' });
+    if (answer.kind === 'error') throw new HttpError(503, { error: 'google_unavailable', message: 'Google カレンダーを読めませんでした。少し待ってから、もう一度押してください。' });
+    const slot = freeCheckSlot(answer.busy, days, () => randomInt(0, 120));
+    if (!slot) {
+      throw new HttpError(503, {
+        error: 'no_free_slot',
+        message: '2 日後から 2 週間、早朝（3〜5 時台）がすべて「予定あり」になっていて、確かめに使える時間がありません。何日も続く予定や終日の予定が「予定あり」になっていないか、Google カレンダーで確かめてください。',
+      });
+    }
+    store.putChallenge({ userId: user.id, calendarId, slotStart: new Date(slot.start).toISOString(), slotEnd: new Date(slot.end).toISOString(), audience, detail, createdAt: deps.clock() });
+    return me(user);
   });
 
   // Step 2: the member has put the event. The time is busy now → the calendar is connected with the choices of step 1.

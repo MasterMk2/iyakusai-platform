@@ -161,6 +161,26 @@ describe('connecting', () => {
     expect(done.json.challenge).toBeNull();
   });
 
+  it('looks past days that are busy all day (a trip, an all-day event marked busy) for the check time', async () => {
+    await build();
+    // Busy without a break from 11/20 to 11/30 (Japan time): the check lands on 11/30, the first day with a free morning.
+    google.add(CAL, '2026-11-20T00:00:00+09:00', '2026-11-30T00:00:00+09:00');
+    const started = await call(OWNER, 'POST', '/api/availability/me/challenge', { calendarId: CAL, audience: audience(), detail: 'parts' });
+    expect(started.status).toBe(200);
+    expect(started.json.challenge.date).toBe('2026-11-30');
+    // The early morning of 11/30 is busy until 04:40: the time found starts at 04:40 or later and is free.
+    store.removeChallenge(OWNER);
+    google.add(CAL, '2026-11-30T00:00:00+09:00', '2026-11-30T04:40:00+09:00');
+    const later = (await call(OWNER, 'POST', '/api/availability/me/challenge', { calendarId: CAL, audience: audience(), detail: 'parts' })).json.challenge;
+    expect(later.date).toBe('2026-11-30');
+    expect(later.start >= '04:40' && later.start <= '05:00').toBe(true);
+    // Two weeks busy: no time, and the answer says why.
+    google.add(CAL, '2026-11-30T00:00:00+09:00', '2026-12-07T00:00:00+09:00');
+    const none = await call(OWNER, 'POST', '/api/availability/me/challenge', { calendarId: CAL, audience: audience(), detail: 'parts' });
+    expect(none.status).toBe(503);
+    expect(none.json.message).toContain('何日も続く予定');
+  });
+
   it('lets one member connect one calendar; another member cannot take it', async () => {
     await build();
     expect((await connect()).status).toBe(200);
