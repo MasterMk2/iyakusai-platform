@@ -14,6 +14,9 @@
   共有ドライブの判定記録.tsv に書き出す。判定のたびに followup.request に 1 行書いて、その書き出し
   (と差し戻しの修正)を systemd の path ユニット経由ですぐ起動させる。
 - 投稿はメンション通知なし(AllowedMentions.none())。
+- post_to_discord = false(2026-11-20)のときは Discord に何も出さない。自動起票はタスクを作るだけ、承認待ちは
+  台帳で posted(message_id なし)にするだけで、確認と操作は統合アプリの Bot タブ(タスク候補)で行う。
+  投稿先チャンネルは、起票の場所・押せる人の判定・アプリからの操作の経路として引き続き使う。
 
 /todo 自体(task_cog.py)は「公開投稿・定期処理をしない」設計のまま変えず、公開投稿はこの Cog だけが行う。
 """
@@ -199,7 +202,7 @@ def _view(*actions_cid: tuple[str, int]) -> discord.ui.View:
 class TaskScreening(commands.Cog):
     def __init__(self, bot: commands.Bot, settings: TaskSettings, task_store: TaskStore,
                  store: ScreeningStore, *, poll_sec: int = 60, max_per_poll: int = 5,
-                 auto_create: bool = True, trigger_path: Path | None = None):
+                 auto_create: bool = True, trigger_path: Path | None = None, post: bool = True):
         self.bot = bot
         self.settings = settings
         self.tasks = task_store
@@ -207,6 +210,7 @@ class TaskScreening(commands.Cog):
         self.max_per_poll = max_per_poll
         self.auto_create = auto_create
         self.trigger_path = trigger_path
+        self.post = post          # False: Discord に出さず、アプリの Bot タブで確かめる
         self._upgrade_task: asyncio.Task | None = None
         self.poll.change_interval(seconds=poll_sec)
 
@@ -358,11 +362,16 @@ class TaskScreening(commands.Cog):
                 await self._store(self.store.transition, c.id, "publishing", "created",
                                   task_number=number, decided_by=self.bot.user.id,
                                   log=("auto", self.bot.user.id, "", number, ""))
-                msg = await channel.send(auto_text(c, number, assignee), view=auto_view(c.id),
-                                         allowed_mentions=discord.AllowedMentions.none())
-                await self._store(self.store.transition, c.id, "created", "created", message_id=msg.id)
+                if self.post:
+                    msg = await channel.send(auto_text(c, number, assignee), view=auto_view(c.id),
+                                             allowed_mentions=discord.AllowedMentions.none())
+                    await self._store(self.store.transition, c.id, "created", "created", message_id=msg.id)
                 await self._trigger(c.id, "auto")
                 return
+        if not self.post:
+            # 投稿しない: 承認待ちとして台帳に置くだけ(アプリの Bot タブから起票・不要・差し戻しができる)
+            await self._store(self.store.transition, c.id, "publishing", "posted", decision="review")
+            return
         msg = await channel.send(review_text(c), view=review_view(c.id),
                                  allowed_mentions=discord.AllowedMentions.none())
         await self._store(self.store.transition, c.id, "publishing", "posted", message_id=msg.id,
@@ -466,7 +475,8 @@ class TaskScreening(commands.Cog):
                          f"↩ <@{user}> が差し戻し: {_esc(_clip(comment, 600))}\n"
                          f"→ {closed}修正版をこのチャンネルに出し直します（数分後）")
         await self._trigger(cid, "return")
-        await self._reply(itx, f"↩ 差し戻しました。{closed}数分後に、コメントを反映した修正版をこのチャンネルに出します。")
+        where = "このチャンネル" if self.post else "タスク候補の一覧"
+        await self._reply(itx, f"↩ 差し戻しました。{closed}数分後に、コメントを反映した修正版を{where}に出します。")
 
     async def _return_auto(self, access, c: CandidateRow, comment: str) -> bool:
         """自動起票したタスクを差し戻す: タスクを完了扱いで閉じ(説明にコメントを残す)、候補を差し戻しにする。"""
@@ -575,10 +585,15 @@ def make_cog(bot: commands.Bot, cfg: dict, settings: TaskSettings, task_store: T
     path = Path(str(cfg.get("store_path", ""))).expanduser()
     if not path.is_absolute():
         raise ValueError("task_screening.store_path は絶対パスで指定してください")
+    post = cfg.get("post_to_discord", True)
+    if not isinstance(post, bool):
+        # "false" のような文字列は真になってしまうので受け付けない(読み違えて投稿しないよう、Cog ごと止める)
+        raise ValueError("task_screening.post_to_discord は true か false で指定してください")
     store = ScreeningStore.open(path)
     trigger = cfg.get("trigger_path")
     return TaskScreening(bot, settings, task_store, store,
                          poll_sec=max(15, int(cfg.get("poll_sec", 60))),
                          max_per_poll=max(1, min(20, int(cfg.get("max_per_poll", 5)))),
                          auto_create=bool(cfg.get("auto_create", True)),
-                         trigger_path=Path(trigger).expanduser() if trigger else path.parent / "followup.request")
+                         trigger_path=Path(trigger).expanduser() if trigger else path.parent / "followup.request",
+                         post=post)

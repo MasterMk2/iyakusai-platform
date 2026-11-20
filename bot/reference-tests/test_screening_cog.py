@@ -289,6 +289,46 @@ class CogFlow(unittest.TestCase):
         self.assertEqual(self.store.get(cid).state, "posted")
         self.assertEqual(self.tasks.list_tasks(Scope(GUILD, CHANNEL)), [])
 
+    def test_quiet_mode_creates_and_holds_without_posting(self):
+        # post_to_discord = false: 自動起票はタスクだけ作り、承認待ちは台帳に置くだけ。Discord には何も出さない
+        self.cog.post = False
+        run = self.store.start_run()
+        a = self.store.add(run, row("q1", "auto", "サンプル燃料に搬入時刻を連絡する", USER))
+        r = self.store.add(run, row("q2", "review", "救護担当を決める"))
+        r2 = self.store.add(run, row("q3", "review", "訂正紙の要否を決める"))
+
+        async def go():
+            for c in self.store.claim_new(10):
+                await self.cog._publish(c)
+            self.assertEqual(self.channel.sent, [])
+            ca = self.store.get(a)
+            self.assertEqual((ca.state, ca.task_number, ca.message_id), ("created", 1, None))
+            t1 = self.tasks.get_task(Scope(GUILD, CHANNEL), 1).task
+            self.assertEqual((t1.created_by, t1.assignee_id), (BOT_ID, USER))
+            self.assertIn("\tauto\t", self.trigger.read_text(encoding="utf-8"))
+            cr = self.store.get(r)
+            self.assertEqual((cr.state, cr.decision, cr.message_id), ("posted", "review", None))
+            # アプリから(投稿なし = itx.message が None)起票・不要・誤起票として閉じるができる
+            text = await self.cog._approve(Itx(None), self.access(OTHER), self.store.get(r))
+            self.assertIn("#2", text)
+            self.assertEqual(self.store.get(r).state, "created")
+            await self.cog._reject(Itx(None), self.access(USER), self.store.get(r2))
+            self.assertEqual(self.store.get(r2).state, "rejected")
+            await self.cog._undo(Itx(None), self.access(USER), self.store.get(a))
+            self.assertEqual(self.store.get(a).state, "undone")
+            self.assertEqual(self.tasks.get_task(Scope(GUILD, CHANNEL), 1).task.status, "done")
+            self.assertEqual(self.channel.sent, [])
+
+        asyncio.run(go())
+
+    def test_post_to_discord_must_be_boolean(self):
+        settings = TaskSettings(enabled=True, guild_ids=(GUILD,), channel_ids=(), store_dir=self.dir / "tasks")
+        base = {"store_path": str(self.dir / "cand2.sqlite3")}
+        self.assertTrue(C.make_cog(Bot(), base, settings, self.tasks).post)
+        self.assertFalse(C.make_cog(Bot(), {**base, "post_to_discord": False}, settings, self.tasks).post)
+        with self.assertRaises(ValueError):
+            C.make_cog(Bot(), {**base, "post_to_discord": "false"}, settings, self.tasks)
+
     def test_texts_and_custom_id(self):
         import re
         c = self.store.get(self.store.add(self.store.start_run(), row("e", "review", "あ" * 120)))

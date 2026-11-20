@@ -909,8 +909,9 @@ class CandidateTests(Harness):
             ("posted", "fp-a", "auto", "posted", MESSAGE_A),       # 承認待ち
             ("auto", "fp-b", "auto", "created", MESSAGE_B),        # 自動起票(差し戻し可)
             ("review-created", "fp-c", "review", "created", 1000000000000002003),
-            ("posted-no-message", "fp-d", "auto", "posted", None),
+            ("posted-no-message", "fp-d", "auto", "posted", None),     # Discord に出さない設定の承認待ち
             ("rejected", "fp-e", "review", "rejected", None),
+            ("auto-no-message", "fp-f", "auto", "created", None),      # Discord に出さない設定の自動起票
         ]
         for key, fingerprint, decision, state, message in specs:
             cid = ledger.add(run, candidate_row(fingerprint, decision, f"候補{key}"))
@@ -933,7 +934,8 @@ class CandidateTests(Harness):
 
     def test_open_lists_posted_and_auto_created_with_actions(self):
         open_items = self.candidates("open")
-        self.assertEqual(set(open_items), {self.ids["posted"], self.ids["auto"]})
+        self.assertEqual(set(open_items), {self.ids["posted"], self.ids["auto"], self.ids["posted-no-message"],
+                                           self.ids["auto-no-message"]})
         posted = open_items[self.ids["posted"]]
         self.assertEqual(posted["actions"], ["ok", "ng", "return"])
         self.assertEqual(posted["state"], "posted")
@@ -942,15 +944,22 @@ class CandidateTests(Harness):
         self.assertEqual(posted["sources"], [{"label": "#企画課", "excerpt": "2026-10-13T11:30:00+00:00 柏葉"}])
         self.assertEqual(open_items[self.ids["auto"]]["actions"], ["undo", "return"])
         self.assertEqual(open_items[self.ids["auto"]]["decision"], "auto")
+        # Discord に投稿していない候補も、同じボタンをアプリで押せる(投稿へのリンクは無い)
+        quiet = open_items[self.ids["posted-no-message"]]
+        self.assertEqual(quiet["actions"], ["ok", "ng", "return"])
+        self.assertIsNone(quiet["discordUrl"])
+        self.assertEqual(open_items[self.ids["auto-no-message"]]["actions"], ["undo", "return"])
+        self.assertIsNone(open_items[self.ids["auto-no-message"]]["discordUrl"])
 
     def test_default_state_is_open(self):
-        self.assertEqual(set(self.candidates()), {self.ids["posted"], self.ids["auto"]})
+        self.assertEqual(set(self.candidates()), {self.ids["posted"], self.ids["auto"], self.ids["posted-no-message"],
+                                                  self.ids["auto-no-message"]})
 
     def test_recent_lists_every_state_with_actions_only_when_actionable(self):
         recent = self.candidates("recent")
         self.assertEqual(set(recent), set(self.ids.values()))
         self.assertEqual(recent[self.ids["review-created"]]["actions"], [])
-        self.assertEqual(recent[self.ids["posted-no-message"]]["actions"], [])
+        self.assertEqual(recent[self.ids["posted-no-message"]]["actions"], ["ok", "ng", "return"])
         self.assertIsNone(recent[self.ids["posted-no-message"]]["discordUrl"])
         self.assertEqual(recent[self.ids["rejected"]]["actions"], [])
 
