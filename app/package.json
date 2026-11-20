@@ -36,6 +36,7 @@
     "test:e2e": "playwright test",
     "test:cross": "playwright test -c playwright.cross.config.ts",
     "demo:integrated": "node scripts/integrated-stack.mjs --account-port 17633",
+    "build:pages": "node scripts/pages-demo/build.mjs",
     "check": "npm run lint && npm run typecheck && npm run test:unit && npm run test:api && npm run build && npm run test:e2e"
   },
   "dependencies": {
