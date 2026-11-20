@@ -22,12 +22,14 @@ IyakusaiBot の Assistant Cog（Bot のプロセスの中）
    screening → Discord のタスク候補のボタンと同じ処理を呼ぶ。Discord の候補の投稿も同じく書き換わる
    taskdraft → /doc と同じ AI で、概略からタスクの分け方と担当の案を作る（§9）。Discord には投稿しない
    → 結果をジョブ表に書き戻す。ask・doc は共有用のチャンネル（設定 share_channel_id）にも投稿する
+     （post_to_discord = false のときは投稿せず、history_dir があれば共有ドライブへ書き出す。§2）
 ```
 
 - **書くのは 1 か所**：リマインド・候補の台帳・タスク DB を書くのは Bot のプロセスだけ。連携口はジョブを受け付けて、結果を読むだけ。
 - **連携口は遅い記憶装置に触れない**：リマインドの保存先がネットワーク上のドライブにある構成では、ドライブが止まると同じプロセスのタスク API まで止まる。そこで、リマインドの一覧と件数は、Bot がジョブ表の `reminder_snapshot` に書き出した写し（30 秒ごとと、変更の直後）から返す。候補の台帳（ローカルの SQLite）は読み取り専用（`mode=ro`）で読む。
 - **連携口がタスク API を巻き込まない**：待つルート（§3-3 の「最大 8 秒待つ」）は同時に 4 本まで（超えたら待たずに 202）。進み具合の問い合わせ（2〜3 秒ごと）での委員の確認はキャッシュから返し、Discord を呼ばない（キャッシュが切れたときだけ 1 回）。
 - Discord との同期は「Bot が実行して Discord に出す」ことで成り立たせる。アプリだけに残るものは作らない（ask・doc は共有用のチャンネル、リマインドは Discord の通知、候補は元の投稿の書き換え）。
+  - 例外（2026-11-21）：`[assistant] post_to_discord = false` のとき、ask・doc・image は共有用のチャンネルに出さない。結果はアプリの「最近の依頼」（委員全員分・§3-3）に残り、`history_dir` を設定すれば Bot が共有ドライブ（`_目録/Bot履歴/`）へ月ごとに書き出す（`history_export.py`）。タスク候補の `post_to_discord = false`（2026-11-20）と同じ考え方。リマインドの通知と、アプリからの個人あての知らせ（DM が届かない人へのメンション）は、届けることが目的なので変えない。
 - Bot が止まっていると、ジョブは `queued` のまま。アプリは「Bot が応答していません」と出す（§3-3 の `bot` 欄）。
 - 画像の作成（`image`）は型に残しているが、いまの Bot は使えない（`features.image=false` を返し、`image_enabled = true` では起動しない）。
 - 「似た質問」は、アプリから出した質問だけが対象（Discord の `/ask` の履歴は含まない。§7）。
@@ -44,7 +46,12 @@ reminder_channel_ids = [1000000000000000001, 1000000000000000002]   # アプリ�
 poll_sec = 2
 image_enabled = false
 max_active_per_user = 3                        # 受付中と実行中の ask・doc の上限（1 人あたり）
+post_to_discord = true                         # false: ask・doc・image を share_channel_id に投稿しない（2026-11-21）
+history_dir = "/home/<user>/iyakusai/<ドライブ>/_目録/Bot履歴"   # 省略可。ask・doc・image の履歴の書き出し先
 ```
+
+- `post_to_discord`：既定は `true`（今までどおり投稿する）。真偽値でない値は起動で止める。`false` でも `share_channel_id` は必須（依頼者のメンバー情報と権限を、このチャンネルで確かめるため。見えなければ今までどおり `UNAVAILABLE`）。`false` のとき、`/assistant/meta` の `shareChannel` は `null`（アプリは「#… にも投稿されます」を出さない）、ジョブの `discordUrl` も `null`。画像の SVG はどこにも残らない（PNG だけがジョブ表に残る）。
+- `history_dir`：Bot が 10 分ごとに、完了・失敗した ask・doc・image を `YYYY-MM.md`（人が読む）・`YYYY-MM.jsonl`（1 行 1 依頼）・`files/<ジョブ>/`（生成物の写し）に書き出す。新しく終わった依頼がある月だけを作り直す。taskdraft（本人だけが読む）・remind・screening・取り消しは入れない。依頼者は表示名だけ（Discord の ID は書かない）。親フォルダが見えないとき（ドライブのマウントが外れたとき）は書かない。カーソルはジョブ表の隣（`<store_path>.history-export.json`）。手で流すときは `python -m iyakusai_bot.history_export --store … --files … --out … [--full]`。置き場は Bot の検索ミラー（`mirror.py` の `PLAIN_GLOBS`・`MSG_GLOBS`）に入らないので、Bot が自分の過去の答えを資料として読むことはない（#bottest の収集分は今も読む）。
 
 - `[assistant] enabled = false` か節が無ければ、Cog を読み込まない（従来どおりの Bot）。連携口は 404 を返す。
 - タスク API の設定（JSON）に `assistant_enabled: true` を足すと、連携口が有効になる（無ければ 404）。

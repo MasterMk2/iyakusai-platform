@@ -196,6 +196,35 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             C.load_config(self.write(self.assistant_block(store, files, image_enabled='"yes"')))
 
+    def test_post_to_discord_defaults_on_and_rejects_non_booleans(self):
+        # 2026-11-21: false でアプリ発の ask/doc/image を #bottest に出さない。"false" の文字列は真に読めるので止める
+        store = (self.dir / "ops" / "j.sqlite3").as_posix()
+        files = (self.dir / "ops" / "f").as_posix()
+        self.assertTrue(C.load_config(self.write(self.assistant_block(store, files))).assistant.post_to_discord)
+        cfg = C.load_config(self.write(self.assistant_block(store, files, post_to_discord="false")))
+        self.assertFalse(cfg.assistant.post_to_discord)
+        with self.assertRaises(SystemExit):
+            C.load_config(self.write(self.assistant_block(store, files, post_to_discord='"false"')))
+
+    def test_history_dir_is_optional_and_may_sit_in_the_shared_data(self):
+        store = (self.dir / "ops" / "j.sqlite3").as_posix()
+        files = (self.dir / "ops" / "f").as_posix()
+        self.assertIsNone(C.load_config(self.write(self.assistant_block(store, files))).assistant.history_dir)
+        history = (self.data / "Bot履歴").as_posix()   # 共有ドライブ(_目録)の中に置く想定
+        cfg = C.load_config(self.write(self.assistant_block(store, files, history_dir=f'"{history}"')))
+        self.assertEqual(cfg.assistant.history_dir.as_posix(), history)
+        bad = [
+            '"relative/Bot履歴"',                                        # 相対パス
+            '""',                                                        # 空
+            "1",                                                         # 文字列でない
+            f'"{(self.dir / "ops").as_posix()}"',                        # ジョブ表の置き場そのもの
+            f'"{(self.dir / "ops" / "f" / "history").as_posix()}"',      # 生成物の置き場の中
+        ]
+        for value in bad:
+            with self.subTest(value=value):
+                with self.assertRaises(SystemExit):
+                    C.load_config(self.write(self.assistant_block(store, files, history_dir=value)))
+
     def image_block(self, **overrides):
         values = {"enabled": "true", "font_dir": f'"{(self.dir / "fonts").as_posix()}"',
                   "work_dir": f'"{(self.dir / "image-work").as_posix()}"'}

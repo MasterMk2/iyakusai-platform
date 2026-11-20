@@ -36,6 +36,10 @@ class AssistantSettings:
     max_active_per_user: int = 3
     # アプリの「画像」(2026-10-14 再開)。true でも [image] が有効で /image が使える構成のときだけ受ける
     image_enabled: bool = False
+    # false(2026-11-21): アプリ発の ask/doc/image を #bottest に投稿しない。結果はジョブ表(アプリの履歴)に残る
+    post_to_discord: bool = True
+    # ジョブ表の ask/doc/image を書き出す共有ドライブの置き場(例: _目録/Bot履歴)。無ければ書き出さない
+    history_dir: Path | None = None
 
 
 @dataclass
@@ -200,7 +204,7 @@ def _as_float(value, where: str, default: float) -> float:
 # ---- 統合アプリの「Bot」タブ(2026-10-14 追加)----
 
 _ASSISTANT_KEYS = {"enabled", "store_path", "files_dir", "share_channel_id", "reminder_channel_ids",
-                   "poll_sec", "image_enabled", "max_active_per_user"}
+                   "poll_sec", "image_enabled", "max_active_per_user", "post_to_discord", "history_dir"}
 
 
 def _as_bool(value, where: str, default: bool) -> bool:
@@ -261,6 +265,21 @@ def _assistant_settings(raw: dict, roots) -> AssistantSettings:
     channels = section.get("reminder_channel_ids")
     if not isinstance(channels, list) or not channels:
         sys.exit("config: assistant.reminder_channel_ids は ID の配列(1件以上・先頭が既定)で指定してください")
+    history_raw = section.get("history_dir")
+    history_dir = None
+    if history_raw is not None:
+        # 書き出し先は共有ドライブ(_目録 の中)を想定するので _outside_shared は掛けない。ジョブ表・生成物の
+        # 置き場と同じ場所は、書き出しが元を上書きしうるので受け付けない。
+        if not isinstance(history_raw, str) or not history_raw.strip():
+            sys.exit("config: assistant.history_dir は絶対パスの文字列で指定してください")
+        history_dir = Path(history_raw.strip()).expanduser()
+        if not history_dir.is_absolute():
+            sys.exit("config: assistant.history_dir は絶対パスで指定してください")
+        resolved = history_dir.resolve()
+        for key in ("store_path", "files_dir"):
+            local = paths[key] if key == "files_dir" else paths[key].parent
+            if resolved == local or local in resolved.parents or resolved in local.parents:
+                sys.exit(f"config: assistant.history_dir は assistant.{key} の置き場と分けてください")
     # 画像は 2026-10-14 夜に Claude の SVG 方式で再開(Gemini は使わない)。[image] が無効なら
     # true でも画像の依頼は受けてすぐ「使えない」で返す(assistant_cog が Images の有無を見る)。
     return AssistantSettings(
@@ -273,6 +292,8 @@ def _assistant_settings(raw: dict, roots) -> AssistantSettings:
         max_active_per_user=_bounded_int(section.get("max_active_per_user"),
                                          "assistant.max_active_per_user", 1, 10, 3),
         image_enabled=_as_bool(section.get("image_enabled"), "assistant.image_enabled", False),
+        post_to_discord=_as_bool(section.get("post_to_discord"), "assistant.post_to_discord", True),
+        history_dir=history_dir,
     )
 
 
