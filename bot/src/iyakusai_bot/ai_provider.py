@@ -84,11 +84,10 @@ def _yen(v: float) -> str:
 
 def _billing_line() -> str:
     if ROUTING["provider"] == "opencode_go":
-        mid = ROUTING["aliases"].get("opus") or ""
-        name = f"{_MODEL_LABELS.get(mid, mid)}({mid})" if mid else "Go のモデル"
+        # モデル名は書かない(Go のモデルは設定 1 つで切り替わり、起動時に作るこの文は古くなるため)。
         return (f"OpenCode Go(月額${GO_PLAN_USD:.0f}の定額。使った分は Go の月の枠から引かれ、"
-                f"枠を使い切ると止まる。追加の請求は無い)経由の {name} で動く。"
-                "委員会のサーバー(VPS)で常駐(運用はシステム課)。")
+                "枠を使い切ると止まる。追加の請求は無い)経由の AI で動く。使うモデルは委員会の判断で切り替わる"
+                "(今のモデル名は回答の下の model: に出る)。委員会のサーバー(VPS)で常駐(運用はシステム課)。")
     return "ホストPCで常駐し、AI(Claude)を呼んで答える(運用はシステム課)。"
 
 
