@@ -49,7 +49,8 @@ export function findings(d: SystemStatusResponse): { level: SystemLevel; text: s
       level: disk.level,
       text:
         disk.freeBytes < SYSTEM_DISK_RESERVE_BYTES
-          ? `ディスク（${disk.label}）の空きが ${bytesLabel(disk.freeBytes)} しかない（議事録の録音を取り込めません）`
+          ? // The minutes keep their recordings with the data: only that disk refuses them.
+            `ディスク（${disk.label}）の空きが ${bytesLabel(disk.freeBytes)} しかない${disk.label.includes('データ') ? '（議事録の録音を取り込めません）' : ''}`
           : `ディスク（${disk.label}）の使用率が高い（${percentLabel(disk.usedPercent)}）`,
     });
   }

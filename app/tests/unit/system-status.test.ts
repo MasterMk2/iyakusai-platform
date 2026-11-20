@@ -192,4 +192,20 @@ describe('the real machine', () => {
     expect(disk?.totalBytes).toBeGreaterThan(0);
     expect(probe.disk('/surely/not/a/folder/here')).toBeNull();
   });
+
+  // The server runs Linux (in a container): /proc and the load average are read there, and CI runs this on Linux.
+  it.runIf(process.platform === 'linux')('reads /proc and the load average on Linux', async () => {
+    const probe = realProbe();
+    const memory = probe.memory();
+    expect(memory?.totalBytes).toBeGreaterThan(0);
+    expect(memory!.availableBytes).toBeGreaterThan(0);
+    expect(memory!.availableBytes).toBeLessThanOrEqual(memory!.totalBytes);
+    expect(probe.loadavg()).toHaveLength(3);
+    expect(probe.cpuTimes()?.total).toBeGreaterThan(0);
+    expect(probe.uptimeSeconds()).toBeGreaterThan(0);
+    const status = await new SystemStatus({ disks: [{ label: 'データ', paths: [tmpdir()] }] }).read();
+    expect(status.cpu.percent).not.toBeNull();
+    expect(status.memory?.usedPercent).toBeGreaterThanOrEqual(0);
+    expect(status.disks).toHaveLength(1);
+  });
 });
