@@ -8,5 +8,6 @@
   "approvedForumId": "100000000000000006",
   "storeDirectory": "/home/<RELAY_USER>/iyakusai/line-oa-store/events",
   "legacyOrganizationIds": ["oa_example_a1b2", "oa_sample_c3d4"],
-  "internalSourceFingerprints": ["000000000000"]
+  "internalSourceFingerprints": ["000000000000"],
+  "threadMapFile": "/home/<RELAY_USER>/app/config/line-threads/threads.json"
 }

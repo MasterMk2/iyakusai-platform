@@ -22,6 +22,8 @@ _KEYS = frozenset({
     "adminBotExceptionId", "approvedForumId", "storeDirectory",
     "legacyOrganizationIds", "internalSourceFingerprints",
 })
+# Optional. Absent means the relay writes no Discord thread map for the app.
+_OPTIONAL_KEYS = frozenset({"threadMapFile"})
 
 
 class SiteRefused(RuntimeError):
@@ -45,10 +47,14 @@ def _matching(values, pattern, limit):
 def parse_site(raw):
     """Validate a decoded site object; raises SiteRefused on any deviation."""
     try:
-        if type(raw) is not dict or set(raw) != _KEYS:
+        if type(raw) is not dict or not _KEYS <= set(raw) <= _KEYS | _OPTIONAL_KEYS:
             raise ValueError
         store = raw["storeDirectory"]
         if type(store) is not str or not store.startswith("/") or "\x00" in store:
+            raise ValueError
+        thread_map = raw.get("threadMapFile")
+        if "threadMapFile" in raw and (type(thread_map) is not str or not thread_map.startswith("/")
+                                       or thread_map.endswith("/") or "\x00" in thread_map):
             raise ValueError
         site = {
             "guild": _snowflake(raw["guildId"]),
@@ -61,6 +67,7 @@ def parse_site(raw):
             "store": Path(store),
             "legacy_organizations": _matching(raw["legacyOrganizationIds"], _ORGANIZATION, 64),
             "internal_source_fingerprints": _matching(raw["internalSourceFingerprints"], _FINGERPRINT, 64),
+            "thread_map_file": Path(thread_map) if thread_map is not None else None,
         }
         singles = [site[name] for name in ("guild", "bot", "category", "myline_forum", "admin_bot_exception", "approved_forum")]
         if len(set(singles)) != len(singles) or site["committee_roles"] & set(singles) - {site["guild"]}:

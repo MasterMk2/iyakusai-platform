@@ -59,6 +59,15 @@ class RelaySiteTests(unittest.TestCase):
             with self.subTest(change=sorted(change)):
                 self.refused(json.dumps({**self.example, **change}))
 
+    def test_thread_map_file_is_optional(self):
+        site = load(json.dumps(self.example)).SITE
+        self.assertEqual(str(site["thread_map_file"]), self.example["threadMapFile"])
+        without = {k: v for k, v in self.example.items() if k != "threadMapFile"}
+        self.assertIsNone(load(json.dumps(without)).SITE["thread_map_file"])
+        for value in ["relative/threads.json", "/var/lib/map/", "", 7, None]:
+            with self.subTest(value=value):
+                self.refused(json.dumps({**self.example, "threadMapFile": value}))
+
     def test_unknown_or_missing_keys_are_refused(self):
         self.refused(json.dumps({**self.example, "debug": True}))
         self.refused(json.dumps({k: v for k, v in self.example.items() if k != "approvedForumId"}))
