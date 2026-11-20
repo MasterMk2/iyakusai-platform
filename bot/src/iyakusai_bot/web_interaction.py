@@ -12,6 +12,9 @@ user・guild・channel・message・permissions。WebInteraction はその形だ�
 - 2 通目以降の followup = 同じチャンネルの新しい投稿。
 - ephemeral(本人だけ)の送信は**投稿しない**。本文だけ覚えておく(候補の返事を結果に使うため)。
 - 進捗の文(ProgressReporter の描画)は回答の本文に含めず、on_progress へ渡す(job.progress)。
+- post=False(2026-11-21・[assistant] post_to_discord = false): Discord には何も出さない。元の応答の
+  編集も followup の投稿もせず、本文・添付・進捗を覚えるだけ(結果はジョブ表からアプリへ)。
+  channel は権限の判定(permissions)と guild のために持ち続ける。
 """
 
 from __future__ import annotations
@@ -119,8 +122,10 @@ class WebInteraction:
     def __init__(self, *, interaction_id: str, user, channel, guild=None, message=None,
                  original: discord.Message | None = None,
                  on_progress: Callable[[str, str], Awaitable[None]] | None = None,
-                 clock: Callable[[], float] = time.monotonic, header: str | None = None):
+                 clock: Callable[[], float] = time.monotonic, header: str | None = None,
+                 post: bool = True):
         self._id = interaction_id
+        self.post = post   # False: Discord に投稿・編集しない(覚えるだけ)
         # 元の応答の先頭に付け直す 1 行(「📱 アプリから … さんの質問」)。進捗と回答で書き換えても、
         # #bottest で誰の質問か分かるように残す(Discord の /ask の「◯◯ が /ask を使用」に当たる)。
         self._header = header
@@ -179,6 +184,8 @@ class WebInteraction:
             self._capture_files(files)
         else:
             await self._report_progress(str(content))
+        if not self.post:
+            return None   # 投稿しない: 覚えた本文・添付・進捗だけで結果を作る
         if self.original is None:
             raise WebUnsupported("元の応答がありません")
         shown = content
@@ -205,6 +212,8 @@ class WebInteraction:
         self._capture_files(files)
         if content:
             self.parts.append(str(content))
+        if not self.post:
+            return None
         send = {"allowed_mentions": kwargs.get("allowed_mentions", _NO_MENTIONS)}
         if files:
             send["files"] = files

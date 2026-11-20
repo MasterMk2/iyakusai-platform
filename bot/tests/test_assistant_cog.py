@@ -885,5 +885,126 @@ class WebJobPermissionTests(AssistantCase):
         self.assertEqual((folder / "【AI】2-報告.md").read_bytes(), "新".encode("utf-8"))
 
 
+class QuietShareTests(ImageEnabledTests):
+    """[assistant] post_to_discord = false(2026-11-21): アプリ発の ask/doc/image を #bottest に出さない。
+
+    結果はジョブ表に残り(アプリの「最近の依頼」)、ドライブへの書き出し(history_export)が記録を受け持つ。
+    """
+
+    def settings(self):
+        settings = super().settings()
+        settings.post_to_discord = False
+        return settings
+
+    def ask_input(self):
+        return {"question": "発電機のレンタルは?", "model": "auto", "effort": "auto", "tone": None, "format": None}
+
+    def test_ask_answers_without_posting_and_keeps_the_progress(self):
+        async def go():
+            provider = FakeProvider()
+            seen = []
+            provider.probe = lambda: seen.append(self.store.get(job.id).progress)
+            self.bot.cfg = SimpleNamespace(ai_progress=True, ai_progress_interval_sec=0.05, mirror_dir=None,
+                                           ai_agent_model="sonnet", ai_agent_effort="")
+            self.bot.cogs["Knowledge"] = Knowledge(self.bot, FakeKB(), provider, None, 160.0, None, None)
+            cog = self.cog()
+            job = self.job("ask", self.ask_input())
+            await cog._run(self.store.claim_next(("ask",)), "ask_doc")
+            return job, seen
+        job, seen = asyncio.run(go())
+        done = self.store.get(job.id)
+        self.assertEqual(done.state, "done", done.error_message)
+        self.assertIn("発電機は3台です。", done.result["text"])
+        self.assertNotIn("📱 アプリから", done.result["text"])
+        self.assertEqual(self.share.sent, [])          # 見出しも回答も出さない
+        self.assertIsNone(done.discord_url)            # アプリは「Discord で見る」を出さない
+        self.assertTrue(seen and seen[0] and seen[0]["phase"] in PHASE_LABELS)   # 進捗はジョブ表へ
+        self.assertNotIn("発電機は3台", seen[0]["text"])
+
+    def test_doc_keeps_the_file_without_posting(self):
+        async def go():
+            self.bot.cogs["Documents"] = Documents(self.bot, FakeKB(), FakeProvider(), None, 160.0)
+            cog = self.cog()
+            job = self.job("doc", {"docType": "request", "content": "発電機の見積依頼", "format": "docx",
+                                   "useSources": True, "model": "auto"})
+            await cog._run(self.store.claim_next(("doc",)), "ask_doc")
+            return job
+        job = asyncio.run(go())
+        done = self.store.get(job.id)
+        self.assertEqual(done.state, "done", done.error_message)
+        self.assertEqual(self.share.sent, [])
+        self.assertIsNone(done.discord_url)
+        self.assertIn("本文です。", done.result["text"])
+        registered = self.store.get_file(job.id, done.result["files"][0]["name"])
+        self.assertTrue((self.dir / "files" / registered["relpath"]).is_file())
+
+    def test_image_job_posts_to_the_share_channel_and_returns_only_the_png(self):
+        # 親の「投稿する」試験の代わり: 投稿せずに PNG だけを返す
+        cog, _ = self.enabled_cog()
+        job = self.job("image", {"prompt": "模擬店の値段表", "aspect": "9:16"})
+        self.run_all(cog)
+        done = self.store.get(job.id)
+        self.assertEqual(done.state, "done", done.error_message)
+        self.assertEqual([f["name"] for f in done.result["files"]], ["【AI】image.png"])
+        self.assertEqual(self.share.sent, [])
+        self.assertIsNone(done.discord_url)
+        self.assertIn("模擬店の値段表", done.result["text"])
+
+    def test_capabilities_have_no_share_channel(self):
+        cog, _ = self.enabled_cog()
+        asyncio.run(cog.publish_state())
+        capabilities = json.loads(self.store.get_meta("capabilities"))
+        self.assertIsNone(capabilities["shareChannel"])   # アプリは「#… にも投稿されます」を出さない
+        self.assertEqual(capabilities["reminderChannels"][0]["name"], "内務部")   # リマインドの通知先は今までどおり
+
+    def test_without_the_share_channel_the_request_still_fails_as_before(self):
+        # 共有先は依頼者の権限・サーバーの判定に使い続ける。見えなければ今までどおり UNAVAILABLE
+        del self.bot.channels[SHARE]
+
+        async def go():
+            self.bot.cogs["Knowledge"] = Knowledge(self.bot, FakeKB(), FakeProvider(), None, 160.0, None, None)
+            cog = self.cog()
+            job = self.job("ask", self.ask_input())
+            await cog._run(self.store.claim_next(("ask",)), "ask_doc")
+            return self.store.get(job.id)
+        failed = asyncio.run(go())
+        self.assertEqual((failed.state, failed.error_code), ("failed", "UNAVAILABLE"))
+
+    def test_remind_confirmation_is_still_posted(self):
+        # 投稿を止めるのはアプリ発の ask/doc/image だけ。リマインドの確認は通知先に出る
+        cog = self.cog()
+        self.job("remind", L.remind_create_input({"text": "資料提出", "due": "2030-01-05T18:00+09:00",
+                                                  "targetId": f"discord-{TARGET}"}), op="create")
+        asyncio.run(cog._run(self.store.claim_next(("remind",)), None))
+        self.assertEqual(len(self.remind.sent), 1)
+
+    def test_history_is_exported_to_the_drive_folder(self):
+        drive = self.dir / "drive" / "_目録"
+        drive.mkdir(parents=True)
+        settings = self.settings()
+        settings.history_dir = drive / "Bot履歴"
+
+        async def go():
+            self.bot.cogs["Documents"] = Documents(self.bot, FakeKB(), FakeProvider(), None, 160.0)
+            cog = AC.Assistant(self.bot, settings, self.store, reminders=self.reminders)
+            job = self.job("doc", {"docType": "report", "content": "発電機の報告", "format": "md",
+                                   "useSources": False, "model": "auto"})
+            await cog._run(self.store.claim_next(("doc",)), "ask_doc")
+            first = await cog.export_history()
+            second = await cog.export_history()
+            return job, first, second
+        job, first, second = asyncio.run(go())
+        self.assertEqual(first["jobs"], 1)
+        self.assertEqual(first["files_copied"], 1)
+        self.assertEqual(second["months"], [])          # 新しく終わった依頼が無ければ書かない
+        month = job.created_at[:7]
+        text = (settings.history_dir / f"{month}.md").read_text("utf-8")
+        self.assertIn("文書(報告書) — テスト委員", text)
+        self.assertIn("> 発電機の報告", text)
+        copied = list((settings.history_dir / "files" / job.id).iterdir())
+        self.assertEqual(len(copied), 1)
+        self.assertTrue(copied[0].name.startswith("【AI】"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -38,7 +38,7 @@ Bot の投稿の箇所は、`grep` で `.send(`・`send_message`・`channel.send
 | `reminder`（アプリ発） | アプリで登録・完了・削除したリマインドの確認の投稿 | 依頼で選んだ通知先（`assistant.reminder_channel_ids`） | いいえ | `assistant_cog.py` の `_remind_create`・`_remind_change` |
 | `haiku_digest` | 俳句の転記（`haiku.mode` が `digest` / `both`） | `haiku.channel_id` | はい | `haiku.py` の `_target_channel` |
 | `collect_staleness` | 収集の遅れの知らせ（1 日 1 回） | `collect.staleness_channel_id` | はい | `collector.py` |
-| `app_share` | 統合アプリ発の依頼（/ask・/doc・画像）の投稿と結果 | `assistant.share_channel_id`（#bottest） | はい | `assistant_cog.py` の `_share_channel`・`web_interaction.py` |
+| `app_share` | 統合アプリ発の依頼（/ask・/doc・画像）の投稿と結果。`[assistant] post_to_discord = false` のときは投稿しない（2026-11-21。結果はアプリの「最近の依頼」と、`history_dir` を設定すれば共有ドライブの `_目録/Bot履歴/`） | `assistant.share_channel_id`（#bottest） | はい | `assistant_cog.py` の `_share_channel`・`_header`・`web_interaction.py` |
 | `app_notice` | 統合アプリからの個人あての知らせ（メールの承認依頼など）のうち、DM を受け取らない人へのメンション。DM で届いた人の分は投稿しない | `assistant.share_channel_id`（#bottest） | はい | `assistant_cog.py` の `_notice`・`_notice_channel` |
 
 ### 対象外（送り先を変えない）

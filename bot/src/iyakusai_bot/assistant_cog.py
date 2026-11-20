@@ -10,6 +10,11 @@ Pi の連携口(gateway)が受けたジョブを、poll_sec ごとに claim し�
   Discord には投稿しない(依頼した本人だけが結果を読む。起票はアプリが既存のタスク作成で行う)。
   [assistant] image_enabled が false か、Images が使えない(未設定・点検失敗)ときは受けて即 IMAGE_DISABLED。
 - reminder_snapshot / capabilities / heartbeat: 連携口が読む写しを 30 秒ごと・変更の直後に書く。
+- post_to_discord = false(2026-11-21): ask / doc / image を #bottest に投稿しない。結果はジョブ表に残り、
+  アプリの「最近の依頼」(委員全員分)で読める。共有先のチャンネルは、依頼者の権限・サーバーの判定のために
+  引き続き使う(見えなければ今までどおり UNAVAILABLE)。capabilities の shareChannel は null にする。
+- history_dir があれば、ask / doc / image の履歴を history_export でドライブへ書き出す(HISTORY_MIN 分ごと)。
+  依頼の処理とは別の周期で、書き出しの失敗・遅れは依頼に影響しない。
 
 並行数: ask/doc/taskdraft は 2 本まで(Knowledge の同時実行枠と CLI の上限はそのまま効く)。image は 1 本
 (1 枚に数十秒〜数分かかり、AI の枠と Pi のメモリを /ask と分け合うため)。remind/screening は軽いので、
@@ -34,6 +39,7 @@ from discord.ext import commands, tasks
 from . import access as A
 from . import access_check
 from . import assistant_logic as L
+from . import history_export
 from . import remind_logic as rl
 from . import taskdraft_logic as TD
 from . import write_guard
@@ -51,6 +57,7 @@ ASK_DOC_LANES = 2
 IMAGE_LANES = 1
 SNAPSHOT_SEC = 30
 MEMBER_INDEX_SEC = 600
+HISTORY_MIN = 10   # ドライブへの履歴の書き出しの周期(分)
 USER_FAILURE = "⚠ 処理中に想定外のエラーが発生しました。少し待ってから、もう一度依頼してください。"
 DOC_TYPE_LABELS = {
     "request": ("依頼文(対外)", "依頼文(学外の企業・団体宛)"),
@@ -117,7 +124,9 @@ class Assistant(commands.Cog):
         self._started = False
         self._snapshot_at: float | None = None
         self._names: dict[int, tuple[float, str]] = {}   # 表示名のキャッシュ(""=サーバーにいない)
+        self._history_running = False
         self.poll.change_interval(seconds=settings.poll_sec)
+        self.history.change_interval(minutes=HISTORY_MIN)
 
     @property
     def image_enabled(self) -> bool:
@@ -125,11 +134,19 @@ class Assistant(commands.Cog):
         images = self.bot.get_cog("Images")
         return bool(self.settings.image_enabled and images is not None and images.available())
 
+    @property
+    def posts(self) -> bool:
+        """アプリ発の ask / doc / image を #bottest に投稿するか([assistant] post_to_discord)。"""
+        return bool(getattr(self.settings, "post_to_discord", True))
+
     async def cog_load(self):
         self.poll.start()
+        if getattr(self.settings, "history_dir", None) is not None:
+            self.history.start()
 
     async def cog_unload(self):
         self.poll.cancel()
+        self.history.cancel()
         for task in list(self._jobs):
             task.cancel()
 
@@ -154,6 +171,33 @@ class Assistant(commands.Cog):
     @poll.before_loop
     async def _before_poll(self):
         await self.bot.wait_until_ready()
+
+    @tasks.loop(minutes=HISTORY_MIN)
+    async def history(self):
+        """ask / doc / image の履歴をドライブへ書き出す。失敗はログだけ(次の周期で続きから)。"""
+        try:
+            await self.export_history()
+        except Exception as error:  # noqa: BLE001  ループを止めない
+            log.warning("履歴の書き出しで想定外の失敗(次の周期で再試行): %s", type(error).__name__)
+
+    async def export_history(self) -> dict | None:
+        """1 回分の書き出し。前の回がまだ終わっていなければ(ドライブが固まっているなど)何もしない。"""
+        if self._history_running or self.settings.history_dir is None:
+            return None
+        self._history_running = True
+        try:
+            stats = await asyncio.to_thread(
+                history_export.export, self.settings.store_path, self.files_dir, self.settings.history_dir,
+                history_export.state_path_for(self.settings.store_path))
+        except history_export.ExportError as error:
+            log.warning("履歴の書き出しに失敗(次の周期で再試行): %s", error)
+            return None
+        finally:
+            self._history_running = False
+        if stats["months"]:
+            log.info("履歴の書き出し: %d か月分・%d 件・ファイル %d", len(stats["months"]), stats["jobs"],
+                     stats["files_copied"])
+        return stats
 
     async def _claim(self) -> None:
         # 軽い依頼(remind/screening と、使えないときの image の即失敗)は受けた順に即実行
@@ -301,7 +345,14 @@ class Assistant(commands.Cog):
 
         return WebInteraction(interaction_id=job.id, user=user, channel=channel,
                               guild=getattr(channel, "guild", None), original=original,
-                              on_progress=progress, header=getattr(original, "content", None))
+                              on_progress=progress, header=getattr(original, "content", None),
+                              post=self.posts)
+
+    async def _header(self, channel, text: str):
+        """#bottest の見出し(「📱 アプリから … さんの質問」)。投稿しない設定なら出さずに None。"""
+        if not self.posts:
+            return None
+        return await channel.send(text, allowed_mentions=discord.AllowedMentions.none())
 
     # ---- ask / doc ----
 
@@ -311,8 +362,7 @@ class Assistant(commands.Cog):
             raise JobError("UNAVAILABLE", "資料検索(/ask)は現在使えません。")
         channel = self._share_channel()
         user = await self._actor(channel.guild, job)
-        header = await channel.send(f"📱 アプリから {job.actor_name} さんの質問",
-                                    allowed_mentions=discord.AllowedMentions.none())
+        header = await self._header(channel, f"📱 アプリから {job.actor_name} さんの質問")
         adapter = self._adapter(job, user, channel, header)
         inp = job.input
         fmt = app_commands.Choice(name=inp["format"], value=inp["format"]) if inp.get("format") else None
@@ -324,7 +374,7 @@ class Assistant(commands.Cog):
         if not text.strip() and not adapter.files:
             raise JobError("NO_ANSWER", adapter.ephemeral_text() or "回答を作れませんでした。時間をおいて再実行してください。")
         files = await asyncio.to_thread(self._persist, job.id, [(f.name, f.data) for f in adapter.files])
-        return {"text": text, "files": files}, header.jump_url
+        return {"text": text, "files": files}, _jump_url(header)
 
     async def _do_doc(self, job: Job) -> tuple[dict, str | None]:
         documents = self.bot.get_cog("Documents")
@@ -332,8 +382,7 @@ class Assistant(commands.Cog):
             raise JobError("UNAVAILABLE", "文書の起草(/doc)は現在使えません。")
         channel = self._share_channel()
         user = await self._actor(channel.guild, job)
-        header = await channel.send(f"📱 アプリから {job.actor_name} さんの文書作成",
-                                    allowed_mentions=discord.AllowedMentions.none())
+        header = await self._header(channel, f"📱 アプリから {job.actor_name} さんの文書作成")
         adapter = self._adapter(job, user, channel, header)
         inp = job.input
         label, value = DOC_TYPE_LABELS[inp["docType"]]
@@ -346,7 +395,7 @@ class Assistant(commands.Cog):
         files = await asyncio.to_thread(self._persist, job.id, [(f.name, f.data) for f in adapter.files])
         body = _document_body(inp["format"], adapter.files[0].data)
         text = adapter.answer_text() + (f"\n\n{body}" if body else "")
-        return {"text": text, "files": files}, header.jump_url
+        return {"text": text, "files": files}, _jump_url(header)
 
     # ---- image(Claude が SVG で描く・2026-10-14 夜に再開) ----
 
@@ -360,8 +409,7 @@ class Assistant(commands.Cog):
                                     "明日また使ってください。")
         channel = self._share_channel()
         user = await self._actor(channel.guild, job)
-        header = await channel.send(f"📱 アプリから {job.actor_name} さんの画像",
-                                    allowed_mentions=discord.AllowedMentions.none())
+        header = await self._header(channel, f"📱 アプリから {job.actor_name} さんの画像")
         adapter = self._adapter(job, user, channel, header)
         inp = job.input
         aspect = app_commands.Choice(name=inp["aspect"], value=inp["aspect"])
@@ -371,9 +419,10 @@ class Assistant(commands.Cog):
         if not pngs:
             raise JobError("NO_ANSWER", adapter.ephemeral_text() or adapter.answer_text()
                            or "画像を作れませんでした。時間をおいて再実行してください。")
-        # 配るのは PNG だけ(SVG は #bottest の投稿に付いている。アプリでは配らない型)
+        # 配るのは PNG だけ(SVG は #bottest の投稿に付いている。アプリでは配らない型)。
+        # post_to_discord = false のときは SVG はどこにも残らない(PNG が成果物。2026-11-21)
         files = await asyncio.to_thread(self._persist, job.id, [(f.name, f.data) for f in pngs])
-        return {"text": adapter.answer_text(), "files": files}, header.jump_url
+        return {"text": adapter.answer_text(), "files": files}, _jump_url(header)
 
     # ---- remind ----
 
@@ -715,10 +764,11 @@ class Assistant(commands.Cog):
             "maxActivePerUser": self.settings.max_active_per_user,
             "reminderChannels": [{"id": str(cid), "name": getattr(self._channel(cid), "name", "不明")}
                                  for cid in self.settings.reminder_channel_ids],
-            # 実際に投稿する先の id(上書き時は [notify] の app_share。無ければ従来の共有先と同じ)
+            # 実際に投稿する先の id(上書き時は [notify] の app_share。無ければ従来の共有先と同じ)。
+            # 投稿しない設定(post_to_discord = false)なら null = アプリは「#… にも投稿されます」を出さない
             "shareChannel": ({"id": str(getattr(share, "id", self.settings.share_channel_id)),
                               "name": getattr(share, "name", "不明")}
-                             if share is not None else None),
+                             if share is not None and self.posts else None),
             "updatedAt": rl.now_jst().isoformat(timespec="seconds"),
         }
         await asyncio.to_thread(self.store.set_meta, "capabilities", json.dumps(capabilities, ensure_ascii=False))
@@ -753,6 +803,11 @@ class Assistant(commands.Cog):
                                 hashlib.sha256(data).hexdigest(), f"{job_id}/{name}")
             saved.append({"name": name, "mime": mime, "size": len(data)})
         return saved
+
+
+def _jump_url(header) -> str | None:
+    """#bottest の見出しへのリンク。投稿しない設定(見出しが None)なら None(アプリはリンクを出さない)。"""
+    return getattr(header, "jump_url", None) if header is not None else None
 
 
 def _document_body(fmt: str, data: bytes) -> str:

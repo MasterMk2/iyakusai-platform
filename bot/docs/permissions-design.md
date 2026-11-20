@@ -53,7 +53,8 @@ Bot は 3 つの経路で動く。(a) Discord のスラッシュコマンドと�
 | 操作 | 経路 | 外への広がり | 人の確認 |
 |---|---|---|---|
 | Discord のチャンネルへの投稿（`/ask`・`/doc`・`/mail` の結果） | スラッシュコマンド（ephemeral 指定はなく、公開の応答） | そのチャンネルの全員 | なし |
-| 共有用チャンネルへの投稿（統合アプリの `ask`・`doc`・`image` の依頼） | `assistant_cog.py`（`share_channel_id`） | `#` 共有チャンネルの全員 | なし |
+| 共有用チャンネルへの投稿（統合アプリの `ask`・`doc`・`image` の依頼） | `assistant_cog.py`（`share_channel_id`） | `#` 共有チャンネルの全員。`post_to_discord = false`（2026-11-21）なら投稿しない | なし |
+| 共有ドライブへの履歴の書き出し（統合アプリの `ask`・`doc`・`image`） | `history_export.py`（`[assistant] history_dir`） | 共有ドライブ（`_目録/Bot履歴/`）を読める人。#bottest の収集（`_目録/discord/raw/`）と同じ範囲 | なし |
 | 文書・メールの草案（ファイル添付） | `/doc`・`/mail`（`documents.py`） | 依頼者への返信。草案はそのまま外で使える | 人が貼り付けて送る（Bot は送信しない） |
 | 画像（PNG と SVG） | `/image`（`images.py`） | チャンネルに投稿 | なし。1 人 1 日の上限あり |
 | ネタ動画 | `/ネタ動画`（`neta_video.py`） | 本人に返す | なし |
