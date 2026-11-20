@@ -10,8 +10,9 @@
   生成物の写し `files/<ジョブ>/<名前>`、説明の `README.md` を作る。月の 2 つは、その月に新しく
   終わった依頼があるときだけ、ジョブ表から作り直す(一時ファイル → 置き換え)。手で直さない前提。
 - どこまで書いたか(カーソル)はジョブ表の隣のローカルのファイルに持つ(ドライブには置かない)。
-- 置き場の親(例: `_目録`)が無いときは書かない。ドライブのマウントが外れているときに、マウント先の
-  ローカルのディスクへ書いてしまわないため。
+- 置き場の親(例: `_目録`)が無いとき・空のときは書かない。ドライブのマウントが外れているときに、マウント先の
+  ローカルのディスクへ書いてしまわないため(本番は `_目録` そのものを rclone でマウントしていて、外れると
+  空のマウント先のフォルダだけが残る。2026-11-21)。
 - 依頼者は表示名だけを書く(#bottest の見出しに出ていた範囲)。Discord の ID は書かない。
 
 手で流すとき(過去分をまとめて書き出す・試す):
@@ -266,11 +267,20 @@ def _copy_files(files_dir: Path, out_dir: Path, job_id: str, files: list[dict]) 
     return copied
 
 
+def _parent_ready(out_dir: Path) -> bool:
+    """親フォルダがあり、書き出し先のほかにも中身があるか(空 = マウントが外れて空のマウント先だけが残っている)。"""
+    parent = out_dir.parent
+    try:
+        return parent.is_dir() and any(entry.name != out_dir.name for entry in parent.iterdir())
+    except OSError:
+        return False
+
+
 def export(store_path: Path, files_dir: Path, out_dir: Path, state_path: Path, *, full: bool = False) -> dict:
     """1 回分の書き出し。新しく終わった依頼がある月だけを作り直す。戻り値は件数の要約。"""
     store_path, files_dir, out_dir, state_path = Path(store_path), Path(files_dir), Path(out_dir), Path(state_path)
-    if not out_dir.parent.is_dir():
-        raise ExportError("書き出し先の親フォルダがありません(ドライブのマウントを確かめてください)")
+    if not _parent_ready(out_dir):
+        raise ExportError("書き出し先の親フォルダが無いか空です(ドライブのマウントを確かめてください)")
     rows, files = _read_rows(store_path)
     state = {} if full else _load_state(state_path)
     cursor, seen = str(state.get("cursor") or ""), set(state.get("ids") or [])
