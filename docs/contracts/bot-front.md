@@ -51,7 +51,7 @@ history_dir = "/home/<user>/iyakusai/<ドライブ>/_目録/Bot履歴"   # 省�
 ```
 
 - `post_to_discord`：既定は `true`（今までどおり投稿する）。真偽値でない値は起動で止める。`false` でも `share_channel_id` は必須（依頼者のメンバー情報と権限を、このチャンネルで確かめるため。見えなければ今までどおり `UNAVAILABLE`）。`false` のとき、`/assistant/meta` の `shareChannel` は `null`（アプリは「#… にも投稿されます」を出さない）、ジョブの `discordUrl` も `null`。画像の SVG はどこにも残らない（PNG だけがジョブ表に残る）。
-- `history_dir`：Bot が 10 分ごとに、完了・失敗した ask・doc・image を `YYYY-MM.md`（人が読む）・`YYYY-MM.jsonl`（1 行 1 依頼）・`files/<ジョブ>/`（生成物の写し）に書き出す。新しく終わった依頼がある月だけを作り直す。taskdraft（本人だけが読む）・remind・screening・取り消しは入れない。依頼者は表示名だけ（Discord の ID は書かない）。親フォルダが見えないとき（ドライブのマウントが外れたとき）は書かない。カーソルはジョブ表の隣（`<store_path>.history-export.json`）。手で流すときは `python -m iyakusai_bot.history_export --store … --files … --out … [--full]`。置き場は Bot の検索ミラー（`mirror.py` の `PLAIN_GLOBS`・`MSG_GLOBS`）に入らないので、Bot が自分の過去の答えを資料として読むことはない（#bottest の収集分は今も読む）。
+- `history_dir`：Bot が 10 分ごとに、完了・失敗した ask・doc・image を `YYYY-MM.md`（人が読む）・`YYYY-MM.jsonl`（1 行 1 依頼）・`files/<ジョブ>/`（生成物の写し）に書き出す。新しく終わった依頼がある月だけを作り直す。taskdraft（本人だけが読む）・remind・screening・取り消しは入れない。依頼者は表示名だけ（Discord の ID は書かない）。親フォルダが見えないとき（ドライブのマウントが外れたとき）は書かない。カーソルはジョブ表の隣（`<store_path>.history-export.json`）。手で流すときは `python -m iyakusai_bot.history_export --store … --files … --out … [--full]`。置き場は Bot の既定の検索範囲（ミラーの `PLAIN_GLOBS`・`MSG_GLOBS`、`DEFAULT_DIGEST_ROOTS`、意味検索の `DIGEST_ROOTS`）に入らないので、`[knowledge] digest_roots` に足さない限り、Bot が自分の過去の答えを資料として読むことはない（#bottest の収集分は今も読む）。裏を返すと、投稿しない設定にしたあとのアプリ発の質問と答えは、Bot の検索には載らない。前の回の書き出しが終わらないうち（ドライブが固まったとき）は、周期ごとに warning を 1 行残して飛ばす。
 
 - `[assistant] enabled = false` か節が無ければ、Cog を読み込まない（従来どおりの Bot）。連携口は 404 を返す。
 - タスク API の設定（JSON）に `assistant_enabled: true` を足すと、連携口が有効になる（無ければ 404）。

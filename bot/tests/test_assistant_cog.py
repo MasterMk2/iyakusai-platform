@@ -1005,6 +1005,17 @@ class QuietShareTests(ImageEnabledTests):
         self.assertEqual(len(copied), 1)
         self.assertTrue(copied[0].name.startswith("【AI】"))
 
+    def test_a_stuck_export_is_skipped_with_a_warning(self):
+        # 前の回が終わらない(ドライブが固まった)ときは、重ねて走らせず、飛ばしたことをログに残す
+        settings = self.settings()
+        settings.history_dir = self.dir / "drive" / "_目録" / "Bot履歴"
+        cog = AC.Assistant(self.bot, settings, self.store, reminders=self.reminders)
+        cog._history_running = True
+        with self.assertLogs("iyakusai.assistant", level="WARNING") as logs:
+            self.assertIsNone(asyncio.run(cog.export_history()))
+        self.assertIn("今回は飛ばします", logs.output[0])
+        self.assertTrue(cog._history_running)   # 走っている回の印は消さない
+
 
 if __name__ == "__main__":
     unittest.main()
