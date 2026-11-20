@@ -48,6 +48,7 @@ import { registerLineRoutes, type LineRuntime } from './line-routes.js';
 import { discordPeople, rolloverRuntime, statePeople } from '../rollover/compose.js';
 import { registerRolloverRoutes } from '../rollover/routes.js';
 import type { RolloverStore } from '../rollover/store.js';
+import { registerSystemStatusRoutes, type SystemStatus } from '../ops/system-status.js';
 import type { OrganizationsStore } from '../organizations/store.js';
 import { DISCORD_LINE_PATHS } from '../line/discord.js';
 
@@ -81,6 +82,8 @@ export interface AppOptions {
   calendar?: CalendarRuntime | null;
   /** Free/busy from members' Google calendars (availability.sqlite3 and Google, or the demo's). Absent: off (enabled: false). */
   availability?: AvailabilityOptions | null;
+  /** The server's state for access administrators (設定 › サーバーの状態). Absent: GET /api/system/status answers 404. */
+  systemStatus?: SystemStatus | null;
   /** Discord login only: key of the Bot's read-only data source (POST /v1/bot/datasource). Absent: the route does not exist. */
   botDatasourceKey?: Buffer | null;
   /** The decision register (decisions.sqlite3). Absent: the register is off (its meta route answers enabled: false). */
@@ -603,6 +606,8 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     });
   }
   // Copy to Google Drive: signed requests of the committee's Apps Script, Discord login only (the gate lets its report through).
+  // The server's state (2026-11-21): access administrators only, on the settings screen (see ops/system-status.ts).
+  if (options.systemStatus) registerSystemStatusRoutes(app, options.systemStatus, { requireUser });
   if (options.rental?.driveSyncKey) {
     if (auth.mode !== 'discord') throw new ConfigError('物品の Drive 同期は discord モードでだけ使えます。');
     attachRentalDriveSync(app, { store: options.rental.store, key: options.rental.driveSyncKey });

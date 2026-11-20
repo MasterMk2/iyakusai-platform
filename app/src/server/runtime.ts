@@ -63,6 +63,7 @@ import { seedRolloverDemo } from './rollover/seed.js';
 import { OrganizationsStore } from './organizations/store.js';
 import { defaultSourceYear } from '../shared/rollover.js';
 import { jstDate } from '../shared/calendar.js';
+import { SystemStatus } from './ops/system-status.js';
 
 // Server composition from a validated configuration (used by main.ts and by tests that exercise
 // the real production composition). Nothing here listens or installs signal handlers.
@@ -443,6 +444,16 @@ export async function composeServer(config: ServerConfig, overrides: ComposeOver
       ? { client: new AssistantServiceClient({ baseUrl: config.assistant.serviceUrl, key: config.assistant.key }), bridge: tasks.bridge }
       : null;
 
+  // The server's state (2026-11-21, 設定 › サーバーの状態): the disks of the data folders and of the backups
+  // (ops/backup.ts writes to BACKUP_OUT_DIR or /backups); a path that does not exist here is left out.
+  const dataDirs = [path.dirname(config.dataFile), config.mailbox?.dataDir, config.rental.mode === 'on' ? config.rental.dataDir : undefined].filter((p): p is string => !!p);
+  const systemStatus = new SystemStatus({
+    disks: [
+      { label: 'データ', paths: dataDirs },
+      { label: 'バックアップ', paths: [process.env.BACKUP_OUT_DIR ?? '/backups'] },
+    ],
+  });
+
   const app = await buildApp({
     store,
     staticDir: config.staticDir,
@@ -454,6 +465,7 @@ export async function composeServer(config: ServerConfig, overrides: ComposeOver
     mailbox,
     calendar,
     availability,
+    systemStatus,
     botDatasourceKey: config.botDatasourceKey,
     decisions,
     demoBooks,

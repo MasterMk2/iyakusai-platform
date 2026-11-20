@@ -20,6 +20,7 @@ import { AccountingAccessPanel } from './payments/AccountingAccessPanel';
 import { BankPanel } from './bank/BankPanel';
 import { Facts } from './books/common';
 import { DayOfSettingsPanel } from './dayof/DayOfSettingsPanel';
+import { SystemStatusPanel } from './SystemStatusPanel';
 import { storeTheme, THEME_LABELS, useTheme, type ThemeChoice } from '../theme';
 import './payments/payments.css';
 
@@ -28,7 +29,7 @@ import './payments/payments.css';
  * PC and in place of it on a phone (../docs/ui-guidelines.md §6): before, every part was on one page, some 20,000px
  * long for an access administrator, with five lists of every member one after another.
  */
-export const SETTINGS_SECTIONS = ['account', 'card', 'theme', 'signature', 'availability', 'managers', 'mail', 'line', 'accounting', 'rental', 'features', 'dayof', 'login', 'bank', 'rollover', 'directory'] as const;
+export const SETTINGS_SECTIONS = ['account', 'card', 'theme', 'signature', 'availability', 'managers', 'mail', 'line', 'accounting', 'rental', 'features', 'dayof', 'login', 'system', 'bank', 'rollover', 'directory'] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
 export function parseSettingsSection(value: string | undefined): SettingsSection | null {
@@ -139,6 +140,9 @@ export function SettingsView({
           { key: 'features', group: 'ops', label: '使う機能', body: <FeaturesPanel onChanged={onChanged} onAvailable={report('features')} /> },
           { key: 'dayof', group: 'ops', label: '当日の欄', body: <DayOfSettingsPanel onAvailable={report('dayof')} /> },
           ...(discord ? [{ key: 'login', group: 'ops', label: 'ログインの記録', body: <LoginActivityPanel /> } as Part] : []),
+          // The server's state (2026-11-21): listed once the server answers (a server from before it answers 404). It asks
+          // again only while it is the part opened.
+          { key: 'system', group: 'ops', label: 'サーバーの状態', body: <SystemStatusPanel active={section === 'system'} onAvailable={report('system')} />, listedWhenKnown: true },
         ] as Part[])
       : []),
     // 権限管理者 and 会計を見る: the panel says which (its status answers 403 for everyone else).
