@@ -22,12 +22,20 @@ const ME = '/api/availability/me';
 const DEFAULT_DEPARTMENT = '役員会';
 
 export function AvailabilityPanel({ onAvailable }: { onAvailable?: (available: boolean) => void }) {
-  const load = useCallback((signal: AbortSignal) => api<AvailabilityMeResponse>('GET', ME, undefined, signal), []);
+  // A server from before this feature answers 404: the same as one where it is off.
+  const load = useCallback(async (signal: AbortSignal) => {
+    try {
+      return await api<AvailabilityMeResponse>('GET', ME, undefined, signal);
+    } catch (error) {
+      if (toFailure(error).status === 404) return null;
+      throw error;
+    }
+  }, []);
   const loader = useLoader(load);
   const [latest, setLatest] = useState<AvailabilityMeResponse | null>(null);
   const data = latest ?? loader.data;
   const [notice, setNotice] = useState<string | null>(null);
-  const absent = !loader.loading && !loader.error && !!data && !data.enabled;
+  const absent = !loader.loading && !loader.error && (!data || !data.enabled);
   useEffect(() => {
     if (!loader.loading) onAvailable?.(!absent);
   }, [loader.loading, absent, onAvailable]);

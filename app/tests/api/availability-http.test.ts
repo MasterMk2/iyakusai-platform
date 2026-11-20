@@ -41,6 +41,7 @@ let dir: string;
 let store: AvailabilityStore;
 let google: FakeGoogle;
 let app: FastifyInstance;
+let stateStore: StateStore;
 let service: AvailabilityService;
 let now: number;
 
@@ -56,8 +57,9 @@ async function build(on = true) {
     { id: OTHER, displayName: '合成 ほか', roleLabel: '内務部', email: 'other@example.invalid', canManageAccess: false },
     { id: TEMP, displayName: '合成 臨時', roleLabel: '臨時スタッフ', email: 'temp@example.invalid', canManageAccess: false },
   );
+  stateStore = new StateStore(seed, null);
   app = await buildApp({
-    store: new StateStore(seed, null),
+    store: stateStore,
     listenPort: TEST_PORT,
     clock: () => new Date(now).toISOString(),
     availability: on ? { store, source: google, serviceAccount: 'iyakusai-test@test-project.iam.gserviceaccount.com', refreshMinutes: 15, horizonDays: 42, autoRefresh: false, onService: (s) => (service = s) } : null,
@@ -267,6 +269,19 @@ describe('seeing', () => {
     expect(res.json.connection).toBeNull();
     expect((await list(NAIMU)).json.people).toEqual([]);
     expect(store.connection(OWNER)).toBeNull();
+  });
+
+  it('neither reads nor shows a member whose login was stopped', async () => {
+    await build();
+    await connect(OWNER, CAL, { audience: audience({ everyone: true }) });
+    google.add(CAL, '2026-11-21T14:00:00+09:00', '2026-11-21T16:00:00+09:00');
+    await readAll();
+    expect((await list(NAIMU)).json.people).toHaveLength(1);
+    stateStore.current.users.find((u) => u.id === OWNER)!.disabled = true;
+    const calls = google.calls;
+    await readAll();
+    expect(google.calls).toBe(calls); // nobody left to read: Google is not asked
+    expect((await list(NAIMU)).json.people).toEqual([]);
   });
 
   it('keeps the asked days within today and the days read, and refuses too long a range', async () => {

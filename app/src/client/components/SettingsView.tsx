@@ -121,7 +121,8 @@ export function SettingsView({
     { key: 'theme', group: 'self', label: '画面の色', body: <ThemeSection /> },
     // The mail and official LINE signature (2026-11-10): with the committee mailbox only (the panel answers 404 otherwise).
     ...(committeeMail ? [{ key: 'signature', group: 'self', label: '署名', body: <SignaturePanel onAvailable={report('signature')} /> } as Part] : []),
-    { key: 'availability', group: 'self', label: '空き具合の共有', body: <AvailabilityPanel onAvailable={report('availability')} /> },
+    // Free/busy (2026-11-20): listed once the server says the feature is on (availability.json), so it never flashes.
+    { key: 'availability', group: 'self', label: '空き具合の共有', body: <AvailabilityPanel onAvailable={report('availability')} />, listedWhenKnown: true },
     ...(admin
       ? ([
           ...(discord ? [{ key: 'managers', group: 'grants', label: '権限設定者', body: <AccessManagersPanel onChanged={onChanged} onAvailable={report('managers')} /> } as Part] : []),

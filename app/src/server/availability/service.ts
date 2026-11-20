@@ -65,10 +65,17 @@ export class AvailabilityService {
 
   start(): void {
     if (this.timer) return;
-    this.first = setTimeout(() => void this.refreshAll(), 1000);
+    this.first = setTimeout(() => this.timedRead(), 1000);
     this.first.unref?.();
-    this.timer = setInterval(() => void this.refreshAll(), this.options.refreshMinutes * 60_000);
+    this.timer = setInterval(() => this.timedRead(), this.options.refreshMinutes * 60_000);
     this.timer.unref?.();
+  }
+
+  /** A read the timer starts: whatever goes wrong is one line in the log (its kind only), never an unhandled rejection. */
+  private timedRead(): void {
+    this.refreshAll().catch((err: unknown) => {
+      console.error(`空き具合の読み込みを続けられませんでした: ${err instanceof Error ? err.name : 'error'}`);
+    });
   }
 
   stop(): void {
