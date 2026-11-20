@@ -155,6 +155,15 @@ export class AvailabilityService {
     return { state: stale ? 'stale' : 'ok', fetchedAt: e.fetchedAt, busy: e.busy, from: e.from, to: e.to };
   }
 
+  /** The busy periods of one calendar between two instants, read now (the connecting check looks for a free time). */
+  async busyBetween(calendarId: string, start: string, end: string): Promise<CalendarFreeBusy> {
+    try {
+      return (await this.options.source.query([calendarId], start, end)).get(calendarId) ?? { kind: 'error' };
+    } catch {
+      return { kind: 'error' };
+    }
+  }
+
   /** Whether the slot [start, end) is busy in the calendar: overlapped by a period, or wholly covered by one. */
   async checkSlot(calendarId: string, start: string, end: string): Promise<SlotCheck> {
     let answers: Map<string, CalendarFreeBusy>;

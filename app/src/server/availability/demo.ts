@@ -5,9 +5,9 @@ import type { CalendarFreeBusy, FreeBusySource } from './google.js';
 import type { AvailabilityStore } from './store.js';
 
 // The demo's stand-in for Google (2026-11-20): synthetic busy periods made from each calendar's ID, so the screens can
-// be tried without a Google account. The connecting check works too: a short window asked about for the first time
-// is free, and busy from then on (as if the member had put the event in between). Only `.invalid` IDs answer
-// (the documentation domain), others are "not shared".
+// be tried without a Google account. The connecting check works too: the check time is found in the synthetic
+// periods (a long window), and a short window (the check itself) is always busy, as if the member had put the event.
+// Only `.invalid` IDs answer (the documentation domain), others are "not shared".
 
 const HOUR = 3600_000;
 
@@ -30,9 +30,6 @@ function synthetic(calendarId: string, from: string, to: string): { start: numbe
 }
 
 export class DemoFreeBusy implements FreeBusySource {
-  /** Short windows asked about once: the next ask finds them busy. */
-  private readonly asked = new Set<string>();
-
   async query(calendarIds: readonly string[], timeMin: string, timeMax: string): Promise<Map<string, CalendarFreeBusy>> {
     const lo = Date.parse(timeMin);
     const hi = Date.parse(timeMax);
@@ -43,10 +40,7 @@ export class DemoFreeBusy implements FreeBusySource {
         continue;
       }
       if (hi - lo <= HOUR) {
-        const key = `${id}|${timeMin}|${timeMax}`;
-        const busy = this.asked.has(key) ? [{ start: lo, end: hi }] : [];
-        this.asked.add(key);
-        out.set(id, { kind: 'ok', busy });
+        out.set(id, { kind: 'ok', busy: [{ start: lo, end: hi }] });
         continue;
       }
       const from = jstDate(new Date(lo));
