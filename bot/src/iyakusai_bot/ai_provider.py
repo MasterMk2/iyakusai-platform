@@ -31,11 +31,9 @@ log = logging.getLogger("iyakusai.ai")
 # 実際の経路から作る。キー(ANTHROPIC_AUTH_TOKEN)は読まない・出さない。
 _GO_BASE_MARK = "opencode.ai/inference/go"
 GO_PLAN_USD = 10.0
-# Go の Limits(https://opencode.ai/go・2026-11-20 時点)：月の枠を、そのモデルだけを使った場合の
-# API 換算額で表したもの。表に無いモデルは換算せず API 換算額を出す。
-GO_MONTHLY_CAP_USD = {"claude-haiku-5-5": 15.0, "deepseek-v4-pro": 15.0, "gpt-5.6-luna": 15.0,
-                      "glm-5.3-flash": 60.0, "gemini-4-argon": 30.0}
-_MODEL_LABELS = {"claude-haiku-5-5": "Claude Haiku 5.5", "gemini-4-argon": "Gemini 4 Argon"}
+# Go のモデルの月の枠(API 換算額)と表示名は go_quota に置く(2026-11-21。このファイルにはモデル名を書かない：
+# test_production_parity が、旧来の直接連携の復活を防ぐためこのファイルの文字を見ている)。
+from .go_quota import GO_MONTHLY_CAP_USD  # noqa: E402
 _ALIASES = ("opus", "sonnet", "haiku")
 
 

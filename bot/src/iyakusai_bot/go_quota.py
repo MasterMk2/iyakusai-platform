@@ -29,6 +29,10 @@ MODEL_LABELS = {
     "glm-5.3": "GLM-5.3",
     "gpt-5.6-luna": "GPT-5.6 Luna",
 }
+# Go の Limits(https://opencode.ai/go・2026-11-20〜21 時点)：月の枠を、そのモデルだけを使った場合の
+# API 換算額で表したもの。表に無いモデルは換算せず API 換算額を出す(ai_provider・usage が使う)。
+GO_MONTHLY_CAP_USD = {"claude-haiku-5-5": 15.0, "deepseek-v4-pro": 15.0, "gpt-5.6-luna": 15.0,
+                      "glm-5.3-flash": 60.0, "gemini-4-argon": 30.0}
 TIMEOUT_SEC = 10
 WARN_PERCENT = 80
 
