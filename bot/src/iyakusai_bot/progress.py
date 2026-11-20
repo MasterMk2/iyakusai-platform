@@ -201,7 +201,8 @@ def render_progress(tr: ProgressTracker, elapsed_sec: float, model: str = "",
         lines.append("-# " + " / ".join(stats))
     meta = []
     if model:
-        meta.append(f"モデル: {_clip(model, 20)}")
+        from .ai_provider import display_model
+        meta.append(f"モデル: {_clip(display_model(model), 20)}")
     meta.append(f"深さ: {_clip(effort, 10) if effort else '既定'}")
     lines.append("-# " + " ・ ".join(meta) + "(資料を横断する質問は数分かかります)")
     return "\n".join(lines)

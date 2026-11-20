@@ -24,6 +24,74 @@ from . import org
 log = logging.getLogger("iyakusai.ai")
 
 
+# ---- 実際に使う AI の経路と料金の換算(2026-11-21) ----
+# Bot 専用の Claude の設定(CLAUDE_CONFIG_DIR/settings.json の env)で接続先を OpenCode Go にし、
+# opus/sonnet/haiku をすべて同じモデルに読み替えている(2026-11-21 00:37〜・委員長の決定)。
+# --model opus と渡しても答えるのは読み替え先のモデルなので、表示と自己紹介は設定の値でなく
+# 実際の経路から作る。キー(ANTHROPIC_AUTH_TOKEN)は読まない・出さない。
+_GO_BASE_MARK = "opencode.ai/inference/go"
+GO_PLAN_USD = 10.0
+# Go の Limits(https://opencode.ai/go・2026-11-20 時点)：月の枠を、そのモデルだけを使った場合の
+# API 換算額で表したもの。表に無いモデルは換算せず API 換算額を出す。
+GO_MONTHLY_CAP_USD = {"claude-haiku-5-5": 15.0, "deepseek-v4-pro": 15.0, "gpt-5.6-luna": 15.0,
+                      "glm-5.3-flash": 60.0}
+_MODEL_LABELS = {"claude-haiku-5-5": "Claude Haiku 5.5"}
+_ALIASES = ("opus", "sonnet", "haiku")
+
+
+def _claude_env() -> dict:
+    d = os.environ.get("CLAUDE_CONFIG_DIR")
+    if not d:
+        return {}
+    try:
+        data = json.loads((Path(d) / "settings.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    env = data.get("env") if isinstance(data, dict) else None
+    return env if isinstance(env, dict) else {}
+
+
+def _routing() -> dict:
+    env = _claude_env()
+    if _GO_BASE_MARK in str(env.get("ANTHROPIC_BASE_URL", "")):
+        return {"provider": "opencode_go",
+                "aliases": {a: str(env.get(f"ANTHROPIC_DEFAULT_{a.upper()}_MODEL") or "") for a in _ALIASES}}
+    return {"provider": "claude_subscription", "aliases": {}}
+
+
+ROUTING = _routing()
+
+
+def display_model(model: str) -> str:
+    """表示用のモデル名。Go 経由で opus/sonnet/haiku を読み替えているなら読み替え先を返す。"""
+    return ROUTING["aliases"].get(model) or model
+
+
+def _used_model(data: dict) -> str:
+    """CLI の結果(modelUsage)から、実際に答えたモデル(出力トークンが最も多いもの)を取る。"""
+    mu = data.get("modelUsage")
+    if not isinstance(mu, dict) or not mu:
+        return ""
+    def weight(k):
+        v = mu.get(k) or {}
+        return (v.get("outputTokens") or 0, v.get("costUSD") or 0) if isinstance(v, dict) else (0, 0)
+    return max(mu, key=weight)
+
+
+def _yen(v: float) -> str:
+    return f"{v:.1f}" if v < 10 else f"{v:.0f}"
+
+
+def _billing_line() -> str:
+    if ROUTING["provider"] == "opencode_go":
+        mid = ROUTING["aliases"].get("opus") or ""
+        name = f"{_MODEL_LABELS.get(mid, mid)}({mid})" if mid else "Go のモデル"
+        return (f"OpenCode Go(月額${GO_PLAN_USD:.0f}の定額。使った分は Go の月の枠から引かれ、"
+                f"枠を使い切ると止まる。追加の請求は無い)経由の {name} で動く。"
+                "委員会のサーバー(VPS)で常駐(運用はシステム課)。")
+    return "ホストPCで常駐し、AI(Claude)を呼んで答える(運用はシステム課)。"
+
+
 def elapsed_note(t0: float) -> str:
     """フッター表示用の経過秒(コマンド受付→応答までの体感時間)。10秒未満は小数1桁。"""
     s = max(0.0, time.time() - t0)
@@ -60,7 +128,15 @@ class AIResult:
         return f"{fmt_tokens(tin)}→{fmt_tokens(u.get('output_tokens', 0))} tok"
 
     def cost_note(self, usd_jpy: float = 160.0) -> str:
-        """フッター表示用のAPI換算額(従量課金だった場合の参考額)。"""
+        """フッター表示用の料金。OpenCode Go 経由なら Go の月額に換算(月の枠の何%＝$10 の何ドル)、
+        そうでなければ API 換算額(従量課金だった場合の参考額)。"""
+        if ROUTING["provider"] == "opencode_go":
+            cap = GO_MONTHLY_CAP_USD.get(self.model)
+            if cap:
+                share = self.cost_usd / cap
+                usd = share * GO_PLAN_USD
+                return f"Go換算 月枠の{share * 100:.2f}%(≒${usd:.4f}・{_yen(usd * usd_jpy)}円)"
+            return f"Go(月額${GO_PLAN_USD:.0f}定額) API換算 ${self.cost_usd:.3f}"
         yen = self.cost_usd * usd_jpy
         return f"API換算 ${self.cost_usd:.3f}(≒{yen:.0f}円)"
 
@@ -226,10 +302,12 @@ ABOUT_ME = """\
   対象外にするなら /haiku optout)。詳しい使い方は /help。
 - 仕組み: 質問から共有ドライブの目録(_目録)にある digest・要約・文書の原文・メール/Discord/LINE の
   記録を検索し、見つかった資料だけを根拠に AI(Claude)が出典付きで答える。見つからなければ正直に「無い」と言う。
-- 動作: ホストPCで常駐し、AI(Claude)を呼んで答える(運用はシステム課)。
+- 動作・費用: {BILLING}
 - 不具合・要望の連絡先: 当面は委員長(名前は /help のフッターにある)。※保守担当が決まるまでの暫定。
 - 口調: /ask の 口調: 指定やプリセット(マスコット・丁寧秘書・お嬢様 など)で変えられる。
 """
+
+ABOUT_ME = ABOUT_ME.replace("{BILLING}", _billing_line())
 
 SYSTEM_INSTRUCTIONS = """\
 あなたは{委員会名}(医薬祭)の資料検索アシスタント「IyakusaiBot」です。
@@ -916,9 +994,11 @@ class ClaudeCLIProvider:
         text = (data.get("result") or "").strip()
         if not text:
             raise AIError("AI応答が空でした")
+        # 表示・記帳は「実際に答えたモデル」。取れなければ読み替え先、それも無ければ渡した値。
+        actual = _used_model(data) or display_model(model)
         return AIResult(
             text=text,
-            model=model,
+            model=actual,
             usage=data.get("usage") or {},
             cost_usd=float(data.get("total_cost_usd") or 0),
             duration_ms=int(data.get("duration_ms") or 0),

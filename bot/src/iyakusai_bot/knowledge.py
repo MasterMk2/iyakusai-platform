@@ -537,7 +537,7 @@ class Knowledge(commands.Cog):
                 # mode を明示する(agent 側の「mode: agent(ミラー横断検索)」と対称)。
                 # ログ・スクショから経路が一目で分かる=障害調査の初手が要らなくなる。
                 footer = (f"{FOOTER}{line_note}"
-                          f"\n-# mode: one-shot(抜粋検索) / model: {model} / 深さ: {_effort_label(res)}"
+                          f"\n-# mode: one-shot(抜粋検索) / model: {res.model} / 深さ: {_effort_label(res)}"
                           f" / {res.tokens_note()} / {res.cost_note(self.usd_jpy)}"
                           f" / {elapsed_note(t0)}")
                 src_plain = sources.replace("-# ", "- ")
@@ -731,7 +731,7 @@ class Knowledge(commands.Cog):
                  model, _effort_label(res), time.time() - t0, itx.user, 質問)
         cond = f"-# 条件: {fields_note}(質問文から機械抽出)" if fields_note else ""
         title = f"**Q: {質問}**" + (f"\n{cond}" if cond else "")
-        footer = (f"{FOOTER}\n-# mode: agent(ミラー横断検索) / model: {model} / 深さ: {_effort_label(res)}"
+        footer = (f"{FOOTER}\n-# mode: agent(ミラー横断検索) / model: {res.model} / 深さ: {_effort_label(res)}"
                   f" / {res.tokens_note()} / {res.cost_note(self.usd_jpy)} / {elapsed_note(t0)}")
         await self._deliver(itx, 形式, 質問, title, footer,
                             doc_md=f"# Q: {質問}\n\n{res.text}",

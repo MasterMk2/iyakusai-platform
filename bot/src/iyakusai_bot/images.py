@@ -318,7 +318,7 @@ class Images(commands.Cog):
             + ("-# 安全のため、外部を読み込む部分などを取り除いて描きました。\n" if out.removed else "")
             + "-# 写真風・写実的な絵は作れません。文字・数字・日付は使う前に必ず確認してください。"
               "編集用の SVG も付けています。\n"
-            f"-# model: {out.model} / {last.tokens_note()} / {last.cost_note(self.usd_jpy)} / {elapsed_note(t0)}"
+            f"-# model: {last.model or out.model} / {last.tokens_note()} / {last.cost_note(self.usd_jpy)} / {elapsed_note(t0)}"
         )
         files = [discord.File(io.BytesIO(out.png), filename=write_guard.ai_name("image.png")),
                  discord.File(io.BytesIO(out.svg.encode("utf-8")), filename=write_guard.ai_name("image.svg"))]
