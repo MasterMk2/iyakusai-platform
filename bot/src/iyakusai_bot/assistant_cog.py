@@ -38,6 +38,7 @@ from discord.ext import commands, tasks
 
 from . import access as A
 from . import access_check
+from . import go_quota
 from . import assistant_logic as L
 from . import history_export
 from . import remind_logic as rl
@@ -58,6 +59,9 @@ IMAGE_LANES = 1
 SNAPSHOT_SEC = 30
 MEMBER_INDEX_SEC = 600
 HISTORY_MIN = 10   # ドライブへの履歴の書き出しの周期(分)
+# OpenCode Go の残り枠を読んで連携口(アプリの Bot タブ)向けに写す周期(2026-11-21)。公式に載っていない窓口なので
+# 30 秒ごとの写しには載せず、遅い周期で読む。
+AI_STATUS_MIN = 5
 USER_FAILURE = "⚠ 処理中に想定外のエラーが発生しました。少し待ってから、もう一度依頼してください。"
 DOC_TYPE_LABELS = {
     "request": ("依頼文(対外)", "依頼文(学外の企業・団体宛)"),
@@ -141,11 +145,13 @@ class Assistant(commands.Cog):
 
     async def cog_load(self):
         self.poll.start()
+        self.ai_status.start()
         if getattr(self.settings, "history_dir", None) is not None:
             self.history.start()
 
     async def cog_unload(self):
         self.poll.cancel()
+        self.ai_status.cancel()
         self.history.cancel()
         for task in list(self._jobs):
             task.cancel()
@@ -170,6 +176,28 @@ class Assistant(commands.Cog):
 
     @poll.before_loop
     async def _before_poll(self):
+        await self.bot.wait_until_ready()
+
+    @tasks.loop(minutes=AI_STATUS_MIN)
+    async def ai_status(self):
+        """AI の経路・モデルと OpenCode Go の残り枠を ai_status に写す(連携口の meta がそのまま渡す)。
+        読めなかったときは前の値を残して stale を付ける(0% に見せない)。キーは写さない。"""
+        try:
+            fresh = await asyncio.to_thread(go_quota.fetch)
+            raw = await asyncio.to_thread(self.store.get_meta, "ai_status")
+            try:
+                previous = json.loads(raw) if raw else None
+            except ValueError:
+                previous = None
+            body = go_quota.merge_for_store(previous if isinstance(previous, dict) else None, fresh)
+            await asyncio.to_thread(self.store.set_meta, "ai_status", json.dumps(body, ensure_ascii=False))
+            if fresh.get("provider") == "opencode_go" and not fresh.get("ok"):
+                log.warning("OpenCode Go の残り枠を読めませんでした: %s", fresh.get("error"))
+        except Exception as error:  # noqa: BLE001  ループを止めない(次の周期で再試行)
+            log.warning("AI の状態の写しで失敗: %s", type(error).__name__)
+
+    @ai_status.before_loop
+    async def _before_ai_status(self):
         await self.bot.wait_until_ready()
 
     @tasks.loop(minutes=HISTORY_MIN)

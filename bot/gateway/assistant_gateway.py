@@ -227,6 +227,36 @@ class AssistantGateway:
             return {}  # 読めない写しは「機能なし」と同じに倒す(出さない側に倒す)
         return value if isinstance(value, dict) else {}
 
+    def _ai_status(self) -> dict | None:
+        """Bot が 5 分ごとに写す AI の経路と OpenCode Go の残り枠(2026-11-21)。形を確かめて必要な項目だけ渡す。
+        写しが無い・読めないときは None(アプリは何も出さない)。"""
+        raw = self.store.get_meta("ai_status")
+        if not raw:
+            return None
+        try:
+            value = json.loads(raw)
+        except ValueError:
+            return None
+        if not isinstance(value, dict) or value.get("provider") not in ("opencode_go", "claude_subscription"):
+            return None
+
+        def text(v, n=60):
+            return v[:n] if isinstance(v, str) else None
+
+        windows = []
+        for w in value.get("windows") or []:
+            if not isinstance(w, dict) or w.get("key") not in ("rolling", "weekly", "monthly"):
+                continue
+            pct = w.get("percent")
+            if not isinstance(pct, (int, float)) or isinstance(pct, bool):
+                continue
+            windows.append({"key": w["key"], "label": text(w.get("label"), 10) or w["key"],
+                            "percent": max(0.0, min(100.0, float(pct))), "status": text(w.get("status"), 20) or "",
+                            "resetsAt": text(w.get("resetsAt"), 40)})
+        return {"provider": value["provider"], "model": text(value.get("model")), "modelLabel": text(value.get("modelLabel")),
+                "ok": value.get("ok") is True, "stale": value.get("stale") is True, "error": text(value.get("error"), 40),
+                "fetchedAt": text(value.get("fetchedAt"), 40), "windows": windows}
+
     @staticmethod
     def _features(caps: dict) -> dict:
         raw = caps.get("features")
@@ -506,6 +536,7 @@ class AssistantGateway:
             "shareChannel": self._named(caps.get("shareChannel")),
             "isAdmin": self._manages_guild(context),
             "bot": {"alive": self._alive(heartbeat), "lastSeenAt": heartbeat},
+            "ai": self._ai_status(),
         }
 
     def _route_summary(self, context, raw, payload):

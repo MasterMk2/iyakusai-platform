@@ -12,6 +12,7 @@ import { MailView } from './MailView';
 import { MinutesView, useRecordingActive } from './MinutesView';
 import { PendingJobs } from './PendingJobs';
 import { RemindView } from './RemindView';
+import { AiStatus } from './AiStatus';
 
 /**
  * The Bot sub-views (../docs/contracts/bot-front.md §5), in this order. メール was added 2026-10-25, 議事録 (α,
@@ -118,6 +119,7 @@ export function BotView({ section, jobId, refresh, onNavigate, mail }: BotViewPr
         </p>
       )}
       {failure && !isBotDisabled(failure) && failure.status !== 403 && <LoadStatus loader={meta} what="Bot の状態" />}
+      {meta.data && <AiStatus ai={meta.data.ai} />}
       {!isMinutes && meta.data && !meta.data.bot.alive && (
         <p className="banner banner-warning" role="status" data-testid="bot-not-alive">
           Bot が応答していません（Discord の Bot が止まっている可能性）。依頼は受け付けられ、Bot が動き出すと順に処理されます。
