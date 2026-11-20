@@ -27,6 +27,9 @@ export const SYSTEM_DISK_RESERVE_BYTES = 5 * 1024 * 1024 * 1024;
 /** How often the open panel asks again. */
 export const SYSTEM_REFRESH_SECONDS = 10;
 
+/** How often the header of a PC asks again (every member's screen, so seldom). */
+export const SYSTEM_HEADER_REFRESH_SECONDS = 60;
+
 export function levelOf(percent: number | null, limits: { warn: number; alert?: number }): SystemLevel {
   if (percent === null || !Number.isFinite(percent)) return 'ok';
   if (limits.alert !== undefined && percent >= limits.alert) return 'alert';

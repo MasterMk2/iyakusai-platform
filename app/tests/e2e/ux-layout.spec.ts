@@ -65,6 +65,8 @@ async function syntheticWorkspace(page: Page, options: { role?: 'viewer' | 'edit
     // Free/busy (2026-11-20) is off on this synthetic server, as a server without availability.json answers.
     if (path === '/api/availability/me') return respond({ enabled: false, serviceAccount: null, connection: null, challenge: null, choices: { departments: [], people: [] }, horizonDays: 0, refreshMinutes: 0 });
     if (path === '/api/availability') return respond({ enabled: false, from: '2026-01-01', to: '2026-01-01', coveredTo: '2026-01-01', people: [] });
+    // The server's state (2026-11-21) is not on this synthetic server, as a server from before it answers (system-status.spec.ts).
+    if (path === '/api/system/status') return respond({ error: 'not_found', message: 'not on this server' }, 404);
     // The Bot (2026-11-09: the task view asks once whether it can draft tasks) is off on this synthetic server, as the
     // server answers without SMM_ASSISTANT_MODE: no 「Bot に下書きを頼む」 above the create form.
     if (path === '/api/assistant/meta' && request.method() === 'GET') return respond({ error: 'ASSISTANT_DISABLED', message: 'Bot 機能はこのサーバーでは有効になっていません。' }, 404);

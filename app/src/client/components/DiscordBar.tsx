@@ -18,7 +18,7 @@ export function DiscordBar({ session, onLoggedOut, onOpenSettings }: { session: 
   }
   return (
     <>
-      <Masthead>
+      <Masthead serverStatus={!!user && session.account?.temporaryStaff !== true}>
         {user && (
           <div className="session">
             <span className="current-user" data-testid="current-user">

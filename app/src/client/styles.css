@@ -408,6 +408,23 @@ html { scroll-padding-top: 64px; }
 .masthead-tools { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .masthead button.theme-toggle { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 6px 10px; background: transparent; border: 1px solid rgb(255 255 255 / 35%); border-radius: 999px; color: var(--on-fill-muted); font-size: 0.875rem; font-weight: 400; white-space: nowrap; }
 .masthead button.theme-toggle:hover:not(:disabled) { background: rgb(255 255 255 / 12%); color: #fff; }
+/* The server's state on a PC (2026-11-21, ServerBadge.tsx): the same pill as the colour button, with a green dot when
+   all is fine; §4's yellow / red ground only when a reading needs a look. Hidden below SERVER_BADGE_MEDIA. */
+.server-badge { display: none; }
+@media (min-width: 1024px) {
+  .masthead .server-badge { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 6px 14px 6px 12px; border: 1px solid rgb(255 255 255 / 35%); border-radius: 999px; color: var(--on-fill-muted); font-size: 0.875rem; text-decoration: none; white-space: nowrap; font-variant-numeric: tabular-nums; min-width: 0; }
+  .masthead .server-badge:hover { background: rgb(255 255 255 / 12%); color: #fff; text-decoration: none; }
+  /* A light green that stands out on every theme's header (navy, dark, 若葉's green). */
+  .server-badge-dot { width: 8px; height: 8px; border-radius: 50%; background: #86efac; box-shadow: 0 0 0 3px rgb(134 239 172 / 25%); flex: 0 0 auto; }
+  .server-badge-state { color: #fff; }
+  .server-badge-figure { padding-left: 8px; border-left: 1px solid rgb(255 255 255 / 30%); }
+  .masthead .server-badge.warn { background: var(--amber-bg); border-color: var(--amber-line); color: var(--amber); }
+  .masthead .server-badge.alert { background: var(--red-bg); border-color: var(--red-line); color: var(--red); }
+  .server-badge.warn .server-badge-state, .server-badge.alert .server-badge-state { color: inherit; font-weight: 700; }
+  .server-badge.warn .server-badge-dot { background: var(--amber-line); box-shadow: none; }
+  .server-badge.alert .server-badge-dot { background: var(--red); box-shadow: none; }
+  .server-badge.stale { opacity: 0.7; }
+}
 .theme-dot { width: 16px; height: 16px; border-radius: 50%; border: 1px solid rgb(255 255 255 / 70%); flex: 0 0 auto; }
 .theme-dot-wakaba { background: #b9d08b; }
 .theme-dot-light { background: #f3f6fa; }

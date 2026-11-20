@@ -265,10 +265,13 @@ export function realProbe(): SystemProbe {
   };
 }
 
-export function registerSystemStatusRoutes(app: FastifyInstance, status: SystemStatus, deps: { requireUser: (request: FastifyRequest) => User }) {
+/**
+ * Every member (2026-11-21: the settings part and the header of every PC screen); not the festival day's temporary
+ * staff. `viewer` answers 401 (throws) for no one signed in and null for someone who may not see it.
+ */
+export function registerSystemStatusRoutes(app: FastifyInstance, status: SystemStatus, deps: { viewer: (request: FastifyRequest) => User | null }) {
   app.get('/api/system/status', async (request): Promise<SystemStatusResponse> => {
-    const user = deps.requireUser(request);
-    if (user.disabled || !user.canManageAccess) throw new DomainError('forbidden', 'サーバーの状態は権限管理者だけが見られます。');
+    if (!deps.viewer(request)) throw new DomainError('forbidden', 'サーバーの状態は委員だけが見られます。');
     return status.read();
   });
 }

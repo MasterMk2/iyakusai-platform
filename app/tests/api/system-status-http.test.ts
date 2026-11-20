@@ -5,7 +5,8 @@ import { StateStore } from '../../src/server/domain/store.js';
 import { buildApp, SESSION_COOKIE } from '../../src/server/http/app.js';
 import { seedState, TEST_HOST, TEST_PORT } from '../helpers.js';
 
-// GET /api/system/status in the demo composition (persona cookie): access administrators only, with a stand-in machine.
+// GET /api/system/status in the demo composition (persona cookie): every member but temporary staff, with a stand-in
+// machine.
 
 const GiB = 1024 ** 3;
 const probe: SystemProbe = {
@@ -25,8 +26,10 @@ afterEach(async () => {
 });
 
 async function build(on = true) {
+  const seed = await seedState();
+  seed.users.push({ id: 'u-temp-staff', displayName: '合成 臨時', roleLabel: '臨時スタッフ', email: 'temp@example.invalid', canManageAccess: false });
   app = await buildApp({
-    store: new StateStore(await seedState(), null),
+    store: new StateStore(seed, null),
     listenPort: TEST_PORT,
     systemStatus: on ? new SystemStatus({ probe, disks: [{ label: 'データ', paths: ['/data'] }], wait: async () => undefined }) : null,
   });
@@ -38,6 +41,12 @@ async function get(userId: string | null) {
 }
 
 describe('GET /api/system/status', () => {
+  it('answers every member, not only access administrators', async () => {
+    await build();
+    expect((await get('u-editor-a')).status).toBe(200);
+    expect((await get('u-noaccess-d')).json).toMatchObject({ level: 'ok', cpu: { cores: 2 } });
+  });
+
   it('answers an access administrator with the readings', async () => {
     await build();
     const res = await get('u-admin');
@@ -53,9 +62,9 @@ describe('GET /api/system/status', () => {
     });
   });
 
-  it('refuses a member without the grant and someone not signed in', async () => {
+  it('refuses the festival day temporary staff and someone not signed in', async () => {
     await build();
-    expect((await get('u-editor-a')).status).toBe(403);
+    expect((await get('u-temp-staff')).status).toBe(403);
     expect((await get(null)).status).toBe(401);
   });
 

@@ -140,11 +140,11 @@ export function SettingsView({
           { key: 'features', group: 'ops', label: '使う機能', body: <FeaturesPanel onChanged={onChanged} onAvailable={report('features')} /> },
           { key: 'dayof', group: 'ops', label: '当日の欄', body: <DayOfSettingsPanel onAvailable={report('dayof')} /> },
           ...(discord ? [{ key: 'login', group: 'ops', label: 'ログインの記録', body: <LoginActivityPanel /> } as Part] : []),
-          // The server's state (2026-11-21): listed once the server answers (a server from before it answers 404). It asks
-          // again only while it is the part opened.
-          { key: 'system', group: 'ops', label: 'サーバーの状態', body: <SystemStatusPanel active={section === 'system'} onAvailable={report('system')} />, listedWhenKnown: true },
         ] as Part[])
       : []),
+    // The server's state (2026-11-21): every member (temporary staff are answered 403). Listed once the server answers (a
+    // server from before it answers 404). It asks again only while it is the part opened.
+    { key: 'system', group: 'ops', label: 'サーバーの状態', body: <SystemStatusPanel active={section === 'system'} onAvailable={report('system')} />, listedWhenKnown: true },
     // 権限管理者 and 会計を見る: the panel says which (its status answers 403 for everyone else).
     ...(discord && committeeMail ? [{ key: 'bank', group: 'ops', label: '銀行の連携', body: <BankPanel onAvailable={report('bank')} />, listedWhenKnown: !admin } as Part] : []),
     ...(admin ? [{ key: 'rollover', group: 'ops', label: '年度の切り替え', body: <RolloverPanel onAvailable={report('rollover')} /> } as Part] : []),

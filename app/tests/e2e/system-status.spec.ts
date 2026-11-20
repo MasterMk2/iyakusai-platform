@@ -2,8 +2,9 @@ import type { Page } from '@playwright/test';
 import type { SystemStatusResponse } from '../../src/shared/system.js';
 import { expect, test } from './fixtures.js';
 
-// 設定 › サーバーの状態 (2026-11-21): access administrators see how busy the server is; the part asks again only while it
-// is the one shown. The server is a stand-in (page.route); every number is synthetic.
+// 設定 › サーバーの状態 (2026-11-21): every member sees how busy the server is, in the settings (asked again only while
+// it is the part shown) and in the header of a PC (once a minute). The server is a stand-in (page.route); every number
+// is synthetic.
 
 const GiB = 1024 ** 3;
 
@@ -21,8 +22,10 @@ function reading(over: Partial<SystemStatusResponse> = {}): SystemStatusResponse
   };
 }
 
+// Temporary staff are sent to the rental screen (no header badge there); the route answers them 403 (tests/api).
 async function open(page: Page, hash: string, o: { admin?: boolean; status?: () => { status: number; json: unknown } } = {}) {
   const admin = o.admin ?? true;
+  const temporaryStaff = false;
   const calls: string[] = [];
   await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname;
@@ -34,7 +37,7 @@ async function open(page: Page, hash: string, o: { admin?: boolean; status?: () 
           demoAuthentication: false,
           authMode: 'discord',
           user: { id: 'iy-000001', displayName: '合成 委員長', roleLabel: '総務部', canManageAccess: admin },
-          account: { initialLoginId: 'iy-000001', studentId: '21000001', departments: ['総務部'], signIn: { previousLoginAt: null, failedSince: 0 } },
+          account: { initialLoginId: 'iy-000001', studentId: '21000001', temporaryStaff, departments: ['総務部'], signIn: { previousLoginAt: null, failedSince: 0 } },
           degraded: false,
           passwordPolicy: { minLength: 12, maxLength: 128 },
           sessionDays: 14,
@@ -50,7 +53,8 @@ async function open(page: Page, hash: string, o: { admin?: boolean; status?: () 
   });
   await page.clock.install({ time: new Date('2026-11-21T05:03:20.000Z') });
   await page.goto(hash);
-  await expect(page.getByRole('heading', { name: '設定', exact: true, level: 2 })).toBeAttached();
+  if (hash.startsWith('/#/settings')) await expect(page.getByRole('heading', { name: '設定', exact: true, level: 2 })).toBeAttached();
+  else await expect(page.getByRole('navigation', { name: '機能' })).toBeVisible();
   return calls;
 }
 
@@ -101,7 +105,8 @@ test('a reading that needs a look is named at the top, worst first, with its lab
 });
 
 test('it asks again every 10 seconds only while it is the part shown', async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 900 });
+  // The settings' PC layout without the header's badge (it starts at 1024px), so only the part asks.
+  await page.setViewportSize({ width: 1000, height: 900 });
   const calls = await open(page, '/#/settings/account');
   // Every part is mounted: this one asked once to know whether to list itself, and is listed.
   await expect(nav(page).getByRole('link', { name: 'サーバーの状態' })).toBeVisible();
@@ -123,7 +128,8 @@ test('it asks again every 10 seconds only while it is the part shown', async ({ 
 });
 
 test('a failed refresh keeps the last values and says how old they are', async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 900 });
+  // Without the header's badge, so the first answer is the part's.
+  await page.setViewportSize({ width: 1000, height: 900 });
   let n = 0;
   await open(page, '/#/settings/system', {
     status: () => (++n === 1 ? { status: 200, json: reading() } : { status: 503, json: { error: 'unavailable', message: 'いまは使えません。' } }),
@@ -135,11 +141,78 @@ test('a failed refresh keeps the last values and says how old they are', async (
   await expect(meter(page, 'cpu').locator('.system-value')).toHaveText('23%');
 });
 
-test('a member without the grant never sees it or asks for it', async ({ page }) => {
+test('a member who is not an access administrator sees it too', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
-  const calls = await open(page, '/#/settings/system', { admin: false });
-  await expect(nav(page).getByRole('link', { name: 'アカウント' })).toHaveAttribute('aria-current', 'page');
-  await expect(nav(page).getByRole('link', { name: 'サーバーの状態' })).toHaveCount(0);
+  await open(page, '/#/settings/system', { admin: false });
+  await expect(nav(page).getByRole('link', { name: 'サーバーの状態' })).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByTestId('system-summary')).toHaveText('いまは問題ありません。');
+  await expect(page.getByTestId('server-badge')).toBeVisible();
+});
+
+test('a PC header shows the state in one line and opens the part', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await open(page, '/#/home');
+  const badge = page.getByTestId('server-badge');
+  await expect(badge).toHaveText('サーバー正常CPU 23%メモリ 31%');
+  await expect(badge).toHaveAttribute('data-level', 'ok');
+  await expect(badge).toHaveAttribute('title', '14:03 時点。押すと「サーバーの状態」を開きます');
+  await badge.click();
+  await expect(page).toHaveURL(/#\/settings\/system$/);
+  await expect(panel(page).getByRole('heading', { name: 'サーバーの状態', level: 3 })).toBeVisible();
+});
+
+test('the header names what needs a look instead of the figures', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await open(page, '/#/home', {
+    status: () => ({
+      status: 200,
+      json: reading({
+        memory: { totalBytes: 8 * GiB, availableBytes: 0.8 * GiB, usedPercent: 90, level: 'warn' },
+        disks: [{ label: 'データ', totalBytes: 100 * GiB, freeBytes: 3 * GiB, usedPercent: 97, level: 'alert' }],
+        level: 'alert',
+      }),
+    }),
+  });
+  const badge = page.getByTestId('server-badge');
+  await expect(badge).toHaveText('すぐ対応：ディスクの空き 3.0 GB ほか 1 件');
+  await expect(badge).toHaveAttribute('data-level', 'alert');
+});
+
+test('the header asks once a minute, and not at all on a narrower screen', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const calls = await open(page, '/#/home');
+  await expect(page.getByTestId('server-badge')).toBeVisible();
+  expect(calls.length).toBe(1);
+  await page.clock.fastForward(30_000);
+  expect(calls.length).toBe(1);
+  await page.clock.fastForward(30_000);
+  await expect.poll(() => calls.length).toBe(2);
+
+  await page.setViewportSize({ width: 1000, height: 900 });
+  await expect(page.getByTestId('server-badge')).toHaveCount(0);
+  await page.clock.fastForward(120_000);
+  expect(calls.length).toBe(2);
+});
+
+test('at the narrowest PC width the badge, the colour button and the signed-in name share the header without overflow', async ({ page }) => {
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await open(page, '/#/home');
+  await expect(page.getByTestId('server-badge')).toBeVisible();
+  await expect(page.getByTestId('current-user')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'ログアウト' })).toBeVisible();
+  const overflow = await page.evaluate(() => {
+    const header = document.querySelector('.masthead')!;
+    return { page: document.documentElement.scrollWidth - document.documentElement.clientWidth, header: header.scrollWidth - header.clientWidth };
+  });
+  expect(overflow).toEqual({ page: 0, header: 0 });
+});
+
+test('a phone header has no badge and does not ask', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  const calls = await open(page, '/#/home');
+  await expect(page.getByRole('navigation', { name: '機能' })).toBeVisible();
+  await page.clock.fastForward(120_000);
+  await expect(page.getByTestId('server-badge')).toHaveCount(0);
   expect(calls).toEqual([]);
 });
 

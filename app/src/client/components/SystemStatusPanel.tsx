@@ -36,17 +36,18 @@ export function durationLabel(seconds: number): string {
 const percentLabel = (p: number) => `${Math.round(p)}%`;
 const clock = (iso: string) => new Date(iso).toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
-/** What is not fine, worst first, in words. */
-export function findings(d: SystemStatusResponse): { level: SystemLevel; text: string }[] {
-  const out: { level: SystemLevel; text: string }[] = [];
-  if (d.cpu.level !== 'ok' && d.cpu.percent !== null) out.push({ level: d.cpu.level, text: `CPU の使用率が高い（${percentLabel(d.cpu.percent)}）` });
-  if (d.memory && d.memory.level !== 'ok') out.push({ level: d.memory.level, text: `メモリの使用率が高い（${percentLabel(d.memory.usedPercent)}）` });
+/** What is not fine, worst first: in words (`text`) and in a few characters for the header (`short`). */
+export function findings(d: SystemStatusResponse): { level: SystemLevel; text: string; short: string }[] {
+  const out: { level: SystemLevel; text: string; short: string }[] = [];
+  if (d.cpu.level !== 'ok' && d.cpu.percent !== null) out.push({ level: d.cpu.level, text: `CPU の使用率が高い（${percentLabel(d.cpu.percent)}）`, short: `CPU ${percentLabel(d.cpu.percent)}` });
+  if (d.memory && d.memory.level !== 'ok') out.push({ level: d.memory.level, text: `メモリの使用率が高い（${percentLabel(d.memory.usedPercent)}）`, short: `メモリ ${percentLabel(d.memory.usedPercent)}` });
   const box = d.app.container;
-  if (box && box.level !== 'ok' && box.usedPercent !== null) out.push({ level: box.level, text: `アプリのメモリが上限に近い（${percentLabel(box.usedPercent)}）` });
+  if (box && box.level !== 'ok' && box.usedPercent !== null) out.push({ level: box.level, text: `アプリのメモリが上限に近い（${percentLabel(box.usedPercent)}）`, short: `アプリのメモリ ${percentLabel(box.usedPercent)}` });
   for (const disk of d.disks) {
     if (disk.level === 'ok') continue;
     out.push({
       level: disk.level,
+      short: disk.freeBytes < SYSTEM_DISK_RESERVE_BYTES ? `ディスクの空き ${bytesLabel(disk.freeBytes)}` : `ディスク ${percentLabel(disk.usedPercent)}`,
       text:
         disk.freeBytes < SYSTEM_DISK_RESERVE_BYTES
           ? // The minutes keep their recordings with the data: only that disk refuses them.
@@ -54,7 +55,7 @@ export function findings(d: SystemStatusResponse): { level: SystemLevel; text: s
           : `ディスク（${disk.label}）の使用率が高い（${percentLabel(disk.usedPercent)}）`,
     });
   }
-  if (d.load && d.load.level !== 'ok') out.push({ level: d.load.level, text: `負荷が高い（1 コアあたり ${d.load.perCore.toFixed(2)}）` });
+  if (d.load && d.load.level !== 'ok') out.push({ level: d.load.level, text: `負荷が高い（1 コアあたり ${d.load.perCore.toFixed(2)}）`, short: `負荷 ${d.load.perCore.toFixed(2)}` });
   const rank = (l: SystemLevel) => (l === 'alert' ? 0 : l === 'warn' ? 1 : 2);
   return out.sort((a, b) => rank(a.level) - rank(b.level));
 }
@@ -152,7 +153,9 @@ export function SystemStatusPanel({ active, onAvailable }: { active: boolean; on
   return (
     <section className="admin system-status" aria-labelledby="system-status-title" data-testid="system-status">
       <h3 id="system-status-title">サーバーの状態</h3>
-      <p className="hint">アプリが動いているサーバー全体の値です。この画面を開いているあいだ、{SYSTEM_REFRESH_SECONDS} 秒ごとに更新します。</p>
+      <p className="hint">
+        アプリが動いているサーバー全体の値です。この画面を開いているあいだ、{SYSTEM_REFRESH_SECONDS} 秒ごとに更新します。PC の画面では、上のヘッダーにも簡単な状態を出しています。
+      </p>
       <LoadStatus loader={loader} what="サーバーの状態" compact />
       {data && (
         <>

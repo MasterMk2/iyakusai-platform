@@ -605,9 +605,21 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       parse,
     });
   }
+  // The server's state (2026-11-21): every member but the festival day's temporary staff, on the settings screen and
+  // in the header of a PC (see ops/system-status.ts).
+  if (options.systemStatus) {
+    registerSystemStatusRoutes(app, options.systemStatus, {
+      viewer: (request) => {
+        const user = requireUser(request);
+        const temporary =
+          isTemporaryStaffLoginId(user.id) ||
+          departmentsOfLabel(user.roleLabel).includes(TEMPORARY_STAFF_DEPARTMENT) ||
+          (!!discordApi && discordApi.currentSession(request)?.temporaryStaff === true);
+        return user.disabled || temporary ? null : user;
+      },
+    });
+  }
   // Copy to Google Drive: signed requests of the committee's Apps Script, Discord login only (the gate lets its report through).
-  // The server's state (2026-11-21): access administrators only, on the settings screen (see ops/system-status.ts).
-  if (options.systemStatus) registerSystemStatusRoutes(app, options.systemStatus, { requireUser });
   if (options.rental?.driveSyncKey) {
     if (auth.mode !== 'discord') throw new ConfigError('物品の Drive 同期は discord モードでだけ使えます。');
     attachRentalDriveSync(app, { store: options.rental.store, key: options.rental.driveSyncKey });
