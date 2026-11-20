@@ -1674,6 +1674,7 @@ button.task-tree-toggle:focus-visible { outline-offset: -3px; }
 /* Ten tabs (掲示板 added 2026-11-11): below 420px each is under 42px, so a three-letter label (掲示板・連絡先) needs 12px to stay on one line. */
 @media (max-width: 420px) {
   .global-nav a { padding-left: 0; padding-right: 0; font-size: 12px; }
+}
 /* Approval before sending (2026-11-11): the waiting mail's list and one request, in the mailbox's two columns. */
 .approval-list h2 { margin: 0 0 4px; }
 .approval-back { display: none; padding: 8px 0; min-height: 44px; color: var(--blue); }
@@ -1710,3 +1711,28 @@ button.task-tree-toggle:focus-visible { outline-offset: -3px; }
 @media (max-width: 1199px) {
   .approval-back { display: inline-flex; }
 }
+
+/* Bot tab: the AI and its OpenCode Go allowance (2026-11-21). One quiet line under the sections; the colour only repeats
+   what the words say (near a limit, stopped). Wraps on a phone. */
+.bot-ai-status { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; margin: 0 0 12px; padding: 6px 12px; border: 1px solid var(--line-soft); border-radius: 6px; background: var(--surface-sunken); font-size: 14px; color: var(--muted); }
+.bot-ai-status p { margin: 0; }
+.bot-ai-model { color: var(--ink); font-weight: 600; }
+.bot-ai-key { margin-right: 6px; padding: 0 6px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-weight: 400; font-size: 12px; }
+.bot-ai-route { color: var(--muted); font-weight: 400; }
+.bot-ai-windows { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0; padding: 0; list-style: none; }
+.bot-ai-window { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.bot-ai-bar { position: relative; display: inline-block; width: 48px; height: 6px; border-radius: 3px; background: var(--line-soft); overflow: hidden; }
+.bot-ai-bar > span { position: absolute; inset: 0 auto 0 0; background: var(--blue); }
+.bot-ai-window-figure { color: var(--ink); font-variant-numeric: tabular-nums; }
+.bot-ai-window.warn .bot-ai-bar > span { background: var(--warn-line); }
+.bot-ai-window.stopped .bot-ai-bar > span { background: var(--red); }
+.bot-ai-window.warn .bot-ai-window-figure { color: var(--amber); font-weight: 700; }
+.bot-ai-window.stopped .bot-ai-window-figure { color: var(--red); font-weight: 700; }
+.bot-ai-window-resets { font-size: 12px; }
+.bot-ai-read { font-size: 12px; }
+.bot-ai-note { flex-basis: 100%; }
+.bot-ai-status.warn { border-color: var(--amber-line); background: var(--amber-bg); }
+.bot-ai-status.warn .bot-ai-note { color: var(--amber); }
+.bot-ai-status.stopped { border-color: var(--red-line); background: var(--red-bg); }
+.bot-ai-status.stopped .bot-ai-note { color: var(--red); font-weight: 700; }
+.bot-ai-status.unknown .bot-ai-note { color: var(--ink); }

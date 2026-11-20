@@ -17,6 +17,8 @@ export interface BotFakeOptions {
   failAll?: { status: number; body: unknown };
   /** Answer of GET /assistant/summary. */
   summary?: unknown;
+  /** meta.ai (the AI and its OpenCode Go allowance, 2026-11-21); absent like a Bot from before then. */
+  ai?: unknown;
 }
 
 interface FakeJob {
@@ -143,6 +145,7 @@ export async function installBotFake(page: Page, options: BotFakeOptions = {}): 
     shareChannel: { id: '1000000000000000002', name: 'bottest' },
     isAdmin: false,
     bot: { alive: options.alive ?? true, lastSeenAt: options.alive === false ? null : '2026-10-14T05:00:00+09:00' },
+    ...(options.ai !== undefined ? { ai: options.ai } : {}),
   });
   const jobView = (job: FakeJob) => ({
     id: job.id,

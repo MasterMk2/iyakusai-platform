@@ -280,3 +280,49 @@ test('phone widths: no horizontal scroll on the Bot screens and the module tabs,
     for (const height of tabs) expect(height).toBeGreaterThanOrEqual(44);
   }
 });
+
+// The AI line (2026-11-21): the model and the OpenCode Go allowance the Bot read, under the sections.
+function goStatus(percents: [number, number, number], fetchedAt: string) {
+  const resets = ['2099-01-01T03:49:00Z', '2099-01-03T00:00:00Z', '2099-01-20T13:00:00Z'];
+  return {
+    provider: 'opencode_go',
+    model: 'gemini-4-argon',
+    modelLabel: 'Gemini 4 Argon',
+    ok: true,
+    stale: false,
+    error: null,
+    fetchedAt,
+    windows: (['rolling', 'weekly', 'monthly'] as const).map((key, i) => ({ key, label: ['5時間', '週', '月'][i], percent: percents[i], status: 'ok', resetsAt: resets[i] })),
+  };
+}
+
+test('the AI line: model, three windows, and a plain warning near a limit; nothing from an older Bot', async ({ page }) => {
+  await start(page, { ai: goStatus([14, 85, 2], new Date().toISOString()) });
+  await page.goto('/#/bot/ask');
+  const line = page.getByTestId('bot-ai-status');
+  await expect(line).toContainText('Gemini 4 Argon');
+  await expect(line).toContainText('OpenCode Go');
+  await expect(page.getByTestId('bot-ai-window-rolling')).toContainText('14%');
+  await expect(page.getByTestId('bot-ai-window-weekly')).toContainText('85%');
+  await expect(line).toHaveAttribute('data-level', 'warn');
+  await expect(page.getByTestId('bot-ai-note')).toHaveText(/週の枠が残り少なくなっています/);
+  // The questions stay the first thing on the screen.
+  await expect(page.getByTestId('bot-section-ask')).toBeVisible();
+
+  const older = await page.context().newPage();
+  await start(older);
+  await older.goto('/#/bot/ask');
+  await expect(older.getByTestId('bot-section-ask')).toBeVisible();
+  await expect(older.getByTestId('bot-ai-status')).toHaveCount(0);
+  await older.close();
+});
+
+test('the AI line says the AI is stopped when a window is used up, and fits a phone', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 800 });
+  await start(page, { ai: goStatus([100, 60, 30], new Date().toISOString()) });
+  await page.goto('/#/bot/ask');
+  await expect(page.getByTestId('bot-ai-status')).toHaveAttribute('data-level', 'stopped');
+  await expect(page.getByRole('alert')).toContainText('5時間の枠を使い切ったため、AI は止まっています');
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(0);
+});

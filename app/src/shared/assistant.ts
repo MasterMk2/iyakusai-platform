@@ -164,8 +164,34 @@ export interface AssistantMeta {
   shareChannel: AssistantNamed | null;
   isAdmin: boolean;
   bot: { alive: boolean; lastSeenAt: string | null };
+  /** The AI the Bot answers with and, through OpenCode Go, how much of its allowance is used (2026-11-21). Absent from a
+   * Bot from before then; null when the Bot has not written it yet. The Bot reads it every 5 minutes (see aiStatus.ts). */
+  ai?: AssistantAiStatus | null;
   /** Added by this server (not the Bot): the committee address mail drafts put in BCC to keep a copy, from the mailbox settings. */
   mailBcc?: string;
+}
+
+/** One OpenCode Go window: 5 hours (rolling), the week, the month. Using 100% of any one stops the AI until it resets. */
+export interface AssistantAiWindow {
+  key: 'rolling' | 'weekly' | 'monthly';
+  label: string;
+  percent: number;
+  /** OpenCode's own word ("ok" while usable). */
+  status: string;
+  resetsAt: string | null;
+}
+
+export interface AssistantAiStatus {
+  provider: 'opencode_go' | 'claude_subscription';
+  model: string | null;
+  modelLabel: string | null;
+  /** The last reading worked. */
+  ok: boolean;
+  /** This reading failed and the windows are the last good ones (fetchedAt is theirs). */
+  stale: boolean;
+  error: string | null;
+  fetchedAt: string | null;
+  windows: AssistantAiWindow[];
 }
 
 /** Answer of GET /assistant/members: the people a reminder can be for (`id` is `discord-<ID>`). */

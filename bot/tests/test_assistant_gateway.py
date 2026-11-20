@@ -367,6 +367,32 @@ class MetaTests(Harness):
         self.assertFalse(body["isAdmin"])
         self.assertTrue(self.request("GET", self.jobs_path("meta"), actor=OFFICER).json()["isAdmin"])
 
+    def test_ai_status_absent_is_null(self):
+        self.make_gateway()
+        self.start(self.gateway)
+        self.assertIsNone(self.request("GET", self.jobs_path("meta")).json()["ai"])
+
+    def test_ai_status_is_relayed_and_trimmed(self):
+        self.make_gateway()
+        self.store.set_meta("ai_status", json.dumps({
+            "provider": "opencode_go", "model": "gemini-4-argon", "modelLabel": "Gemini 4 Argon", "ok": True,
+            "stale": False, "error": None, "fetchedAt": "2026-11-21T02:00:00Z", "secret": "x" * 10,
+            "windows": [{"key": "rolling", "label": "5時間", "percent": 14, "status": "ok", "resetsAt": "2026-11-20T18:49:49Z"},
+                        {"key": "weekly", "label": "週", "percent": "5", "status": "ok"},
+                        {"key": "bogus", "label": "?", "percent": 1}]}))
+        self.start(self.gateway)
+        ai = self.request("GET", self.jobs_path("meta")).json()["ai"]
+        self.assertEqual(ai["modelLabel"], "Gemini 4 Argon")
+        self.assertNotIn("secret", ai)
+        self.assertEqual([w["key"] for w in ai["windows"]], ["rolling"])
+        self.assertEqual(ai["windows"][0]["percent"], 14.0)
+
+    def test_ai_status_unreadable_is_null(self):
+        self.make_gateway()
+        self.store.set_meta("ai_status", "{not json")
+        self.start(self.gateway)
+        self.assertIsNone(self.request("GET", self.jobs_path("meta")).json()["ai"])
+
     def test_gemini_model_absent_when_disabled(self):
         self.make_gateway(capabilities=caps(gemini=False))
         self.start(self.gateway)

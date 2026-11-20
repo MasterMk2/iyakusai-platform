@@ -34,8 +34,8 @@ GO_PLAN_USD = 10.0
 # Go の Limits(https://opencode.ai/go・2026-11-20 時点)：月の枠を、そのモデルだけを使った場合の
 # API 換算額で表したもの。表に無いモデルは換算せず API 換算額を出す。
 GO_MONTHLY_CAP_USD = {"claude-haiku-5-5": 15.0, "deepseek-v4-pro": 15.0, "gpt-5.6-luna": 15.0,
-                      "glm-5.3-flash": 60.0}
-_MODEL_LABELS = {"claude-haiku-5-5": "Claude Haiku 5.5"}
+                      "glm-5.3-flash": 60.0, "gemini-4-argon": 30.0}
+_MODEL_LABELS = {"claude-haiku-5-5": "Claude Haiku 5.5", "gemini-4-argon": "Gemini 4 Argon"}
 _ALIASES = ("opus", "sonnet", "haiku")
 
 
