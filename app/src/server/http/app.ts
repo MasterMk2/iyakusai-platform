@@ -40,6 +40,8 @@ import { registerTaskRoutes, type TaskRuntime } from '../tasks/routes.js';
 import { AssistantServiceError } from '../assistant/client.js';
 import { registerAssistantRoutes, type AssistantRuntime } from '../assistant/routes.js';
 import { attachmentDisposition } from './content-disposition.js';
+import { registerAvailabilityRoutes, type AvailabilityOptions, type AvailabilityRuntime } from '../availability/routes.js';
+import { AvailabilityService } from '../availability/service.js';
 import { registerCalendarRoutes, type CalendarRuntime } from '../calendar/routes.js';
 import { HttpError } from './http-error.js';
 import { registerLineRoutes, type LineRuntime } from './line-routes.js';
@@ -77,6 +79,8 @@ export interface AppOptions {
   mailbox?: MailboxRuntime | null;
   /** The committee calendar (SQLite beside the mail, or the demo's). Absent: the calendar API answers 404. */
   calendar?: CalendarRuntime | null;
+  /** Free/busy from members' Google calendars (availability.sqlite3 and Google, or the demo's). Absent: off (enabled: false). */
+  availability?: AvailabilityOptions | null;
   /** Discord login only: key of the Bot's read-only data source (POST /v1/bot/datasource). Absent: the route does not exist. */
   botDatasourceKey?: Buffer | null;
   /** The decision register (decisions.sqlite3). Absent: the register is off (its meta route answers enabled: false). */
@@ -498,6 +502,36 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     parse,
   });
   if (options.calendar) app.addHook('onClose', async () => options.calendar!.store.close());
+  // Free/busy (2026-11-20): members' own Google calendars, busy periods only, seen by whom each member chose (see availability/routes.ts).
+  const isTemporaryPerson = (user: User, request: FastifyRequest | null) =>
+    isTemporaryStaffLoginId(user.id) || departmentsOfLabel(user.roleLabel).includes(TEMPORARY_STAFF_DEPARTMENT) || (!!discordApi && request !== null && discordApi.currentSession(request)?.temporaryStaff === true);
+  const committeeUsers = () => (discordApi ? discordApi.listUsers() : store.current.users.filter((u) => !u.disabled));
+  let availability: AvailabilityRuntime | null = null;
+  if (options.availability) {
+    const given = options.availability;
+    const service = new AvailabilityService({
+      store: given.store,
+      source: given.source,
+      refreshMinutes: given.refreshMinutes,
+      horizonDays: given.horizonDays,
+      serviceAccount: given.serviceAccount,
+      clock,
+      isActiveMember: (userId) => committeeUsers().some((u) => u.id === userId && !u.disabled && !isTemporaryPerson(u, null)),
+    });
+    availability = { store: given.store, service };
+    given.onService?.(service);
+    if (given.autoRefresh !== false) service.start();
+    app.addHook('onClose', async () => service.stop());
+  }
+  registerAvailabilityRoutes(app, availability, {
+    requireUser,
+    isTemporary: isTemporaryPerson,
+    lookupUser: (userId) => (discordApi ? discordApi.lookupUser(userId) : findUser(store.current, userId)),
+    listUsers: committeeUsers,
+    taskUserFor: (userId) => options.tasks?.bridge.taskUserFor(userId) ?? null,
+    clock,
+    parse,
+  });
 
   await registerRentalRoutes(app, { rental: options.rental ?? null, requireUser, lookupUser: (userId) => (discordApi ? discordApi.lookupUser(userId) : findUser(store.current, userId)), listUsers: () => discordApi ? discordApi.listUsers() : store.current.users.filter((u) => !u.disabled) });
   // Decision register (2026-11-03): committee members only. Temporary staff and a Discord-less account are refused, reads too.

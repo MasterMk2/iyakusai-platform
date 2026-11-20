@@ -110,6 +110,8 @@ services:
 | `line.json` | LINE 公式アカウント（`mailbox.json` と同じフォルダ）。あれば LINE をメールの画面に出す。`send` とチャネルのアクセストークンが無ければ読むだけ。Bot からの返信（`discord`）は `"auth": "signed"`（svc-auth/v1、鍵 32 バイト以上）にする |
 | `books-sheets.json` | 会計のマスターシート（`mailbox.json` と同じフォルダ。任意）。あれば帳簿の写しをスプレッドシートに書く。下の「会計のマスターシート」 |
 | `books-sheets-key.json` | 上のサービスアカウントの JSON 鍵（名前は例。所有者だけが読める権限 600） |
+| `availability.json` | 空き具合（委員の Google カレンダーの「予定あり」。`mailbox.json` と同じフォルダ。任意）。あれば設定 →「空き具合の共有」と、担当の欄・カレンダーの表示が出る。下の「空き具合」 |
+| `availability-key.json` | 上のサービスアカウントの JSON 鍵（名前は例。会計のマスターシートと同じ鍵でもよい。権限 600） |
 | `bank.json` | 銀行の連携（GMOあおぞらネット銀行 API。`mailbox.json` と同じフォルダ。任意）。あれば設定の画面から銀行とつなげる。下の「銀行の連携」 |
 | `bank-client-secret`・`bank-token.key` | 上のクライアントシークレット（銀行の画面の値を 1 行）と、トークンを暗号化する鍵（32 バイト以上の乱数）。名前は例。どちらも権限 600 |
 | `*.key` | 経路ごとの鍵。32 バイト以上の乱数 |
@@ -159,6 +161,24 @@ services:
 - 知らない項目があると、会計のスプレッドシートだけを無効にして起動する（帳簿は使える）。`tabPrefix` は基盤が作るタブの名前の前に付ける文字（既定はなし）、`debounceSeconds` は帳簿が変わってから書くまでの秒数（5〜3600）。
 - 鍵の中身は `client_email` と `private_key` だけを読む。鍵をログ・画面・スプレッドシートに出さない。
 
+空き具合（[app/docs/availability.md](../app/docs/availability.md)）を使うとき：
+
+1. Google Cloud のプロジェクトで Google Calendar API を有効にする（会計のマスターシートと同じプロジェクト・同じサービスアカウントでよい）。サービスアカウントにほかの権限は付けない。
+2. `availability.json` を置いてアプリを再起動する。委員は設定 →「空き具合の共有」で、自分のカレンダーをサービスアカウントのアドレスに「予定の表示（時間枠のみ、詳細は非表示）」で共有してからつなぐ。
+3. アプリのコンテナから `oauth2.googleapis.com` と `www.googleapis.com` へ HTTPS で出られること（外への通信を絞っている環境では足す）。
+
+```json
+{
+  "version": 1,
+  "serviceAccountKeyFile": "/config/availability-key.json",
+  "refreshMinutes": 15,
+  "horizonDays": 42
+}
+```
+
+- `refreshMinutes` は Google に問い合わせる間隔（5〜120 分）、`horizonDays` は今日から何日先まで読むか（7〜60 日）。知らない項目があると、空き具合だけを無効にして起動する（理由は起動のログ。鍵の中身は出さない）。
+- 読み取りのスコープは `calendar.freebusy` だけ。Google から来るのは「予定あり」の時間帯だけで、題名・場所・メモは来ない。その時間帯はアプリのメモリにだけ置き、ファイルにもバックアップにも書かない。ファイル（`SMM_MAIL_DIR/availability.sqlite3`）にあるのは、委員ごとのカレンダー ID と、見せる相手・見せ方の選択だけ。
+
 銀行の連携（[app/docs/bank.md](../app/docs/bank.md)）を使うとき：
 
 1. 銀行の画面（いまは sunabar ポータル）でアカウントを足し、認可利用を ON、認証プロトコルは OAuth2.0、Redirect_uri は `https://<公開ホスト>/bank/callback`、スコープは `private:account` と `private:virtual-account` だけを ON にする。
@@ -183,7 +203,7 @@ services:
 docker exec <コンテナ名> node dist/server/ops/backup.js
 ```
 
-`/backups/iyakusai-app-<UTC の時刻>/` に、状態の JSON・物品の台帳・メール・連絡先・決定事項・団体の台帳・予定・入金確認・当日の画面・年度の切り替え・掲示板・会計の帳簿（SQLite のオンラインバックアップ）・それらが指す写真と添付と領収書（記録の SHA-256 と照合したもの）・`manifest.json` を書きます。何も消しません。毎日など定期的に動かしてください。
+`/backups/iyakusai-app-<UTC の時刻>/` に、状態の JSON・物品の台帳・メール・連絡先・決定事項・団体の台帳・予定・入金確認・当日の画面・年度の切り替え・掲示板・空き具合の設定（予定ありの時間帯は含まない）・会計の帳簿（SQLite のオンラインバックアップ）・それらが指す写真と添付と領収書（記録の SHA-256 と照合したもの）・`manifest.json` を書きます。何も消しません。毎日など定期的に動かしてください。
 
 戻すとき：コンテナを止め、バックアップのフォルダの中身を `/data` に当たるフォルダへ写し戻してから起動します。
 

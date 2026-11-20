@@ -2,6 +2,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { ConfigError } from '../auth.js';
 import { loadBankConfig, type BankConfig } from '../bank/config.js';
+import { loadAvailabilityConfig, type AvailabilityConfig } from '../availability/config.js';
 import { loadBooksSheetsConfig, type BooksSheetsConfig } from '../books/sheets-config.js';
 import { loadLineConfig, type LineOaConfig } from '../line/oa-config.js';
 import { loadMinutesConfig, type MinutesConfig } from '../minutes/config.js';
@@ -59,6 +60,8 @@ export interface MailboxConfig {
   booksSheets?: BooksSheetsConfig | null;
   /** The bank connection (bank.json next to this file, 2026-11-06); absent or null when it is off. */
   bank?: BankConfig | null;
+  /** Free/busy from members' Google calendars (availability.json next to this file, 2026-11-20); absent or null when off. */
+  availability?: AvailabilityConfig | null;
 }
 
 /**
@@ -238,7 +241,18 @@ export function parseMailboxConfig(env: NodeJS.ProcessEnv, discordMode: boolean)
   const key = readKey((raw as Record<string, unknown> | null)?.ingestKeyFile);
   const send = (raw as Record<string, unknown> | null)?.send;
   const password = send && typeof send === 'object' ? readPassword((send as Record<string, unknown>).smtpPasswordFile) : null;
-  return { ...validateMailboxConfig(raw, resolve(dir), key, password), line: lineOrOff(file, resolve(dir)), minutes: minutesOrOff(file, resolve(dir)), booksSheets: booksSheetsOrOff(file), bank: bankOrOff(file, resolve(dir)) };
+  return { ...validateMailboxConfig(raw, resolve(dir), key, password), line: lineOrOff(file, resolve(dir)), minutes: minutesOrOff(file, resolve(dir)), booksSheets: booksSheetsOrOff(file), bank: bankOrOff(file, resolve(dir)), availability: availabilityOrOff(file) };
+}
+
+/** An availability.json that cannot be used turns off the free/busy only (no secret named). */
+function availabilityOrOff(file: string): AvailabilityConfig | null {
+  try {
+    return loadAvailabilityConfig(file);
+  } catch (err) {
+    if (!(err instanceof ConfigError)) throw err;
+    console.error(`空き具合（Google カレンダー）は無効のまま起動しました: ${err.message}`);
+    return null;
+  }
 }
 
 /** A bank.json that cannot be used turns off the bank connection only (no secret named). */

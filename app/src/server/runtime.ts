@@ -49,6 +49,10 @@ import { seedBulletinDemo } from './bulletin/seed.js';
 import { DecisionsStore } from './decisions/store.js';
 import { seedDecisionsDemo } from './decisions/seed.js';
 import { openDemoBooks } from './payments/demo.js';
+import { DemoFreeBusy, seedAvailabilityDemo } from './availability/demo.js';
+import { GoogleFreeBusy } from './availability/google.js';
+import type { AvailabilityOptions } from './availability/routes.js';
+import { AvailabilityStore } from './availability/store.js';
 import { CalendarStore } from './calendar/store.js';
 import { seedCalendarDemo } from './calendar/seed.js';
 import type { CalendarRuntime } from './calendar/routes.js';
@@ -386,6 +390,25 @@ export async function composeServer(config: ServerConfig, overrides: ComposeOver
     if (bulletin && config.auth.mode === 'demo') seedBulletinDemo(bulletin, initial.users.find((u) => u.canManageAccess)?.id ?? initial.users[0]?.id ?? 'system', now);
   }
 
+  // Free/busy from members' Google calendars (2026-11-20): availability.sqlite3 beside the decision register (the mail
+  // folder in production, so its backup carries the members' choices; the busy periods stay in memory and are never
+  // written). On with availability.json next to the mail configuration (Google, as the service account), or in the
+  // demo (a synthetic stand-in for Google). A file that cannot be opened turns the feature off only.
+  let availability: AvailabilityOptions | null = null;
+  const google = config.mailbox?.availability ?? null;
+  if (decisionsDir && (google || config.auth.mode === 'demo')) {
+    try {
+      const availabilityStore = new AvailabilityStore(decisionsDir);
+      availability = google
+        ? { store: availabilityStore, source: new GoogleFreeBusy(google.key), serviceAccount: google.key.clientEmail, refreshMinutes: google.refreshMinutes, horizonDays: google.horizonDays }
+        : { store: availabilityStore, source: new DemoFreeBusy(), serviceAccount: 'iyakusai-demo@demo-project.iam.gserviceaccount.com', refreshMinutes: 15, horizonDays: 42 };
+      if (!google) seedAvailabilityDemo(availabilityStore, initial.users.filter((u) => !u.disabled && !u.roleLabel.includes('臨時')), now);
+    } catch {
+      console.error('空き具合の保存ファイル（availability.sqlite3）を開けないか、形式が正しくないため、空き具合だけを止めました。ファイルは変更していません。ほかの機能は動きます。');
+      availability = null;
+    }
+  }
+
   // Contacts, organizations and payments on synthetic data next to the demo data file (2026-11-03); null if they cannot be opened.
   const demoBooks = config.auth.mode === 'demo' ? openDemoBooks(path.dirname(config.dataFile), initial.users, now) : null;
 
@@ -430,6 +453,7 @@ export async function composeServer(config: ServerConfig, overrides: ComposeOver
     rental,
     mailbox,
     calendar,
+    availability,
     botDatasourceKey: config.botDatasourceKey,
     decisions,
     demoBooks,
@@ -446,6 +470,10 @@ export async function composeServer(config: ServerConfig, overrides: ComposeOver
   }
   if (bulletin) {
     const opened = bulletin;
+    app.addHook('onClose', async () => opened.close());
+  }
+  if (availability) {
+    const opened = availability.store;
     app.addHook('onClose', async () => opened.close());
   }
   if (line?.reads) {

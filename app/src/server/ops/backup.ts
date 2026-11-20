@@ -330,6 +330,31 @@ async function main(): Promise<void> {
     manifest.files['mailbox/bulletin.sqlite3'] = { bytes: readFileSync(dest).length, sha256: sha256(readFileSync(dest)) };
   }
 
+  // Free/busy (2026-11-20): availability.sqlite3 next to mail.sqlite3 — each member's connected calendar and choices
+  // (who may see, how coarse) and pending checks. The busy periods are never in it (they stay in the app's memory).
+  const availabilityDb = path.join(data, 'mailbox', 'availability.sqlite3');
+  if (existsSync(availabilityDb)) {
+    const dest = path.join(target, 'mailbox', 'availability.sqlite3');
+    mkdirSync(path.dirname(dest), { recursive: true, mode: 0o700 });
+    const source = new DatabaseSync(availabilityDb, { readOnly: true });
+    try {
+      await backup(source, dest);
+    } finally {
+      source.close();
+    }
+    const copy = new DatabaseSync(dest, { readOnly: true });
+    try {
+      const check = copy.prepare('PRAGMA integrity_check').get() as { integrity_check: string };
+      if (check.integrity_check !== 'ok') throw new Error('空き具合の複製の整合性を確認できませんでした。');
+      for (const table of ['connections', 'challenges']) {
+        manifest.counts[`availability.${table}`] = Number((copy.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n);
+      }
+    } finally {
+      copy.close();
+    }
+    manifest.files['mailbox/availability.sqlite3'] = { bytes: readFileSync(dest).length, sha256: sha256(readFileSync(dest)) };
+  }
+
   // Year rollover (2026-11-04): rollover.sqlite3 next to mail.sqlite3, the record of each run (who, when, what) and
   // what each copy made, which an undo needs.
   const rolloverDb = path.join(data, 'mailbox', 'rollover.sqlite3');

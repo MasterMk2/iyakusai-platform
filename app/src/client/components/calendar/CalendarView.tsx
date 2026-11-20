@@ -12,11 +12,14 @@ import {
 } from '../../../shared/calendar';
 import { isAssignedTo, TASK_STATUS_LABELS, type TaskView } from '../../../shared/tasks';
 import { needsDateCheck } from '../../../shared/rollover';
+import { AVAILABILITY_STATE_LABELS, describeDay, showsBusy, type AvailabilityPerson } from '../../../shared/availability';
 import { api } from '../../api';
 import { useLoader } from '../../useLoader';
+import { useAvailability, useRemembered } from '../availability/useAvailability';
 import { EventForm } from './EventForm';
 import { SubscribePanel } from './SubscribePanel';
 import './calendar.css';
+import '../availability/availability.css';
 
 // The calendar inside the tasks tab (one of its views, so no tab is added). A month table on a PC, a week of days
 // as a vertical list on a phone (CSS picks one). Events come from the calendar API; the task deadlines are the
@@ -24,6 +27,18 @@ import './calendar.css';
 
 const WEEK_NAMES = ['日', '月', '火', '水', '木', '金', '土'];
 const CHIPS_PER_DAY = 3;
+/** People's busy rows a month cell shows before "ほか N 人" (the day's list shows them all). */
+const BUSY_PER_DAY = 2;
+
+/** One person's busy text on one day, for the rows the calendar adds (2026-11-20). */
+interface BusyLine {
+  userId: string;
+  name: string;
+  /** In full: 14:00–16:00、19:00–21:00 or 午後・夜. */
+  text: string;
+  /** For a month cell (a narrow column): the parts of the day only, or 終日. */
+  short: string;
+}
 
 type Editing = { kind: 'new'; date: string; yearly: boolean } | { kind: 'edit'; event: CalendarEventView } | null;
 
@@ -100,6 +115,28 @@ export function CalendarView({ tasks, tasksLoading, taskNote, userId, onOpenTask
   const events = useLoader(loadEvents);
   const loadYearly = useCallback((signal: AbortSignal) => api<CalendarYearlyResponse>('GET', `/api/calendar/yearly?year=${year}`, undefined, signal), [year]);
   const yearly = useLoader(loadYearly);
+  // Members' busy periods (2026-11-20), from their own Google calendars when they let this person see them.
+  const availability = useAvailability(range.from, range.to, mode === 'month');
+  const [showBusy, setShowBusy] = useRemembered('iyakusai.availability.calendar', true);
+  const [hiddenPeople, setHiddenPeople] = useState<ReadonlySet<string>>(() => new Set());
+  const busyData = availability.data?.enabled ? availability.data : null;
+  const busyPeople: AvailabilityPerson[] = busyData && showBusy ? busyData.people.filter((p) => !hiddenPeople.has(p.userId)) : [];
+  /** Who is busy on the day and who is known to be free (only days that were read: today to the last day read). */
+  const busyOn = (date: string): { busy: BusyLine[]; free: string[] } => {
+    const busy: BusyLine[] = [];
+    const free: string[] = [];
+    if (!busyData || date < today || date > busyData.coveredTo) return { busy, free };
+    for (const p of busyPeople) {
+      if (!showsBusy(p.state)) continue;
+      const day = p.days.find((d) => d.date === date);
+      if (day) {
+        const text = describeDay(day);
+        busy.push({ userId: p.userId, name: p.displayName, text, short: text === '終日' ? text : describeDay({ date: day.date, parts: day.parts }) });
+      }
+      else free.push(p.displayName);
+    }
+    return { busy, free };
+  };
 
   const myDepartments = events.data?.myDepartments ?? [];
   const eventVisible = (e: CalendarEventView) => {
@@ -220,9 +257,50 @@ export function CalendarView({ tasks, tasksLoading, taskNote, userId, onOpenTask
             <label className="cal-check">
               <input type="checkbox" checked={hideDone} onChange={(e) => setHideDone(e.target.checked)} /> 完了したタスクを隠す
             </label>
+            {busyData && (
+              <label className="cal-check">
+                <input type="checkbox" checked={showBusy} onChange={(e) => setShowBusy(e.target.checked)} data-testid="calendar-show-busy" /> 委員の空き具合を重ねる
+              </label>
+            )}
           </>
         )}
       </div>
+      {mode === 'month' && busyData && showBusy && (
+        <div className="cal-busy-people" role="group" aria-label="空き具合を出す人" data-testid="calendar-busy-people">
+          {busyData.people.length === 0 ? (
+            <p className="hint">空き具合を見せている委員はいません。自分の予定は「設定 › 空き具合の共有」でつなげます。</p>
+          ) : (
+            <>
+              {busyData.people.map((p) => (
+                <label key={p.userId} className="status-option">
+                  <input
+                    type="checkbox"
+                    checked={!hiddenPeople.has(p.userId)}
+                    onChange={(e) =>
+                      setHiddenPeople((h) => {
+                        const next = new Set(h);
+                        if (e.target.checked) next.delete(p.userId);
+                        else next.add(p.userId);
+                        return next;
+                      })
+                    }
+                  />
+                  {p.displayName}
+                  {p.self ? '（自分）' : ''}
+                </label>
+              ))}
+              <span className="hint">{dateLabel(busyData.coveredTo)} まで。それより先と、今日より前は出ません。</span>
+            </>
+          )}
+          {busyPeople
+            .filter((p) => !showsBusy(p.state))
+            .map((p) => (
+              <p key={p.userId} className="status warning">
+                {p.displayName}さん：{AVAILABILITY_STATE_LABELS[p.state]}（予定がないという意味ではありません）。
+              </p>
+            ))}
+        </div>
+      )}
 
       {notice && (
         <p className="status ok" role="status">
@@ -293,6 +371,7 @@ export function CalendarView({ tasks, tasksLoading, taskNote, userId, onOpenTask
                             </li>
                           )}
                         </ul>
+                        <BusyRows lines={busyOn(d).busy} max={BUSY_PER_DAY} onMore={() => openDay(d)} compact />
                       </td>
                     );
                   })}
@@ -308,6 +387,7 @@ export function CalendarView({ tasks, tasksLoading, taskNote, userId, onOpenTask
                 <section key={d} className={`cal-week-day ${d === today ? 'is-today' : ''}`} aria-label={dateLabel(d)}>
                   <h3>{dateLabel(d)}</h3>
                   {items.length === 0 ? <p className="hint">予定はありません。</p> : <ItemList items={items} />}
+                  <BusyRows lines={busyOn(d).busy} free={busyOn(d).free} />
                   <button type="button" className="quiet" onClick={() => setEditing({ kind: 'new', date: d, yearly: false })}>
                     この日に予定を追加
                   </button>
@@ -322,6 +402,15 @@ export function CalendarView({ tasks, tasksLoading, taskNote, userId, onOpenTask
               const items = itemsOn(dayLabel);
               return items.length === 0 ? <p className="hint">この日の予定とタスクの期限はありません。</p> : <ItemList items={items} />;
             })()}
+            {busyPeople.length > 0 && (
+              <>
+                <h4 className="cal-busy-title">委員の空き具合</h4>
+                {(() => {
+                  const { busy, free } = busyOn(dayLabel);
+                  return busy.length === 0 && free.length === 0 ? <p className="hint">この日の空き具合は分かりません（今日より前か、読んだ期間の外です）。</p> : <BusyRows lines={busy} free={free} />;
+                })()}
+              </>
+            )}
             <button type="button" className="secondary" onClick={() => setEditing({ kind: 'new', date: dayLabel, yearly: false })}>
               この日に予定を追加
             </button>
@@ -376,6 +465,32 @@ export function CalendarView({ tasks, tasksLoading, taskNote, userId, onOpenTask
         </section>
       )}
     </div>
+  );
+}
+
+/**
+ * People's busy rows of one day; with `max`, the rest is one "ほか N 人" button; with `free`, the free people too.
+ * `compact` (a month cell): the name and the parts of the day only; the times are in the day's list and the tooltip.
+ */
+function BusyRows({ lines, max, onMore, free, compact = false }: { lines: BusyLine[]; max?: number; onMore?: () => void; free?: string[]; compact?: boolean }) {
+  if (lines.length === 0 && !free?.length) return null;
+  const shown = max === undefined ? lines : lines.slice(0, max);
+  return (
+    <ul className="cal-busy" aria-label="委員の予定あり">
+      {shown.map((l) => (
+        <li key={l.userId} title={`${l.name}：予定あり ${l.text}`}>
+          <span className="cal-busy-name">{l.name}</span> {compact ? l.short : `予定あり ${l.text}`}
+        </li>
+      ))}
+      {max !== undefined && lines.length > max && (
+        <li>
+          <button type="button" className="cal-more" onClick={onMore}>
+            ほか {lines.length - max} 人
+          </button>
+        </li>
+      )}
+      {free && free.length > 0 && <li>予定なし：{free.join('、')}</li>}
+    </ul>
   );
 }
 
