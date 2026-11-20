@@ -1,4 +1,5 @@
-import { createSign, randomInt } from 'node:crypto';
+import { randomInt } from 'node:crypto';
+import { GOOGLE_TOKEN_URL, signServiceAccountAssertion } from '../google/service-account.js';
 import type { BooksSheetsConfig } from './sheets-config.js';
 
 // Writing the books to the committee's master spreadsheet on the shared drive (2026-11-05). The app mints a short-lived
@@ -15,7 +16,7 @@ import type { BooksSheetsConfig } from './sheets-config.js';
 // formulas and no internal ids, amounts as numbers, dates as dates, a frozen header row with a filter.
 // Neither the token, the key nor a response body is logged or put in an error: a failure carries its kind only.
 
-export const TOKEN_URL = 'https://oauth2.googleapis.com/token';
+export const TOKEN_URL = GOOGLE_TOKEN_URL;
 export const SHEETS_ORIGIN = 'https://sheets.googleapis.com';
 const SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
 const TIMEOUT_MS = 20_000;
@@ -62,19 +63,13 @@ export interface SheetTab {
   widths?: Record<number, number>;
 }
 
-const b64url = (data: Buffer | string) => Buffer.from(data).toString('base64url');
-
 /** The signed assertion of Google's service-account flow (RS256, one hour). */
 export function serviceAccountAssertion(config: Pick<BooksSheetsConfig, 'clientEmail' | 'privateKey'>, nowSeconds: number): string {
-  const header = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
-  const claims = b64url(JSON.stringify({ iss: config.clientEmail, scope: SCOPE, aud: TOKEN_URL, iat: nowSeconds, exp: nowSeconds + 3600 }));
-  let signature: Buffer;
   try {
-    signature = createSign('RSA-SHA256').update(`${header}.${claims}`).sign(config.privateKey);
+    return signServiceAccountAssertion(config, SCOPE, nowSeconds);
   } catch {
     throw new SheetsError('credential');
   }
-  return `${header}.${claims}.${b64url(signature)}`;
 }
 
 const failureOf = (status: number): SheetsFailure =>

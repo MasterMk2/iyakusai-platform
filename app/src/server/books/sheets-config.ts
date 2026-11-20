@@ -1,6 +1,7 @@
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { ConfigError } from '../auth.js';
+import { readServiceAccountKey } from '../google/service-account.js';
 
 // The committee's spreadsheet of the books (2026-11-05): an operator file `books-sheets.json` next to the mailbox
 // configuration (SMM_MAIL_CONFIG), like line.json and minutes.json. Present, the books are written to the
@@ -18,7 +19,6 @@ import { ConfigError } from '../auth.js';
 export const BOOKS_SHEETS_FILE = 'books-sheets.json';
 const KNOWN = new Set(['version', 'spreadsheetId', 'serviceAccountKeyFile', 'tabPrefix', 'debounceSeconds']);
 const SPREADSHEET_ID = /^[A-Za-z0-9_-]{20,100}$/;
-const CLIENT_EMAIL = /^[a-z0-9-]{1,63}@[a-z0-9-]{1,63}\.iam\.gserviceaccount\.com$/;
 // eslint-disable-next-line no-control-regex
 const CONTROL = /[\u0000-\u001f\u007f]/;
 
@@ -28,31 +28,6 @@ export interface BooksSheetsConfig {
   privateKey: string;
   tabPrefix: string;
   debounceSeconds: number;
-}
-
-function readKey(file: unknown): { clientEmail: string; privateKey: string } {
-  if (typeof file !== 'string' || !file || CONTROL.test(file)) throw new ConfigError('サービスアカウントの鍵のファイル（serviceAccountKeyFile）を指定してください。');
-  let text: string;
-  try {
-    const stat = statSync(resolve(file));
-    if (process.platform !== 'win32' && (stat.mode & 0o077) !== 0) throw new ConfigError('サービスアカウントの鍵のファイルは所有者だけが読める権限（600 など）にしてください。');
-    if (stat.size > 16_384) throw new ConfigError('サービスアカウントの鍵のファイルが大きすぎます。');
-    text = readFileSync(resolve(file), 'utf8');
-  } catch (err) {
-    if (err instanceof ConfigError) throw err;
-    throw new ConfigError('サービスアカウントの鍵のファイルを読み込めません。');
-  }
-  let raw: Record<string, unknown>;
-  try {
-    raw = JSON.parse(text.replace(/^\uFEFF/, '')) as Record<string, unknown>;
-  } catch {
-    throw new ConfigError('サービスアカウントの鍵のファイルが JSON ではありません。');
-  }
-  const clientEmail = raw.client_email;
-  const privateKey = raw.private_key;
-  if (raw.type !== 'service_account' || typeof clientEmail !== 'string' || !CLIENT_EMAIL.test(clientEmail)) throw new ConfigError('鍵のファイルはサービスアカウントの JSON 鍵にしてください（client_email が見つかりません）。');
-  if (typeof privateKey !== 'string' || !/^-----BEGIN PRIVATE KEY-----\n[\s\S]+\n-----END PRIVATE KEY-----\n?$/.test(privateKey)) throw new ConfigError('鍵のファイルの private_key が正しい形ではありません。');
-  return { clientEmail, privateKey };
 }
 
 /** Validates the document; the key is passed by the caller (tests give a generated one). */
@@ -81,5 +56,5 @@ export function loadBooksSheetsConfig(mailConfigFile: string): BooksSheetsConfig
     throw new ConfigError(`${BOOKS_SHEETS_FILE} を JSON として読み込めません。`);
   }
   const keyFile = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>).serviceAccountKeyFile : undefined;
-  return validateBooksSheetsConfig(raw, readKey(keyFile));
+  return validateBooksSheetsConfig(raw, readServiceAccountKey(keyFile));
 }

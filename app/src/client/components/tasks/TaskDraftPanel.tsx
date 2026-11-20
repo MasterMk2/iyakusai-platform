@@ -16,6 +16,7 @@ import { api, ApiFailure, fmtDate, toFailure } from '../../api';
 import { useLoader } from '../../useLoader';
 import { isActive, newOperationId, StateTag } from '../bot/common';
 import { useJobPoll } from '../bot/useJobPoll';
+import { AvailabilityHint } from '../availability/AvailabilityHint';
 import { AssigneeSelect, DepartmentPicker, failureText, HelperPicker, shortDate } from './common';
 
 // Task drafting (2026-11-09, contract docs/contracts/bot-front.md §9): the person writes an outline, the Bot proposes
@@ -629,10 +630,13 @@ function DraftRow({
               タイトル（必須・{TASK_LIMITS.titleMax} 文字以内）
               <input value={row.title} maxLength={TASK_LIMITS.titleMax} disabled={locked} onChange={(e) => onChange({ title: e.target.value })} data-testid="task-draft-title" />
             </label>
-            <label htmlFor={`${id}-assignee`}>
-              {helping ? '主担当' : '担当者'}
-              <AssigneeSelect id={`${id}-assignee`} members={members} value={row.assigneeId} disabled={locked} onChange={chooseAssignee} />
-            </label>
+            <div>
+              <label htmlFor={`${id}-assignee`}>
+                {helping ? '主担当' : '担当者'}
+                <AssigneeSelect id={`${id}-assignee`} members={members} value={row.assigneeId} disabled={locked} onChange={chooseAssignee} />
+              </label>
+              <AvailabilityHint taskUserId={row.assigneeId} deadline={row.deadline || null} />
+            </div>
             <label>
               期限（任意）
               <input type="date" value={row.deadline} disabled={locked} onChange={(e) => onChange({ deadline: e.target.value })} />

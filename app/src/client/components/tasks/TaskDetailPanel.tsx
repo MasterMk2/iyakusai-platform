@@ -18,6 +18,7 @@ import {
 import { api, fmtDate } from '../../api';
 import { useLoader } from '../../useLoader';
 import { LoadStatus } from '../LoadStatus';
+import { AvailabilityHint } from '../availability/AvailabilityHint';
 import { AssigneeSelect, assigneeText, deadlineInfo, DepartmentPicker, departmentNames, failureText, HelperPicker, newOperationId, sinceText, StatusChip, TagChips, tasksToday, useMembers, without } from './common';
 import { childOrder, openCount, parentChoices } from './nesting';
 import { openChildrenText, TaskStatusButtons } from './TaskStatusButtons';
@@ -534,10 +535,13 @@ function TaskFields({
               }}
             >
               <div className="assignee-pair">
-                <label htmlFor="task-assignee">
-                  主担当
-                  <AssigneeSelect id="task-assignee" members={members} value={assignee} disabled={!editable} onChange={chooseAssignee} />
-                </label>
+                <div>
+                  <label htmlFor="task-assignee">
+                    主担当
+                    <AssigneeSelect id="task-assignee" members={members} value={assignee} disabled={!editable} onChange={chooseAssignee} />
+                  </label>
+                  <AvailabilityHint taskUserId={assignee} deadline={deadline} />
+                </div>
                 <div>
                   <label htmlFor="task-helpers">副担当（任意・{TASK_LIMITS.helpersMax} 人まで）</label>
                   <HelperPicker id="task-helpers" members={members} assignee={assignee} value={helpers} disabled={!editable} known={task.helpers} onChange={setHelpers} />
@@ -555,6 +559,7 @@ function TaskFields({
               onReset={() => setAssignee(task.assigneeId)}
             >
               <AssigneeSelect id="task-assignee" members={members} value={assignee} disabled={!editable} onChange={setAssignee} />
+              <AvailabilityHint taskUserId={assignee} deadline={deadline} />
             </Field>
           )}
           <Field
