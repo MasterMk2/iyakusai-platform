@@ -23,12 +23,14 @@ from delivery import Delivery
 from review_controls import ReviewApproval, review_candidate, make_approval
 from candidate_proofs import CandidateProofError, validate_candidates
 from relay_site import SITE
+from thread_map import publish_thread_map
 
 STORE = SITE["store"]
 MEDIA = STORE.parent / "media"
 ROOT = Path.home() / "iyakusai/official-line-relay"
 APPROVED_FORUM = SITE["approved_forum"]
 LEGACY_ORGANIZATIONS = SITE["legacy_organizations"]
+THREAD_MAP_FILE = SITE.get("thread_map_file")
 
 
 def read_contacts():
@@ -181,11 +183,14 @@ def run_once(config, specs, *, activate=False):
         delivery = Delivery(api, journal, forum, category, MEDIA)
         outcomes = process_cycle(events, registry, contacts, MEDIA, journal, delivery,
             organization_activation_times=cutoffs)
+        # Contract B: the app reads this map; a failed write is reported, never fatal.
+        thread_map = publish_thread_map(THREAD_MAP_FILE, registry, journal, forum_id)
         return {"check": "official_line_cycle", "observed_at": datetime.now(timezone.utc).isoformat(),
                 "forum_id": forum_id, "policy_version": POLICY_VERSION,
                 "verified_organization_count": len({b.org_id for b in registry.bindings.values()}),
                 "mapping_approval_revision": config.get("mapping_approval_revision", "original-four"),
-                "audience": access, "outcomes": outcomes, "state": summary(journal)}
+                "audience": access, "outcomes": outcomes, "state": summary(journal),
+                "thread_map": thread_map}
     finally:
         journal.close()
 
