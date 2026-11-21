@@ -4,7 +4,6 @@ import {
   AI_MODEL_ID,
   ASK_EFFORTS,
   ASK_FORMATS,
-  ASK_MODELS,
   ASSISTANT_LIMITS,
   CANDIDATE_ACTIONS,
   cleanText,
@@ -69,7 +68,8 @@ const text = (max: number, min = 1) => z.string().max(max * 4).transform(cleanTe
 
 const askInput = z.strictObject({
   question: text(ASSISTANT_LIMITS.questionMax),
-  model: z.enum(ASK_MODELS).optional(),
+  // auto・sonnet・opus のほか、OpenCode Go のモデル（2026-11-22）。選べるかは Bot ホストが meta の models で決めて確かめる。
+  model: z.string().regex(AI_MODEL_ID).optional(),
   effort: z.enum(ASK_EFFORTS).optional(),
   tone: text(ASSISTANT_LIMITS.toneMax, 0).optional(),
   format: z.enum(ASK_FORMATS).nullable().optional(),
@@ -79,7 +79,8 @@ const docInput = z.strictObject({
   content: text(ASSISTANT_LIMITS.docContentMax),
   format: z.enum(DOC_FORMATS),
   useSources: z.boolean(),
-  model: z.enum(ASK_MODELS).optional(),
+  // auto・sonnet・opus のほか、OpenCode Go のモデル（2026-11-22）。選べるかは Bot ホストが meta の models で決めて確かめる。
+  model: z.string().regex(AI_MODEL_ID).optional(),
 });
 const imageInput = z.strictObject({
   prompt: text(ASSISTANT_LIMITS.imagePromptMax),

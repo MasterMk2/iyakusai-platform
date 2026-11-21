@@ -21,6 +21,7 @@ from discord.ext import commands
 from . import contact
 from . import access_check
 from . import docgen
+from . import go_quota
 from .ai_provider import (
     AIError,
     DEFER_BUDGET_SEC,
@@ -227,7 +228,9 @@ def build_seed_note(excerpts) -> str:
 
 
 FMT_CHOICES = [app_commands.Choice(name=f, value=f) for f in docgen.FORMATS]
-MODEL_CHOICES = [
+# OpenCode Go 経由なら、既定(役員が /model で決めたもの)と Go のモデルから選ぶ(2026-11-22)。Go では opus・sonnet は
+# どちらも既定に読み替わるため出さない。選択肢は起動時に決まる(Discord に登録するため)。
+MODEL_CHOICES = [app_commands.Choice(name=n, value=v) for n, v in go_quota.request_choices()] or [
     app_commands.Choice(name="自動(複雑な質問はopusへ)", value="auto"),
     app_commands.Choice(name="sonnet(標準・速い)", value="sonnet"),
     app_commands.Choice(name="opus(高性能・遅め)", value="opus"),

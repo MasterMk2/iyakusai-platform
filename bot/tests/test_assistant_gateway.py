@@ -494,6 +494,21 @@ class AiModelTests(Harness):
                                                             "at": old}))
         self.assertEqual(self.post(self.body()).status, 202)
 
+    def test_meta_offers_the_default_and_the_go_models_for_one_request(self):
+        models = self.request("GET", self.jobs_path("meta")).json()["models"]
+        self.assertEqual([(m["id"], m["label"]) for m in models],
+                         [("auto", "既定(Gemini 4 Argon)"), ("gemini-4-argon", "Gemini 4 Argon"), ("glm-5.3", "GLM-5.3")])
+
+    def test_anyone_may_ask_with_a_go_model_but_not_another(self):
+        ok = self.request("POST", self.jobs_path("jobs"), body=self.ask_body(model="glm-5.3"))
+        self.assertEqual(ok.status, 202)
+        self.assertEqual(ok.json()["job"]["input"]["model"], "glm-5.3")
+        doc = {"clientOperationId": "ui-" + secrets.token_hex(6), "kind": "doc",
+               "input": {"docType": "free", "content": "案内文", "format": "md", "useSources": False, "model": "gemini-4-argon"}}
+        self.assertEqual(self.request("POST", self.jobs_path("jobs"), body=doc).status, 202)
+        self.assertEqual(self.request("POST", self.jobs_path("jobs"), body=self.ask_body(model="deepseek-v4-pro")).status, 400)
+        self.assertEqual(self.request("POST", self.jobs_path("jobs"), body=self.ask_body(model="opus")).status, 202)   # 既定に読み替わる
+
     def test_offline_bot_and_old_bot(self):
         with sqlite3.connect(self.dir / "jobs" / "assistant.sqlite3") as con:
             con.execute("DELETE FROM bot_heartbeat")

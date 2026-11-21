@@ -298,9 +298,10 @@ interface TaskDraftItem {
 - Bot：`bot/tests/test_taskdraft.py`（担当の順位、指示文に ID を出さないこと、出力の検証、ジョブ表の作り直し、Cog の実行と失敗）、`bot/tests/test_assistant_gateway.py` の `TaskDraftTests`（受け付け・入力の検査・本人だけが読めること）。
 - アプリ：`app/tests/api/assistant-taskdraft.test.ts`（名簿と未完了のタスクの組み立て、閲覧だけの委員の拒否、draft の形の検査）、`app/tests/e2e/task-draft.spec.ts`（入力→待ち→確認・修正→親子の順に起票、既存の親の下、失敗、機能が無いとき、375px）。
 
-## 10. AI のモデルの切り替え（2026-11-21）
+## 10. AI のモデル：既定の切り替えと、その回だけの選択（2026-11-21・22）
 
-Bot・定期スクリーニング・議事録の要約が使う AI のモデル（OpenCode Go のモデル）を、役員が切り替える。Discord の `/model` と、Bot タブの AI の行の「モデルを替える」の 2 か所から。
+- **既定**：モデルを選ばない質問・文書と、定期スクリーニング・議事録の要約が使う AI のモデル（OpenCode Go のモデル）。役員が Discord の `/model` と、Bot タブの AI の行の「既定を替える」から切り替える（10-1〜10-4）。
+- **その回だけ**：誰でも、`/ask`・`/doc`・`/mail` の `モデル:` と、Bot タブの質問・文書・メールの「詳細」の「モデル」で、その回だけ別の Go のモデルを選べる（10-5）。
 
 ### 10-1. 流れと役割
 
@@ -331,3 +332,12 @@ Bot・定期スクリーニング・議事録の要約が使う AI のモデル�
 
 - Bot：`bot/tests/test_ai_model.py`（4 つだけ替える・ほかの設定とキーは残す・0600・一時ファイルを残さない・選べないモデル・Go でないとき・依頼の形と期限・履歴）、`test_assistant_cog.py` の `ModelRequestTests`（役員だけ・Bot が確かめ直す・2 回は当てない・監査）、`test_usage_model.py`（`/model`）、`test_ai_routing_display.py`（再起動せずに表示が替わる）、`test_assistant_gateway.py` の `AiModelTests`。
 - アプリ：`app/tests/api/assistant.test.ts`（`ui-` を付けて渡す・200 と 202・入力の検査）、`app/tests/unit/ai-status.test.ts`（最後の切り替えの文）、`app/tests/e2e/bot.spec.ts`（役員が切り替えて元に戻す・役員でない人には出ない・断りの表示と 375px）。
+
+### 10-5. その回だけ選ぶ（2026-11-22）
+
+- OpenCode Go 経由のとき、meta の `models` は「既定（いまのモデル名）」（id は `auto`）と、Bot が写しに書いた `choices` の Go のモデル。opus・sonnet は Go ではどちらも既定に読み替わるので出さない（古いアプリが送ってきたら受け付け、既定で答える）。Go でない・古い Bot なら従来の auto・sonnet・opus。
+- 連携口は ask・doc の `model` を、従来の値に加えて `choices` のモデルで確かめる（`assistant_logic.ask_input`・`doc_input` の `extra_models`）。アプリのサーバーは形（`AI_MODEL_ID`）だけを見る。
+- Bot は選ばれたモデル ID をそのまま `claude -p --model` に渡す（資料を探す段も同じ）。答えたモデルは今までどおり回答の下の model: に出る。
+- Discord の `モデル:` の選択肢は起動時に決まる（コマンドの登録のため）：Go なら「既定(役員が決めたモデル)」と Go のモデル。
+- モデルによって Go の枠の減り方が違う（月の枠の API 換算額がモデルごとに違う）。
+- 試験：`bot/tests/test_ai_model.py` の `RequestChoicesTest`、`test_assistant_gateway.py` の `AiModelTests`（meta の models・Go のモデルで頼める・一覧に無いモデルは 400）、`app/tests/api/assistant.test.ts`。

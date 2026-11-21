@@ -114,6 +114,17 @@ def choices() -> list[dict]:
     return [{"model": m, "label": label} for m, label in MODEL_LABELS.items()]
 
 
+DEFAULT_CHOICE_LABEL = "既定(役員が決めたモデル)"
+
+
+def request_choices() -> list[tuple[str, str]]:
+    """質問・文書を頼むときに選べるモデル(2026-11-22)。(表示名, 値) の並び。先頭の "auto" は既定のモデル
+    (役員が /model で決めたもの)。OpenCode Go を使っていなければ空(呼び出し側が従来の選択肢を出す)。"""
+    if current_route()["provider"] != "opencode_go":
+        return []
+    return [(DEFAULT_CHOICE_LABEL, "auto")] + [(c["label"], c["model"]) for c in choices()]
+
+
 def forget() -> None:
     """/usage の控え（max_age 秒）を捨てる。モデルを切り替えた直後に古いモデル名を出さないため。"""
     global _cache, _cache_at

@@ -10,7 +10,8 @@ import { operationFor, settleOperation, type OperationSlots } from './common';
 // when it comes back. An older Bot (no `ai`) shows nothing.
 // The Bot reads OpenCode every 5 minutes; while the browser tab is visible this asks the meta again at the same pace,
 // and the clock ticks each minute so an old reading is said to be old.
-// Officers (Manage Server on Discord: the meta's isAdmin) can switch the model here: a small link opens the list in
+// Officers (Manage Server on Discord: the meta's isAdmin) can switch the default model here (anyone can pick another
+// model for one question or document under 詳細, 2026-11-22): a small link opens the list in
 // place. A switch is undone the same way, so there is no confirmation dialog; the list says what it changes (the Bot,
 // the scheduled screening and the minutes summaries, for everyone, from their next call).
 
@@ -79,7 +80,7 @@ export function AiStatus({ ai, canSwitch = false, botAlive = true }: Props) {
   return (
     <section className={`bot-ai-status ${view.level}`} aria-label="Bot の AI の状態" data-testid="bot-ai-status" data-level={view.level}>
       <p className="bot-ai-model">
-        <span className="bot-ai-key">AI</span>
+        <span className="bot-ai-key">既定の AI</span>
         {view.model}
         <span className="bot-ai-route">（{view.route}）</span>
       </p>
@@ -142,8 +143,8 @@ function ModelSwitch({ ai, botAlive, onSwitched }: SwitchProps) {
       setOpen(false);
       setResult(
         change.state === 'done'
-          ? { text: `${label} に切り替えました。次の依頼から使われます。`, previous: before && before !== change.model ? before : null }
-          : { text: `${label} への切り替えを受け付けました。数秒で替わります。`, previous: null },
+          ? { text: `既定を ${label} に切り替えました。次の依頼から使われます。`, previous: before && before !== change.model ? before : null }
+          : { text: `既定を ${label} に切り替える依頼を受け付けました。数秒で替わります。`, previous: null },
       );
       onSwitched(change, { model: change.model, previous: before, at: new Date().toISOString(), byName: null });
     } catch (err) {
@@ -170,7 +171,7 @@ function ModelSwitch({ ai, botAlive, onSwitched }: SwitchProps) {
             }}
             data-testid="bot-ai-switch-open"
           >
-            モデルを替える
+            既定を替える
           </button>
         </p>
         {result && (
@@ -202,7 +203,7 @@ function ModelSwitch({ ai, botAlive, onSwitched }: SwitchProps) {
       }}
     >
       <fieldset disabled={busy}>
-        <legend>Bot の AI のモデル</legend>
+        <legend>Bot の既定のモデル</legend>
         {choices.map((c) => (
           <label key={c.model} className="bot-ai-choice">
             <input type="radio" name="ai-model" value={c.model} checked={picked === c.model} onChange={() => setPicked(c.model)} />
@@ -211,7 +212,9 @@ function ModelSwitch({ ai, botAlive, onSwitched }: SwitchProps) {
           </label>
         ))}
       </fieldset>
-      <p className="bot-ai-picker-note">Bot・定期スクリーニング・議事録の要約の全部が、次の呼び出しから替わります（処理中の議事録は途中から替わります）。</p>
+      <p className="bot-ai-picker-note">
+        モデルを選ばない質問・文書と、定期スクリーニング・議事録の要約が、次の呼び出しから替わります（処理中の議事録は途中から替わります）。質問・文書の「詳細」では、その回だけ別のモデルを選べます。
+      </p>
       {!botAlive && <p className="field-error">Bot が応答していないため、いまは切り替えられません。</p>}
       {error && (
         <p className="field-error" role="alert">

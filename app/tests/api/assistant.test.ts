@@ -134,7 +134,7 @@ describe('input checks (contract §3-2, §3-4)', () => {
     const bad = [
       askBody('   \u0007  '),
       askBody('あ'.repeat(1001)),
-      askBody('質問', { model: 'gpt' }),
+      askBody('質問', { model: 'GPT 5' }), // the form only: which models exist is the Bot host's list (meta.models)
       askBody('質問', { effort: 'extreme' }),
       askBody('質問', { tone: 'x'.repeat(101) }),
       { clientOperationId: randomUUID(), kind: 'remind', input: { question: '質問' } },
@@ -224,6 +224,15 @@ describe('AI model switch (2026-11-21, contract §10)', () => {
     const pending = await call(EDITOR_A, 'POST', '/api/assistant/ai-model', { clientOperationId: randomUUID().replace(/-/g, ''), model: 'claude-haiku-5-5' });
     expect(pending.status).toBe(202);
     expect(pending.json.change.state).toBe('pending');
+  });
+
+  it('passes a Go model chosen for one question or document to the Bot host (it checks the list)', async () => {
+    const ask = await call(EDITOR_A, 'POST', '/api/assistant/jobs', askBody('会場の予約方法', { model: 'glm-5.3' }));
+    expect(ask.status).toBe(202);
+    expect((fake.calls.at(-1)!.body as { input: { model: string } }).input.model).toBe('glm-5.3');
+    const before = fake.calls.length;
+    expect((await call(EDITOR_A, 'POST', '/api/assistant/jobs', askBody('会場の予約方法', { model: 'GLM 5.3' }))).status).toBe(400);
+    expect(fake.calls.length).toBe(before);
   });
 
   it('checks the input before anything is sent, and keeps the Bot host refusal for outsiders', async () => {
