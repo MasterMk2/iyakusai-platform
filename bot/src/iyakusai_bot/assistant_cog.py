@@ -233,6 +233,9 @@ class Assistant(commands.Cog):
             result.update(ok=True, previous=record["previous"], at=record["at"])
         except ai_model.SwitchError as error:
             result.update(error=error.code, message=str(error))
+        except Exception as error:  # noqa: BLE001  書き込みの失敗など。結果を書かないと毎周期やり直し、依頼の取り込みも止まる
+            log.warning("AI のモデルの切り替えで失敗: %s", type(error).__name__)
+            result.update(error="INTERNAL", message="切り替えられませんでした。システム課に知らせてください。")
         await asyncio.to_thread(self.store.set_meta, ai_model.RESULT_KEY, json.dumps(result, ensure_ascii=False))
 
     async def apply_model(self, model: str, *, actor_id: int, actor_name: str | None, source: str) -> dict:
@@ -250,7 +253,7 @@ class Assistant(commands.Cog):
                 snapshot = None
             body = ai_model.with_change(snapshot if isinstance(snapshot, dict) else None, record)
             await asyncio.to_thread(self.store.set_meta, "ai_status", json.dumps(body, ensure_ascii=False))
-            access_check.log_outcome("model" if source == "discord" else "assistant.aimodel", actor_id=actor_id,
+            access_check.log_outcome("model.set" if source == "discord" else "assistant.aimodel", actor_id=actor_id,
                                      result="ok")
         return record
 

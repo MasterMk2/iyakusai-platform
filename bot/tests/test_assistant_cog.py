@@ -958,6 +958,60 @@ class ModelRequestTests(AssistantCase):
         asyncio.run(self.cog()._model_request())
         self.assertEqual(self.model_now(), "gemini-4-argon")
 
+    def test_a_write_failure_is_answered_and_jobs_are_still_taken(self):
+        # 設定の書き込みが落ちても結果(INTERNAL)を書く。書かないと毎周期やり直し、依頼の取り込み(_claim)も止まる
+        from unittest import mock
+        from iyakusai_bot import ai_model
+        cog = self.cog()
+        claimed = []
+
+        async def fake_claim():
+            claimed.append(True)
+
+        cog._claim = fake_claim
+        cog._started = True
+        cog._snapshot_at = 10 ** 12
+        with mock.patch.object(ai_model, "_write", side_effect=OSError("disk full")):
+            self.store.set_meta("ai_model_request", json.dumps({
+                "id": "ui-req00002", "model": "glm-5.3", "by": f"discord-{ADMIN}",
+                "at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()}))
+            asyncio.run(cog.poll.coro(cog))
+        result = json.loads(self.store.get_meta("ai_model_result"))
+        self.assertEqual((result["ok"], result["error"]), (False, "INTERNAL"))
+        self.assertNotIn("disk full", result["message"])
+        self.assertEqual(claimed, [True])
+        self.assertEqual(self.model_now(), "gemini-4-argon")
+
+    def test_the_discord_command_records_like_the_app(self):
+        from discord import app_commands
+        from iyakusai_bot.usage import Usage
+
+        class Officer(discord.Member):
+            def __init__(self):  # pylint: disable=super-init-not-called
+                pass
+            id = property(lambda self: ADMIN)
+            display_name = property(lambda self: "役員")
+            guild_permissions = property(lambda self: discord.Permissions(manage_guild=True))
+
+        sent = []
+
+        class Response:
+            async def send_message(self, content=None, *, ephemeral=False, **kwargs):
+                sent.append(content)
+
+        cog = self.cog()
+        self.bot.cogs["Assistant"] = cog
+        itx = SimpleNamespace(user=Officer(), response=Response(), guild_id=GUILD, channel_id=SHARE)
+        asyncio.run(Usage.model.callback(Usage(self.bot, usage_log=None), itx,
+                                         app_commands.Choice(name="GLM-5.3", value="glm-5.3")))
+        self.assertIn("GLM-5.3", sent[0])
+        self.assertEqual(self.model_now(), "glm-5.3")
+        history = json.loads(self.store.get_meta("ai_model_history"))
+        self.assertEqual([(h["model"], h["source"], h["byName"]) for h in history], [("glm-5.3", "discord", "役員")])
+        self.assertEqual(json.loads(self.store.get_meta("ai_status"))["model"], "glm-5.3")
+        rows = [json.loads(line) for line in (self.dir / "audit" / "audit.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([(r["cmd"], r["result"]) for r in rows], [("model.set", "accepted"), ("model.set", "ok")])
+
     def test_malformed_request_is_dropped(self):
         self.store.set_meta("ai_model_request", "{not json")
         asyncio.run(self.cog()._model_request())

@@ -307,11 +307,11 @@ Bot・定期スクリーニング・議事録の要約が使う AI のモデル�
 - 切り替えるのは Bot 専用の Claude の設定（`CLAUDE_CONFIG_DIR/settings.json`）の env のうち、モデルの読み替え 4 つ（`ANTHROPIC_DEFAULT_OPUS_MODEL`・`…_SONNET_MODEL`・`…_HAIKU_MODEL`・`CLAUDE_CODE_SUBAGENT_MODEL`）だけ。接続先とキーには触らない。3 つとも呼び出しのたびにこのファイルを読むので、再起動は要らない。処理中の議事録は途中から替わる。
 - **設定を書くのは Bot だけ**（`ai_model.switch`。同じフォルダの一時ファイル → `os.replace`、0600、キー入りの控えは作らない）。連携口は依頼をジョブ表の meta `ai_model_request` に書き、Bot が 2 秒ごとの見回りで当てて、結果を `ai_model_result` に書く。連携口は最大 8 秒待つ（待てる本数はジョブと共有）。
 - 選べるモデルは Bot の `go_quota.MODEL_LABELS`（11/20〜21 の試験で 5/5 だったもの）。Bot が `ai_status` の写しに `choices` として書き、連携口は meta の `ai.choices` で渡す。古い Bot は書かない → アプリは切り替えを出さない。OpenCode Go 経由でキーがあるときだけ切り替えられる。
-- 記録：`ai_status` の `lastChange`（`{model, previous, at, byName}`。Discord の ID はアプリに渡さない）、meta `ai_model_history`（直近 20 件。誰・いつ・どこから）、Bot のログ、監査ログ（`model`・`assistant.aimodel`、kind は admin）。
+- 記録：`ai_status` の `lastChange`（`{model, previous, at, byName}`。Discord の ID はアプリに渡さない）、meta `ai_model_history`（直近 20 件。誰・いつ・どこから）、Bot のログ、監査ログ（切り替えは `model.set`・`assistant.aimodel` で kind は admin。引数なしの `/model` で見るだけなら `model` で read）。
 
 ### 10-2. 権限
 
-- 役員＝Discord の「サーバー管理」の権限がある人（所有者・管理者を含む。`/remind` の役員と同じ。meta の `isAdmin`）。連携口が確かめ、Bot も当てる前にメンバーを引いて確かめ直す。権限の表（`[permissions]`）で admin を絞っていれば、それも通す必要がある。
+- 役員＝Discord の「サーバー管理」の権限がある人（所有者・管理者を含む。`/remind` の役員と同じ。meta の `isAdmin`）。連携口のタスクの役員（`officer_role_ids` のロールも含む）より狭い。連携口が確かめ、Bot も当てる前にメンバーを引いて確かめ直す。権限の表（`[permissions]`）で admin を絞っていれば、それも通す必要がある。
 - これは AI が置いた既定。委員長が別の範囲（権限管理者だけ等）を望めば変える。
 
 ### 10-3. 断り
@@ -323,7 +323,7 @@ Bot・定期スクリーニング・議事録の要約が使う AI のモデル�
 | `FEATURE_UNAVAILABLE` | 400 | 古い Bot（choices が無い）、OpenCode Go を使っていない |
 | `BOT_OFFLINE` | 409 | Bot の生存の記録が 30 秒より古い |
 | `BUSY` | 409 | ほかの人の依頼が、まだ当てられていない（2 分以内） |
-| `EXPIRED`・`NOT_GO` など | 409 | Bot が当てなかった（依頼から 2 分を過ぎた、設定が Go でない） |
+| `EXPIRED`・`NOT_GO`・`INTERNAL` など | 409 | Bot が当てなかった（依頼から 2 分を過ぎた、設定が Go でない、設定を書けなかった） |
 
 - 同じ clientOperationId をもう一度送ると、当てた結果をそのまま返す（2 回は当てない）。
 

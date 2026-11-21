@@ -407,7 +407,7 @@ class AiModelTests(Harness):
 
     def setUp(self):
         super().setUp()
-        self.make_gateway(capabilities=caps(), wait_sec=0.5)
+        self.make_gateway(capabilities=caps(), wait_sec=2.0)
         self.store.set_meta("ai_status", json.dumps({
             "provider": "opencode_go", "model": "gemini-4-argon", "modelLabel": "Gemini 4 Argon", "ok": True,
             "windows": [], "choices": self.CHOICES + [{"model": "Bad Model!", "label": "x"}],
@@ -422,11 +422,17 @@ class AiModelTests(Harness):
     def post(self, body, actor=OFFICER):
         return self.request("POST", self.jobs_path("ai-model"), actor=actor, body=body)
 
-    def answer_later(self, result, delay=0.1):
+    def answer_later(self, result):
+        """Bot の代わり：依頼が書かれるのを待って(CI が重くても)結果を書く。"""
         def run():
-            time.sleep(delay)
-            request = json.loads(self.store.get_meta("ai_model_request"))
-            self.store.set_meta("ai_model_result", json.dumps({"id": request["id"], **result}))
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                raw = self.store.get_meta("ai_model_request")
+                if raw:
+                    request = json.loads(raw)
+                    self.store.set_meta("ai_model_result", json.dumps({"id": request["id"], **result}))
+                    return
+                time.sleep(0.02)
         thread = threading.Thread(target=run, daemon=True)
         thread.start()
         self.addCleanup(thread.join, 5)

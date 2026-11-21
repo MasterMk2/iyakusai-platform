@@ -108,6 +108,11 @@ class Usage(commands.Cog):
             await itx.response.send_message("モデルを切り替えられるのは役員(サーバー管理の権限がある人)だけです。",
                                             ephemeral=True)
             return
+        try:
+            access_check.enforce_for("model.set", itx)   # 見るのは read(/model)、切り替えは admin(権限の表で絞れる)
+        except access_check.AccessDenied as error:
+            await itx.response.send_message(str(error), ephemeral=True)
+            return
         assistant = self.bot.get_cog("Assistant")
         try:
             if assistant is not None and hasattr(assistant, "apply_model"):
