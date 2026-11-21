@@ -1736,3 +1736,16 @@ button.task-tree-toggle:focus-visible { outline-offset: -3px; }
 .bot-ai-status.stopped { border-color: var(--red-line); background: var(--red-bg); }
 .bot-ai-status.stopped .bot-ai-note { color: var(--red); font-weight: 700; }
 .bot-ai-status.unknown .bot-ai-note { color: var(--ink); }
+/* Switching the model (officers, 2026-11-21): a small link; the list opens in place on its own row. */
+.bot-ai-changed { font-size: 12px; }
+.bot-ai-switch .link-button { min-height: 24px; padding: 2px 0; font-size: 13px; }
+.bot-ai-result { flex-basis: 100%; color: var(--ink); }
+.bot-ai-result .link-button { min-height: 24px; margin-left: 8px; }
+.bot-ai-picker { flex-basis: 100%; display: grid; gap: 8px; margin: 2px 0 4px; padding-top: 8px; border-top: 1px solid var(--line-soft); color: var(--ink); }
+.bot-ai-picker p { margin: 0; }
+.bot-ai-picker fieldset { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.bot-ai-picker legend { margin-bottom: 4px; padding: 0; font-weight: 600; }
+.bot-ai-choice { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; cursor: pointer; }
+.bot-ai-current { padding: 0 6px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 12px; }
+.bot-ai-picker-note { color: var(--muted); font-size: 13px; }
+.bot-ai-picker-actions { display: flex; flex-wrap: wrap; gap: 8px; }

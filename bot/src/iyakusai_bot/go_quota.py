@@ -88,6 +88,7 @@ def fetch(timeout: float = TIMEOUT_SEC, opener=urllib.request.urlopen) -> dict:
     if route["provider"] != "opencode_go":
         result["error"] = "not_go"
         return result
+    result["choices"] = choices()
     key = str(_settings_env().get("ANTHROPIC_AUTH_TOKEN") or "")
     if not key:
         result["error"] = "no_key"
@@ -108,6 +109,17 @@ def fetch(timeout: float = TIMEOUT_SEC, opener=urllib.request.urlopen) -> dict:
     return result
 
 
+def choices() -> list[dict]:
+    """切り替えで選べるモデル（2026-11-21。ai_model が使う。表示名の表と同じ並び）。"""
+    return [{"model": m, "label": label} for m, label in MODEL_LABELS.items()]
+
+
+def forget() -> None:
+    """/usage の控え（max_age 秒）を捨てる。モデルを切り替えた直後に古いモデル名を出さないため。"""
+    global _cache, _cache_at
+    _cache, _cache_at = None, 0.0
+
+
 def get(max_age: float = 60.0, **kwargs) -> dict:
     """直近 max_age 秒の結果があればそれを、無ければ取り直す（/usage の連打で窓口を叩かないため）。"""
     global _cache, _cache_at
@@ -119,11 +131,14 @@ def get(max_age: float = 60.0, **kwargs) -> dict:
 
 def merge_for_store(previous: dict | None, fresh: dict) -> dict:
     """連携口に渡す写し。取れなかったときは前の値を残し、stale と理由を付ける（0% に見せない）。"""
+    # 最後の切り替え（ai_model が書く）は、読み直しても残す。
+    last = previous.get("lastChange") if isinstance(previous, dict) else None
+    keep = {"lastChange": last} if isinstance(last, dict) else {}
     if fresh.get("ok") or fresh.get("provider") != "opencode_go" or not previous or not previous.get("windows"):
-        return {**fresh, "stale": False if fresh.get("ok") else bool(previous and previous.get("windows"))}
+        return {**fresh, **keep, "stale": False if fresh.get("ok") else bool(previous and previous.get("windows"))}
     return {**previous, "provider": fresh["provider"], "model": fresh.get("model"),
-            "modelLabel": fresh.get("modelLabel"), "ok": False, "stale": True, "error": fresh.get("error"),
-            "failedAt": fresh.get("fetchedAt")}
+            "modelLabel": fresh.get("modelLabel"), "choices": fresh.get("choices"), "ok": False, "stale": True,
+            "error": fresh.get("error"), "failedAt": fresh.get("fetchedAt"), **keep}
 
 
 def _jst_clock(iso: str | None) -> str:

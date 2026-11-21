@@ -313,6 +313,7 @@ class SourceNameTests(unittest.TestCase):
     PATTERNS = (
         r'access_check\.require\("([^"]+)"\)',
         r'enforce_for\("([^"]+)"',
+        r'access_check\.enforce\("([^"]+)"',   # 統合アプリからの依頼のうちジョブでないもの（モデルの切り替え）
         r'audited\("([^"]+)"',
         r'outcome_for\("([^"]+)"',
         r'log_outcome\("([^"]+)"',

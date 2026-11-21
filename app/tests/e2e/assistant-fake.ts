@@ -19,6 +19,10 @@ export interface BotFakeOptions {
   summary?: unknown;
   /** meta.ai (the AI and its OpenCode Go allowance, 2026-11-21); absent like a Bot from before then. */
   ai?: unknown;
+  /** meta.isAdmin: an officer (Manage Server), who may switch the AI model. */
+  isAdmin?: boolean;
+  /** When set, POST /ai-model answers this (a refusal); otherwise the switch is applied at once (200 done). */
+  aiModelAnswer?: { status: number; body: unknown };
 }
 
 interface FakeJob {
@@ -126,6 +130,8 @@ export async function installBotFake(page: Page, options: BotFakeOptions = {}): 
   };
   fake.jobs.set(earlier.id, earlier);
   let seq = 1;
+  // The AI the meta reports; a switch (POST /ai-model) changes it like the Bot does.
+  let ai = options.ai as Record<string, unknown> | undefined;
 
   const meta = () => ({
     features,
@@ -143,9 +149,9 @@ export async function installBotFake(page: Page, options: BotFakeOptions = {}): 
       { id: '1000000000000000002', name: 'bottest' },
     ],
     shareChannel: { id: '1000000000000000002', name: 'bottest' },
-    isAdmin: false,
+    isAdmin: options.isAdmin ?? false,
     bot: { alive: options.alive ?? true, lastSeenAt: options.alive === false ? null : '2026-10-14T05:00:00+09:00' },
-    ...(options.ai !== undefined ? { ai: options.ai } : {}),
+    ...(ai !== undefined ? { ai } : {}),
   });
   const jobView = (job: FakeJob) => ({
     id: job.id,
@@ -177,6 +183,14 @@ export async function installBotFake(page: Page, options: BotFakeOptions = {}): 
       return json(route, options.summary ?? { pendingCandidates: 2, reminders: { overdue: 1, today: 1, upcoming7d: 3 } });
     }
     if (method === 'GET' && path === '/members') return json(route, { members: [{ id: 'discord-1000000000000000002', name: '編集担当C' }] });
+    if (method === 'POST' && path === '/ai-model') {
+      if (options.aiModelAnswer) return json(route, options.aiModelAnswer.body, options.aiModelAnswer.status);
+      const body = request.postDataJSON() as { clientOperationId: string; model: string };
+      const previous = (ai?.model as string | undefined) ?? null;
+      const label = (ai?.choices as { model: string; label: string }[] | undefined)?.find((c) => c.model === body.model)?.label ?? body.model;
+      ai = { ...ai, model: body.model, modelLabel: label, lastChange: { model: body.model, previous, at: new Date().toISOString(), byName: '委員長' } };
+      return json(route, { change: { id: `ui-${body.clientOperationId}`, state: 'done', model: body.model, previous } });
+    }
     if (method === 'GET' && path === '/similar') {
       const q = url.searchParams.get('q') ?? '';
       const hits = [...fake.jobs.values()].filter((j) => j.kind === 'ask' && j.state === 'done' && q.length >= 2 && String(j.input.question).includes(q.slice(0, 2)));

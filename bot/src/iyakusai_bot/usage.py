@@ -4,6 +4,9 @@
 - 期間別の記帳は、Bot が消費した分（このプロセスの記録）。
 - OpenCode Go 経由のときは、Go の残り枠（5 時間・週・月の %）も窓口から読んで出す（2026-11-21。go_quota）。
   読めないときは、前のとおりコンソールで見るよう案内する。
+
+/model — Bot の AI のモデルを見る・切り替える（2026-11-21。ai_model）。切り替えは役員（サーバー管理の権限が
+ある人）だけ。モデルを選ばなければ、いまのモデルと選べるモデルを出す（本人にだけ見える）。
 """
 
 from __future__ import annotations
@@ -14,7 +17,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from . import access_check, go_quota
+from . import access_check, ai_model, go_quota
 from .ai_provider import GO_MONTHLY_CAP_USD, GO_PLAN_USD
 from .usage_log import UsageLog, fmt_tokens
 
@@ -82,3 +85,43 @@ class Usage(commands.Cog):
             inline=False,
         )
         await itx.followup.send(embed=e, ephemeral=True)
+
+    @app_commands.command(name="model", description="Bot の AI のモデルを見る・切り替える(切り替えは役員だけ)")
+    @app_commands.describe(モデル="切り替え先(選ばなければ、いまのモデルを表示)")
+    @app_commands.choices(モデル=[app_commands.Choice(name=c["label"], value=c["model"]) for c in go_quota.choices()])
+    @access_check.require("model")
+    async def model(self, itx: discord.Interaction, モデル: app_commands.Choice[str] | None = None):
+        route = go_quota.current_route()
+        if route["provider"] != "opencode_go":
+            await itx.response.send_message("いまの Bot は OpenCode Go を使っていないため、モデルは切り替えられません。",
+                                            ephemeral=True)
+            return
+        now = route.get("modelLabel") or route.get("model") or "?"
+        if モデル is None:
+            others = "・".join(c["label"] for c in go_quota.choices())
+            await itx.response.send_message(
+                f"いまの Bot の AI：**{now}**（OpenCode Go）\n選べるモデル：{others}\n"
+                "切り替えは役員だけができます（`/model モデル:…`、または統合アプリの Bot タブ）。", ephemeral=True)
+            return
+        member = itx.user if isinstance(itx.user, discord.Member) else None
+        if member is None or not member.guild_permissions.manage_guild:
+            await itx.response.send_message("モデルを切り替えられるのは役員(サーバー管理の権限がある人)だけです。",
+                                            ephemeral=True)
+            return
+        assistant = self.bot.get_cog("Assistant")
+        try:
+            if assistant is not None and hasattr(assistant, "apply_model"):
+                record = await assistant.apply_model(モデル.value, actor_id=member.id, actor_name=member.display_name,
+                                                     source="discord")
+                changed = record["previous"] != モデル.value
+            else:
+                changed = (await asyncio.to_thread(ai_model.switch, モデル.value))["changed"]
+        except ai_model.SwitchError as error:
+            await itx.response.send_message(str(error), ephemeral=True)
+            return
+        if not changed:
+            await itx.response.send_message(f"もう **{モデル.name}** になっています。", ephemeral=True)
+            return
+        await itx.response.send_message(
+            f"Bot の AI を **{now}** から **{モデル.name}** に切り替えました。次の依頼から使われます"
+            "（Bot・定期スクリーニング・議事録の要約とも。処理中のものは途中から替わります）。", ephemeral=True)

@@ -38,6 +38,7 @@ from discord.ext import commands, tasks
 
 from . import access as A
 from . import access_check
+from . import ai_model
 from . import go_quota
 from . import assistant_logic as L
 from . import history_export
@@ -170,6 +171,7 @@ class Assistant(commands.Cog):
             due = self._snapshot_at is None or time.monotonic() - self._snapshot_at >= SNAPSHOT_SEC
             if due:
                 await self.publish_state()
+            await self._model_request()
             await self._claim()
         except Exception as error:  # noqa: BLE001  ループを止めない(次の周期で再試行)
             log.warning("アシスタントの定期処理で失敗: %s", type(error).__name__)
@@ -199,6 +201,58 @@ class Assistant(commands.Cog):
     @ai_status.before_loop
     async def _before_ai_status(self):
         await self.bot.wait_until_ready()
+
+    # ---- AI のモデルの切り替え(2026-11-21) ----
+
+    async def _model_request(self) -> None:
+        """連携口が書いた切り替えの依頼(統合アプリの Bot タブから)を当て、結果を書く。設定を書くのは Bot だけ。"""
+        raw = await asyncio.to_thread(self.store.get_meta, ai_model.REQUEST_KEY)
+        if not raw:
+            return
+        request = ai_model.parse_request(raw)
+        if request is None:
+            log.warning("AI のモデルの切り替えの依頼を読めないため捨てました")
+            await asyncio.to_thread(self.store.set_meta, ai_model.REQUEST_KEY, "")
+            return
+        if ai_model.handled(request, await asyncio.to_thread(self.store.get_meta, ai_model.RESULT_KEY)):
+            return
+        result = {"id": request["id"], "ok": False, "model": request["model"], "error": None, "message": None}
+        try:
+            if ai_model.expired(request):
+                raise ai_model.SwitchError("EXPIRED", "依頼から時間が経ったため、切り替えませんでした。もう一度押してください。")
+            actor = int(request["by"].removeprefix("discord-"))
+            member = await self._guild_member(self._guild(), actor)
+            if member is None or not member.guild_permissions.manage_guild:
+                raise ai_model.SwitchError("FORBIDDEN", "モデルを切り替えられるのは役員(サーバー管理の権限がある人)だけです。")
+            try:
+                access_check.enforce("assistant.aimodel", actor_id=actor, role_names=access_check.role_names_of(member))
+            except access_check.AccessDenied as error:
+                raise ai_model.SwitchError("FORBIDDEN", str(error)) from error
+            record = await self.apply_model(request["model"], actor_id=actor, actor_name=member.display_name,
+                                            source="app")
+            result.update(ok=True, previous=record["previous"], at=record["at"])
+        except ai_model.SwitchError as error:
+            result.update(error=error.code, message=str(error))
+        await asyncio.to_thread(self.store.set_meta, ai_model.RESULT_KEY, json.dumps(result, ensure_ascii=False))
+
+    async def apply_model(self, model: str, *, actor_id: int, actor_name: str | None, source: str) -> dict:
+        """モデルを切り替え、記録(履歴・ai_status の写し)を残す。/model(usage.py)からも呼ぶ。"""
+        outcome = await asyncio.to_thread(ai_model.switch, model)
+        record = ai_model.change_record(outcome, by=f"discord-{actor_id}", by_name=actor_name, source=source)
+        if outcome["changed"]:
+            log.info("Bot の AI のモデルを切り替えました: %s → %s (%s・%s)", outcome["before"], model, source, actor_id)
+            history = await asyncio.to_thread(self.store.get_meta, ai_model.HISTORY_KEY)
+            await asyncio.to_thread(self.store.set_meta, ai_model.HISTORY_KEY, ai_model.push_history(history, record))
+            raw = await asyncio.to_thread(self.store.get_meta, "ai_status")
+            try:
+                snapshot = json.loads(raw) if raw else None
+            except ValueError:
+                snapshot = None
+            body = ai_model.with_change(snapshot if isinstance(snapshot, dict) else None, record)
+            await asyncio.to_thread(self.store.set_meta, "ai_status", json.dumps(body, ensure_ascii=False))
+            access_check.log_outcome("model" if source == "discord" else "assistant.aimodel", actor_id=actor_id,
+                                     result="ok")
+        return record
 
     @tasks.loop(minutes=HISTORY_MIN)
     async def history(self):

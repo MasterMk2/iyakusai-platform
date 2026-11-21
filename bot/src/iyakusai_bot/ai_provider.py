@@ -57,12 +57,29 @@ def _routing() -> dict:
     return {"provider": "claude_subscription", "aliases": {}}
 
 
-ROUTING = _routing()
+_routing_cache: tuple | None = None
+
+
+def routing() -> dict:
+    """いまの経路。settings.json が替わっていなければ前の結果を返す(2026-11-21: モデルは Bot を再起動せずに
+    切り替わる(ai_model)ので、起動時に 1 回だけ読むと表示が古いまま残るため)。"""
+    global _routing_cache
+    d = os.environ.get("CLAUDE_CONFIG_DIR")
+    try:
+        st = (Path(d) / "settings.json").stat() if d else None
+        key = (d, st.st_ino, st.st_mtime_ns, st.st_size) if st else (d, None)
+    except OSError:
+        key = (d, None)
+    if _routing_cache is not None and _routing_cache[0] == key:
+        return _routing_cache[1]
+    value = _routing()
+    _routing_cache = (key, value)
+    return value
 
 
 def display_model(model: str) -> str:
     """表示用のモデル名。Go 経由で opus/sonnet/haiku を読み替えているなら読み替え先を返す。"""
-    return ROUTING["aliases"].get(model) or model
+    return routing()["aliases"].get(model) or model
 
 
 def _used_model(data: dict) -> str:
@@ -81,7 +98,7 @@ def _yen(v: float) -> str:
 
 
 def _billing_line() -> str:
-    if ROUTING["provider"] == "opencode_go":
+    if routing()["provider"] == "opencode_go":
         # モデル名は書かない(Go のモデルは設定 1 つで切り替わり、起動時に作るこの文は古くなるため)。
         return (f"OpenCode Go(月額${GO_PLAN_USD:.0f}の定額。使った分は Go の月の枠から引かれ、"
                 "枠を使い切ると止まる。追加の請求は無い)経由の AI で動く。使うモデルは委員会の判断で切り替わる"
@@ -127,7 +144,7 @@ class AIResult:
     def cost_note(self, usd_jpy: float = 160.0) -> str:
         """フッター表示用の料金。OpenCode Go 経由なら Go の月額に換算(月の枠の何%＝$10 の何ドル)、
         そうでなければ API 換算額(従量課金だった場合の参考額)。"""
-        if ROUTING["provider"] == "opencode_go":
+        if routing()["provider"] == "opencode_go":
             cap = GO_MONTHLY_CAP_USD.get(self.model)
             if cap:
                 share = self.cost_usd / cap

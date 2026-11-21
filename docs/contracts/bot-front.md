@@ -126,6 +126,7 @@ interface JobResult {
 | POST `/assistant/notices` | 個人あての知らせ（2026-11-11）。`{clientOperationId, targetIds:["discord-<ID>", …], text}` → Bot が `text` を各対象に DM で送る。対象は 1〜30 人で、委員でない人は外して残りに送る（全員が委員でなければ 400）。`text` は 1〜500 字（改行可）。ジョブは `remind` の `op:"notice"`（リマインドは作らない）。最大 8 秒待つ（同上）。Bot が知らせを扱えない版なら 400 `FEATURE_UNAVAILABLE` |
 | GET `/assistant/candidates?state=open\|recent` | `{candidates:[Candidate]}`。open は承認待ち（posted）と、自動で起票したもの（created・auto）のうち差し戻せるもの。recent は直近 7 日のすべての状態 |
 | POST `/assistant/candidates/<id>/<action>` | action は `ok`・`ng`・`undo`・`return`。`{clientOperationId, comment?}`（return は comment が必須・1000 字まで）。最大 8 秒待つ（同上） |
+| POST `/assistant/ai-model` | AI のモデルの切り替え（2026-11-21・§10）。`{clientOperationId, model}` → 200 `{change:{id, state:'done', model, previous}}`、Bot がまだなら 202 `{change:{id, state:'pending', model}}`。役員だけ |
 
 ```ts
 interface Reminder {
@@ -191,6 +192,7 @@ interface Candidate {
 | GET `/api/assistant/members` | GET `/assistant/members` |
 | GET・POST `/api/assistant/reminders…` | 同じ名前 |
 | GET・POST `/api/assistant/candidates…` | 同じ名前 |
+| POST `/api/assistant/ai-model` | POST `/assistant/ai-model`（clientOperationId に `ui-` を付ける。§10） |
 
 - ファイルの `url` は、アプリが `/api/assistant/files/<id>/<name>` に書き換えて返す。
 - 時間切れ：通常は 8 秒、リマインドと候補の POST は 12 秒（Bot ホストの側が 8 秒待つため）。
@@ -295,3 +297,37 @@ interface TaskDraftItem {
 
 - Bot：`bot/tests/test_taskdraft.py`（担当の順位、指示文に ID を出さないこと、出力の検証、ジョブ表の作り直し、Cog の実行と失敗）、`bot/tests/test_assistant_gateway.py` の `TaskDraftTests`（受け付け・入力の検査・本人だけが読めること）。
 - アプリ：`app/tests/api/assistant-taskdraft.test.ts`（名簿と未完了のタスクの組み立て、閲覧だけの委員の拒否、draft の形の検査）、`app/tests/e2e/task-draft.spec.ts`（入力→待ち→確認・修正→親子の順に起票、既存の親の下、失敗、機能が無いとき、375px）。
+
+## 10. AI のモデルの切り替え（2026-11-21）
+
+Bot・定期スクリーニング・議事録の要約が使う AI のモデル（OpenCode Go のモデル）を、役員が切り替える。Discord の `/model` と、Bot タブの AI の行の「モデルを替える」の 2 か所から。
+
+### 10-1. 流れと役割
+
+- 切り替えるのは Bot 専用の Claude の設定（`CLAUDE_CONFIG_DIR/settings.json`）の env のうち、モデルの読み替え 4 つ（`ANTHROPIC_DEFAULT_OPUS_MODEL`・`…_SONNET_MODEL`・`…_HAIKU_MODEL`・`CLAUDE_CODE_SUBAGENT_MODEL`）だけ。接続先とキーには触らない。3 つとも呼び出しのたびにこのファイルを読むので、再起動は要らない。処理中の議事録は途中から替わる。
+- **設定を書くのは Bot だけ**（`ai_model.switch`。同じフォルダの一時ファイル → `os.replace`、0600、キー入りの控えは作らない）。連携口は依頼をジョブ表の meta `ai_model_request` に書き、Bot が 2 秒ごとの見回りで当てて、結果を `ai_model_result` に書く。連携口は最大 8 秒待つ（待てる本数はジョブと共有）。
+- 選べるモデルは Bot の `go_quota.MODEL_LABELS`（11/20〜21 の試験で 5/5 だったもの）。Bot が `ai_status` の写しに `choices` として書き、連携口は meta の `ai.choices` で渡す。古い Bot は書かない → アプリは切り替えを出さない。OpenCode Go 経由でキーがあるときだけ切り替えられる。
+- 記録：`ai_status` の `lastChange`（`{model, previous, at, byName}`。Discord の ID はアプリに渡さない）、meta `ai_model_history`（直近 20 件。誰・いつ・どこから）、Bot のログ、監査ログ（`model`・`assistant.aimodel`、kind は admin）。
+
+### 10-2. 権限
+
+- 役員＝Discord の「サーバー管理」の権限がある人（所有者・管理者を含む。`/remind` の役員と同じ。meta の `isAdmin`）。連携口が確かめ、Bot も当てる前にメンバーを引いて確かめ直す。権限の表（`[permissions]`）で admin を絞っていれば、それも通す必要がある。
+- これは AI が置いた既定。委員長が別の範囲（権限管理者だけ等）を望めば変える。
+
+### 10-3. 断り
+
+| コード | 状態 | いつ |
+|---|---|---|
+| `FORBIDDEN` | 403 | 役員でない（連携口か Bot） |
+| `VALIDATION` | 400 | 選べないモデル、形の違う clientOperationId（`[A-Za-z0-9_-]{1,80}`） |
+| `FEATURE_UNAVAILABLE` | 400 | 古い Bot（choices が無い）、OpenCode Go を使っていない |
+| `BOT_OFFLINE` | 409 | Bot の生存の記録が 30 秒より古い |
+| `BUSY` | 409 | ほかの人の依頼が、まだ当てられていない（2 分以内） |
+| `EXPIRED`・`NOT_GO` など | 409 | Bot が当てなかった（依頼から 2 分を過ぎた、設定が Go でない） |
+
+- 同じ clientOperationId をもう一度送ると、当てた結果をそのまま返す（2 回は当てない）。
+
+### 10-4. 試験
+
+- Bot：`bot/tests/test_ai_model.py`（4 つだけ替える・ほかの設定とキーは残す・0600・一時ファイルを残さない・選べないモデル・Go でないとき・依頼の形と期限・履歴）、`test_assistant_cog.py` の `ModelRequestTests`（役員だけ・Bot が確かめ直す・2 回は当てない・監査）、`test_usage_model.py`（`/model`）、`test_ai_routing_display.py`（再起動せずに表示が替わる）、`test_assistant_gateway.py` の `AiModelTests`。
+- アプリ：`app/tests/api/assistant.test.ts`（`ui-` を付けて渡す・200 と 202・入力の検査）、`app/tests/unit/ai-status.test.ts`（最後の切り替えの文）、`app/tests/e2e/bot.spec.ts`（役員が切り替えて元に戻す・役員でない人には出ない・断りの表示と 375px）。

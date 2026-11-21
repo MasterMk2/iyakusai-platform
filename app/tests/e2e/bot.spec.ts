@@ -326,3 +326,65 @@ test('the AI line says the AI is stopped when a window is used up, and fits a ph
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow).toBeLessThanOrEqual(0);
 });
+
+// Switching the model (2026-11-21): officers only, in place, with an undo.
+const CHOICES = [
+  { model: 'claude-haiku-5-5', label: 'Claude Haiku 5.5' },
+  { model: 'gemini-4-argon', label: 'Gemini 4 Argon' },
+  { model: 'glm-5.3', label: 'GLM-5.3' },
+  { model: 'gpt-5.6-luna', label: 'GPT-5.6 Luna' },
+];
+
+test('the AI model: an officer switches in place, sees who switched, and can undo', async ({ page }) => {
+  const fake = await start(page, { isAdmin: true, ai: { ...goStatus([14, 35, 17], new Date().toISOString()), choices: CHOICES, lastChange: null } });
+  await page.goto('/#/bot/ask');
+  const line = page.getByTestId('bot-ai-status');
+  await expect(line).toContainText('Gemini 4 Argon');
+  await page.getByTestId('bot-ai-switch-open').click();
+  const picker = page.getByTestId('bot-ai-picker');
+  await expect(picker.getByRole('radio')).toHaveCount(4);
+  await expect(picker.getByRole('radio', { name: /Gemini 4 Argon/ })).toBeChecked();
+  await expect(picker).toContainText('いま');
+  await expect(picker).toContainText('議事録の要約');
+  await expect(page.getByTestId('bot-ai-switch-submit')).toBeDisabled();   // the current one is not a switch
+  await picker.getByRole('radio', { name: 'Claude Haiku 5.5' }).check();
+  await page.getByTestId('bot-ai-switch-submit').click();
+  await expect(page.getByTestId('bot-ai-switch-result')).toContainText('Claude Haiku 5.5 に切り替えました');
+  await expect(line.locator('.bot-ai-model')).toContainText('Claude Haiku 5.5');
+  await expect(page.getByTestId('bot-ai-changed')).toContainText('委員長が切り替え（前は Gemini 4 Argon）');
+  await expect(picker).toHaveCount(0);
+  await page.getByTestId('bot-ai-switch-undo').click();
+  await expect(line.locator('.bot-ai-model')).toContainText('Gemini 4 Argon');
+  expect(fake.calls.filter((c) => c === 'POST /ai-model')).toHaveLength(2);
+  // The questions stay the first thing on the screen.
+  await expect(page.getByTestId('bot-section-ask')).toBeVisible();
+});
+
+test('the AI model: members who are not officers see the last switch but no way to switch', async ({ page }) => {
+  await start(page, {
+    ai: { ...goStatus([14, 35, 17], new Date().toISOString()), choices: CHOICES, lastChange: { model: 'gemini-4-argon', previous: 'claude-haiku-5-5', at: new Date().toISOString(), byName: '委員長' } },
+  });
+  await page.goto('/#/bot/ask');
+  await expect(page.getByTestId('bot-ai-changed')).toContainText('委員長が切り替え（前は Claude Haiku 5.5）');
+  await expect(page.getByTestId('bot-ai-switch-open')).toHaveCount(0);
+});
+
+test('the AI model: a refusal is said beside the list, which stays open; it fits a phone', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 800 });
+  await start(page, {
+    isAdmin: true,
+    ai: { ...goStatus([14, 35, 17], new Date().toISOString()), choices: CHOICES, lastChange: null },
+    aiModelAnswer: { status: 409, body: { error: 'BUSY', message: 'ほかの切り替えを処理しています。少し待ってから、もう一度押してください。' } },
+  });
+  await page.goto('/#/bot/ask');
+  await page.getByTestId('bot-ai-switch-open').click();
+  await page.getByTestId('bot-ai-picker').getByRole('radio', { name: 'GLM-5.3' }).check();
+  await page.getByTestId('bot-ai-switch-submit').click();
+  await expect(page.getByTestId('bot-ai-picker').getByRole('alert')).toContainText('ほかの切り替えを処理しています');
+  await expect(page.getByTestId('bot-ai-status').locator('.bot-ai-model')).toContainText('Gemini 4 Argon');
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(0);
+  for (const radio of await page.getByTestId('bot-ai-picker').locator('label.bot-ai-choice').all()) {
+    expect((await radio.boundingBox())!.height).toBeGreaterThanOrEqual(24);
+  }
+});

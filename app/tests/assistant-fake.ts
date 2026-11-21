@@ -118,6 +118,12 @@ export async function startAssistantFake(): Promise<AssistantFake> {
 
   app.get(`${base}/meta`, async () => FAKE_META);
   app.get(`${base}/summary`, async () => ({ pendingCandidates: 2, reminders: { overdue: 1, today: 3, upcoming7d: 4 } }));
+  // AI model switch (2026-11-21): "glm-5.3" is applied at once (200), any other model is left pending (202).
+  app.post(`${base}/ai-model`, async (request, reply) => {
+    const body = request.body as { clientOperationId: string; model: string };
+    if (body.model !== 'glm-5.3') return reply.code(202).send({ change: { id: body.clientOperationId, state: 'pending', model: body.model } });
+    return reply.code(200).send({ change: { id: body.clientOperationId, state: 'done', model: body.model, previous: 'gemini-4-argon' } });
+  });
   app.get(`${base}/members`, async () => ({ members: [{ id: 'discord-1000000000000000001', name: '編集担当A' }] }));
 
   app.post(`${base}/jobs`, async (request, reply) => {

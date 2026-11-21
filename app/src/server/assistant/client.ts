@@ -1,4 +1,4 @@
-import type { AssistantCandidate, AssistantJob, AssistantMemberListResponse, AssistantMeta, AssistantReminder, AssistantSummary } from '../../shared/assistant.js';
+import type { AssistantAiModelChange, AssistantCandidate, AssistantJob, AssistantMemberListResponse, AssistantMeta, AssistantReminder, AssistantSummary } from '../../shared/assistant.js';
 import { signedHeaders } from '../tasks/signing.js';
 
 // Signed client of the Bot host's assistant integration API (/api/integration/v1/assistant/*, contract §3).
@@ -141,6 +141,11 @@ export class AssistantServiceClient {
 
   similar(actor: string, q: string): Promise<{ jobs: { job: AssistantJob; score: number }[] }> {
     return this.call<{ jobs: { job: AssistantJob; score: number }[] }>(actor, 'GET', '/similar', undefined, { q }).then((a) => a.body);
+  }
+
+  /** Switches the Bot's AI model (2026-11-21). The Bot host waits a few seconds for the Bot: 200 done, 202 pending. */
+  setAiModel(actor: string, body: { clientOperationId: string; model: string }): Promise<AssistantAnswer<{ change: AssistantAiModelChange }>> {
+    return this.call(actor, 'POST', '/ai-model', body, undefined, this.longTimeoutMs);
   }
 
   cancelJob(actor: string, jobId: string): Promise<{ job: AssistantJob }> {
