@@ -153,12 +153,28 @@ test('a PC header shows the state in one line and opens the part', async ({ page
   await page.setViewportSize({ width: 1280, height: 900 });
   await open(page, '/#/home');
   const badge = page.getByTestId('server-badge');
-  await expect(badge).toHaveText('サーバー正常CPU 23%メモリ 31%');
+  await expect(badge).toHaveText('サーバー正常CPU 23%メモリ 31%ディスク残り 700 GB');
   await expect(badge).toHaveAttribute('data-level', 'ok');
   await expect(badge).toHaveAttribute('title', '14:03 時点。押すと「サーバーの状態」を開きます');
   await badge.click();
   await expect(page).toHaveURL(/#\/settings\/system$/);
   await expect(panel(page).getByRole('heading', { name: 'サーバーの状態', level: 3 })).toBeVisible();
+});
+
+test('the header shows the least free space when the data and the backups are on two disks', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await open(page, '/#/home', {
+    status: () => ({
+      status: 200,
+      json: reading({
+        disks: [
+          { label: 'データ', totalBytes: 800 * GiB, freeBytes: 700 * GiB, usedPercent: 12.5, level: 'ok' },
+          { label: 'バックアップ', totalBytes: 100 * GiB, freeBytes: 42.5 * GiB, usedPercent: 57.5, level: 'ok' },
+        ],
+      }),
+    }),
+  });
+  await expect(page.getByTestId('server-badge')).toHaveText('サーバー正常CPU 23%メモリ 31%ディスク残り 42.5 GB');
 });
 
 test('the header names what needs a look instead of the figures', async ({ page }) => {
