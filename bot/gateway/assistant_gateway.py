@@ -41,6 +41,13 @@ DEFAULT_LIMIT = 20
 ONLINE_WINDOW_SEC = 30       # Bot の生存記録がこの秒数より古ければ「応答していません」
 WAIT_POLL_SEC = 0.25
 WAIT_SLOTS = 4               # 待つルートは同時に 4 本まで(超えたら待たずに 202)
+# AI のモデルの切り替え(2026-11-21)。名前と期限は Bot の ai_model.py と同じ。設定ファイルは Bot が書く。
+AI_MODEL_REQUEST = "ai_model_request"
+AI_MODEL_RESULT = "ai_model_result"
+AI_MODEL_TTL_SEC = 120
+AI_MODEL_ID = re.compile(r"[a-z0-9][a-z0-9._-]{0,59}")
+AI_REQUEST_ID = re.compile(r"[A-Za-z0-9_-]{1,80}")
+AI_RESULT_STATUS = {"FORBIDDEN": 403, "UNKNOWN_MODEL": 400}   # ほかの断り(EXPIRED・NOT_GO など)は 409
 LEDGER_TIMEOUT_SEC = 2.0     # Bot が候補台帳に書いている間に、連携口の応答を長く止めない
 SNOWFLAKE = r"[1-9][0-9]{16,19}"
 JOB_ID = r"j_[a-z0-9]{20}"
@@ -81,6 +88,7 @@ ROUTES = (
     ("POST", r"/notices", "create_notice"),
     ("GET", r"/candidates", "candidates"),
     ("POST", r"/candidates/([^/]*)/([^/]*)", "candidate_action"),
+    ("POST", r"/ai-model", "ai_model"),
 )
 
 
@@ -253,9 +261,20 @@ class AssistantGateway:
             windows.append({"key": w["key"], "label": text(w.get("label"), 10) or w["key"],
                             "percent": max(0.0, min(100.0, float(pct))), "status": text(w.get("status"), 20) or "",
                             "resetsAt": text(w.get("resetsAt"), 40)})
+        # 切り替えで選べるモデル(Bot が書く。古い Bot では無い = アプリは切り替えを出さない)と、最後の切り替え。
+        choices = []
+        for c in value.get("choices") or []:
+            if isinstance(c, dict) and isinstance(c.get("model"), str) and AI_MODEL_ID.fullmatch(c["model"]):
+                choices.append({"model": c["model"], "label": text(c.get("label"), 40) or c["model"]})
+        last = value.get("lastChange")
+        last_change = None
+        if isinstance(last, dict) and isinstance(last.get("model"), str):
+            last_change = {"model": text(last.get("model")), "previous": text(last.get("previous")),
+                           "at": text(last.get("at"), 40), "byName": text(last.get("byName"), 40)}
         return {"provider": value["provider"], "model": text(value.get("model")), "modelLabel": text(value.get("modelLabel")),
                 "ok": value.get("ok") is True, "stale": value.get("stale") is True, "error": text(value.get("error"), 40),
-                "fetchedAt": text(value.get("fetchedAt"), 40), "windows": windows}
+                "fetchedAt": text(value.get("fetchedAt"), 40), "windows": windows, "choices": choices[:12],
+                "lastChange": last_change}
 
     @staticmethod
     def _features(caps: dict) -> dict:
@@ -538,6 +557,90 @@ class AssistantGateway:
             "bot": {"alive": self._alive(heartbeat), "lastSeenAt": heartbeat},
             "ai": self._ai_status(),
         }
+
+    def _route_ai_model(self, context, raw, payload):
+        """AI のモデルの切り替え(2026-11-21・契約 §10)。依頼を写しに書き、Bot が当てるのを最大 wait_sec 待つ。
+        役員(サーバー管理)だけ。Bot も当てる前に役員かを確かめ直す。"""
+        self._params(raw, set())
+        body = self._body(payload, {"clientOperationId", "model"})
+        request_id = self._client_op(body.get("clientOperationId"))
+        if not AI_REQUEST_ID.fullmatch(request_id):
+            _invalid("clientOperationId の形式が正しくありません")
+        if not self._manages_guild(context):
+            raise AssistantError(403, "FORBIDDEN", "モデルを切り替えられるのは役員(サーバー管理の権限がある人)だけです。")
+        done = self._ai_model_result(request_id)
+        if done is not None:
+            return self._ai_model_answer(done)
+        ai = self._ai_status()
+        if not ai or ai["provider"] != "opencode_go" or not ai["choices"]:
+            raise AssistantError(400, "FEATURE_UNAVAILABLE", "いまの Bot ではモデルを切り替えられません。")
+        model = body.get("model")
+        if not isinstance(model, str) or model not in {c["model"] for c in ai["choices"]}:
+            _invalid("そのモデルは選べません。")
+        if not self._alive(self.store.last_heartbeat()):
+            raise AssistantError(409, "BOT_OFFLINE", "Bot が応答していないため、いまは切り替えられません。")
+        pending = self._ai_model_pending()
+        if pending is not None and pending.get("id") != request_id:
+            raise AssistantError(409, "BUSY", "ほかの切り替えを処理しています。少し待ってから、もう一度押してください。")
+        if pending is None:
+            self.store.set_meta(AI_MODEL_REQUEST, json.dumps({
+                "id": request_id, "model": model, "by": context.actor_id,
+                "at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")}))
+        done = self._wait_ai_model(request_id)
+        if done is None:
+            return 202, {"change": {"id": request_id, "state": "pending", "model": model}}
+        return self._ai_model_answer(done)
+
+    def _ai_model_result(self, request_id: str) -> dict | None:
+        try:
+            value = json.loads(self.store.get_meta(AI_MODEL_RESULT) or "null")
+        except ValueError:
+            return None
+        return value if isinstance(value, dict) and value.get("id") == request_id else None
+
+    def _ai_model_pending(self) -> dict | None:
+        """Bot がまだ当てていない、期限内の依頼。"""
+        try:
+            value = json.loads(self.store.get_meta(AI_MODEL_REQUEST) or "null")
+        except ValueError:
+            return None
+        if not isinstance(value, dict) or not isinstance(value.get("id"), str):
+            return None
+        if self._ai_model_result(value["id"]) is not None:
+            return None
+        try:
+            at = datetime.fromisoformat(str(value.get("at")).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if at.tzinfo is None or abs((datetime.now(timezone.utc) - at).total_seconds()) > AI_MODEL_TTL_SEC:
+            return None
+        return value
+
+    def _wait_ai_model(self, request_id: str) -> dict | None:
+        """Bot が結果を書くまで最大 wait_sec 待つ(待てる本数を超えたら待たない)。"""
+        done = self._ai_model_result(request_id)
+        if done is not None or self.wait_sec <= 0 or not self.waits.acquire(blocking=False):
+            return done
+        try:
+            deadline = time.monotonic() + self.wait_sec
+            while done is None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                time.sleep(min(WAIT_POLL_SEC, remaining))
+                done = self._ai_model_result(request_id)
+        finally:
+            self.waits.release()
+        return done
+
+    @staticmethod
+    def _ai_model_answer(done: dict):
+        if done.get("ok") is not True:
+            code = done.get("error") if isinstance(done.get("error"), str) else "FAILED"
+            message = done.get("message") if isinstance(done.get("message"), str) else "切り替えられませんでした。"
+            raise AssistantError(AI_RESULT_STATUS.get(code, 409), code[:40], message[:200])
+        return 200, {"change": {"id": done.get("id"), "state": "done", "model": _text(done.get("model"))[:60],
+                                "previous": (_text(done.get("previous"))[:60] or None)}}
 
     def _route_summary(self, context, raw, payload):
         self._params(raw, set())

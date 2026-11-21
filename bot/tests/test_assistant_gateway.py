@@ -400,6 +400,111 @@ class MetaTests(Harness):
         self.assertNotIn("gemini", ids)
 
 
+class AiModelTests(Harness):
+    """AI のモデルの切り替え(2026-11-21)。連携口は依頼を書いて待つだけ。設定ファイルは Bot が書く。"""
+
+    CHOICES = [{"model": "gemini-4-argon", "label": "Gemini 4 Argon"}, {"model": "glm-5.3", "label": "GLM-5.3"}]
+
+    def setUp(self):
+        super().setUp()
+        self.make_gateway(capabilities=caps(), wait_sec=2.0)
+        self.store.set_meta("ai_status", json.dumps({
+            "provider": "opencode_go", "model": "gemini-4-argon", "modelLabel": "Gemini 4 Argon", "ok": True,
+            "windows": [], "choices": self.CHOICES + [{"model": "Bad Model!", "label": "x"}],
+            "lastChange": {"model": "gemini-4-argon", "previous": "claude-haiku-5-5", "at": "2026-11-21T02:16:00Z",
+                           "byName": "委員長", "by": "discord-" + OFFICER}}))
+        self.store.heartbeat()
+        self.start(self.gateway)
+
+    def body(self, model="glm-5.3", op=None):
+        return {"clientOperationId": op or "ui-" + secrets.token_hex(6), "model": model}
+
+    def post(self, body, actor=OFFICER):
+        return self.request("POST", self.jobs_path("ai-model"), actor=actor, body=body)
+
+    def answer_later(self, result):
+        """Bot の代わり：依頼が書かれるのを待って(CI が重くても)結果を書く。"""
+        def run():
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                raw = self.store.get_meta("ai_model_request")
+                if raw:
+                    request = json.loads(raw)
+                    self.store.set_meta("ai_model_result", json.dumps({"id": request["id"], **result}))
+                    return
+                time.sleep(0.02)
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 5)
+
+    def test_meta_relays_choices_and_last_change_without_discord_ids(self):
+        ai = self.request("GET", self.jobs_path("meta"), actor=OFFICER).json()["ai"]
+        self.assertEqual(ai["choices"], self.CHOICES)   # 形の違う ID は渡さない
+        self.assertEqual(ai["lastChange"], {"model": "gemini-4-argon", "previous": "claude-haiku-5-5",
+                                            "at": "2026-11-21T02:16:00Z", "byName": "委員長"})
+
+    def test_only_officers_can_ask(self):
+        for actor, status in ((EDITOR, 403), (PENDING, 403), (OUTSIDER, 403)):
+            self.assertEqual(self.post(self.body(), actor=actor).status, status, actor)
+        self.assertIsNone(self.store.get_meta("ai_model_request"))
+
+    def test_request_is_written_and_pending_until_the_bot_answers(self):
+        body = self.body()
+        reply = self.post(body)
+        self.assertEqual(reply.status, 202)
+        self.assertEqual(reply.json()["change"], {"id": body["clientOperationId"], "state": "pending", "model": "glm-5.3"})
+        request = json.loads(self.store.get_meta("ai_model_request"))
+        self.assertEqual((request["id"], request["model"], request["by"]), (body["clientOperationId"], "glm-5.3", uid(OFFICER)))
+
+    def test_done_when_the_bot_answers_in_time_and_replay_returns_it(self):
+        body = self.body()
+        self.answer_later({"ok": True, "model": "glm-5.3", "previous": "gemini-4-argon"})
+        reply = self.post(body)
+        self.assertEqual(reply.status, 200)
+        self.assertEqual(reply.json()["change"], {"id": body["clientOperationId"], "state": "done", "model": "glm-5.3",
+                                                  "previous": "gemini-4-argon"})
+        self.store.set_meta("ai_model_request", "")
+        self.assertEqual(self.post(body).status, 200)   # 同じ操作の ID は、もう一度当てずに結果を返す
+        self.assertEqual(self.store.get_meta("ai_model_request"), "")
+
+    def test_bot_refusals_become_errors(self):
+        for result, status in (({"ok": False, "error": "FORBIDDEN", "message": "役員だけです。"}, 403),
+                               ({"ok": False, "error": "EXPIRED", "message": "時間が経ちました。"}, 409)):
+            self.store.set_meta("ai_model_request", "")
+            self.answer_later(result)
+            reply = self.post(self.body())
+            self.assertEqual((reply.status, reply.error_code()), (status, result["error"]))
+            self.assertEqual(reply.json()["error"]["message"], result["message"])
+
+    def test_unknown_model_and_bad_ids(self):
+        self.assertEqual(self.post(self.body(model="deepseek-v4-pro")).error_code(), "VALIDATION")
+        self.assertEqual(self.post(self.body(op="ui:with.colon")).status, 400)
+        self.assertEqual(self.post({"model": "glm-5.3"}).status, 400)
+        self.assertEqual(self.post(dict(self.body(), extra=1)).status, 400)
+        self.assertIsNone(self.store.get_meta("ai_model_request"))
+
+    def test_busy_while_another_request_waits(self):
+        self.assertEqual(self.post(self.body()).status, 202)
+        reply = self.post(self.body(model="gemini-4-argon"))
+        self.assertEqual((reply.status, reply.error_code()), (409, "BUSY"))
+
+    def test_old_unanswered_request_does_not_block(self):
+        old = (datetime.now(timezone.utc) - timedelta(seconds=ag.AI_MODEL_TTL_SEC + 10)).isoformat()
+        self.store.set_meta("ai_model_request", json.dumps({"id": "ui-old0000", "model": "glm-5.3", "by": uid(OFFICER),
+                                                            "at": old}))
+        self.assertEqual(self.post(self.body()).status, 202)
+
+    def test_offline_bot_and_old_bot(self):
+        with sqlite3.connect(self.dir / "jobs" / "assistant.sqlite3") as con:
+            con.execute("DELETE FROM bot_heartbeat")
+        self.assertEqual(self.post(self.body()).error_code(), "BOT_OFFLINE")
+        self.store.heartbeat()
+        self.store.set_meta("ai_status", json.dumps({"provider": "opencode_go", "model": "gemini-4-argon", "windows": []}))
+        self.assertEqual(self.post(self.body()).error_code(), "FEATURE_UNAVAILABLE")   # 選べるモデルを書かない古い Bot
+        self.store.set_meta("ai_status", json.dumps({"provider": "claude_subscription", "choices": self.CHOICES}))
+        self.assertEqual(self.post(self.body()).error_code(), "FEATURE_UNAVAILABLE")
+
+
 class JobInputTests(Harness):
     def setUp(self):
         super().setUp()

@@ -47,6 +47,7 @@ COMMAND_KINDS: dict[str, str] = {
     "todo.history": "read",
     "assistant.ask": "read",
     "roles": "read",                 # ロールが誰に付いているか（roles.py）
+    "model": "read",                 # いまの AI のモデルを見る（/model を引数なしで・2026-11-21）
     # 書く
     "remind.add": "write",
     "remind.done": "write",
@@ -79,6 +80,8 @@ COMMAND_KINDS: dict[str, str] = {
     "assistant.image": "send",
     "line返信": "send",              # 公式LINE への返信（line_reply_cog）
     # 管理
+    "model.set": "admin",            # Bot の AI のモデルの切り替え（/model モデル:…・2026-11-21）。役員（サーバー管理）だけ
+    "assistant.aimodel": "admin",    # 同じ切り替えを統合アプリの Bot タブから
     "persona.set": "admin",
     "persona.off": "admin",
     "haiku.scan": "admin",

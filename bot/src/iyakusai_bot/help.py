@@ -104,6 +104,11 @@ def build_help_embed(ai_enabled: bool, haiku_enabled: bool = False,
         inline=False,
     )
     e.add_field(
+        name="🔁 /model — AI のモデル",
+        value="いまの Bot の AI のモデルを表示。`/model モデル:…` で切り替え(役員だけ。統合アプリの Bot タブからも)。",
+        inline=False,
+    )
+    e.add_field(
         name="🎭 口調(キャラ)",
         value=(
             "`/ask` の `口調:` にその場で指定できます(例: `関西弁っぽく`)。\n"

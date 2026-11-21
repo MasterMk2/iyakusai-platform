@@ -25,11 +25,11 @@ class UsedModelTest(unittest.TestCase):
 
 class RoutingTest(unittest.TestCase):
     def setUp(self):
-        self.saved = ap.ROUTING
         self.saved_env = os.environ.get("CLAUDE_CONFIG_DIR")
+        ap._routing_cache = None
 
     def tearDown(self):
-        ap.ROUTING = self.saved
+        ap._routing_cache = None
         if self.saved_env is None:
             os.environ.pop("CLAUDE_CONFIG_DIR", None)
         else:
@@ -55,7 +55,8 @@ class RoutingTest(unittest.TestCase):
         self.assertEqual(ap._routing()["provider"], "claude_subscription")
 
     def test_go_cost_and_display(self):
-        ap.ROUTING = {"provider": "opencode_go", "aliases": {"opus": "claude-haiku-5-5"}}
+        self._with_settings({"ANTHROPIC_BASE_URL": "https://opencode.ai/inference/go/anthropic",
+                             "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-haiku-5-5"})
         self.assertEqual(ap.display_model("opus"), "claude-haiku-5-5")
         self.assertEqual(ap.display_model("glm-5.3"), "glm-5.3")
         note = ap.AIResult(text="x", model="claude-haiku-5-5", cost_usd=0.006).cost_note(160.0)
@@ -64,8 +65,20 @@ class RoutingTest(unittest.TestCase):
         self.assertEqual(other, "Go(月額$10定額) API換算 $0.050")
         self.assertIn("OpenCode Go", ap._billing_line())
 
+    def test_display_follows_a_switch_without_restart(self):
+        # 2026-11-21: モデルは settings.json の書き換えだけで替わる。表示も次の呼び出しから替わること。
+        go = "https://opencode.ai/inference/go/anthropic"
+        self._with_settings({"ANTHROPIC_BASE_URL": go, "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-haiku-5-5"})
+        self.assertEqual(ap.display_model("opus"), "claude-haiku-5-5")
+        path = Path(os.environ["CLAUDE_CONFIG_DIR"], "settings.json")
+        tmp = path.with_name("next.json")
+        tmp.write_text(json.dumps({"env": {"ANTHROPIC_BASE_URL": go, "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.3"}}),
+                       encoding="utf-8")
+        os.replace(tmp, path)
+        self.assertEqual(ap.display_model("opus"), "glm-5.3")
+
     def test_subscription_cost_unchanged(self):
-        ap.ROUTING = {"provider": "claude_subscription", "aliases": {}}
+        os.environ["CLAUDE_CONFIG_DIR"] = "/nonexistent-iyakusai-test"
         self.assertEqual(ap.display_model("opus"), "opus")
         self.assertEqual(ap.AIResult(text="x", model="opus", cost_usd=0.006).cost_note(160.0),
                          "API換算 $0.006(≒1円)")

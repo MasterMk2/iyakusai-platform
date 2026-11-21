@@ -192,7 +192,35 @@ export interface AssistantAiStatus {
   error: string | null;
   fetchedAt: string | null;
   windows: AssistantAiWindow[];
+  /** The models an officer can switch to (2026-11-21). Absent or empty from an older Bot: then no switching is offered. */
+  choices?: AssistantAiChoice[];
+  /** The last switch; null before any (or from an older Bot). */
+  lastChange?: AssistantAiChange | null;
 }
+
+export interface AssistantAiChoice {
+  model: string;
+  label: string;
+}
+
+export interface AssistantAiChange {
+  model: string | null;
+  previous: string | null;
+  at: string | null;
+  /** The officer's display name on Discord. */
+  byName: string | null;
+}
+
+/** Answer of POST /api/assistant/ai-model: done (the Bot rewrote its setting) or pending (it will within seconds). */
+export interface AssistantAiModelChange {
+  id: string;
+  state: 'done' | 'pending';
+  model: string;
+  previous?: string | null;
+}
+
+/** A Go model id as the Bot writes it (the Bot checks the actual list again before switching). */
+export const AI_MODEL_ID = /^[a-z0-9][a-z0-9._-]{0,59}$/;
 
 /** Answer of GET /assistant/members: the people a reminder can be for (`id` is `discord-<ID>`). */
 export interface AssistantMemberListResponse {

@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
+  AI_MODEL_ID,
   ASK_EFFORTS,
   ASK_FORMATS,
   ASK_MODELS,
@@ -84,6 +85,7 @@ const imageInput = z.strictObject({
   prompt: text(ASSISTANT_LIMITS.imagePromptMax),
   aspect: z.enum(IMAGE_ASPECTS).optional(),
 });
+const aiModelBody = z.strictObject({ clientOperationId: operationId, model: z.string().regex(AI_MODEL_ID) });
 const jobBody = z.discriminatedUnion('kind', [
   z.strictObject({ clientOperationId: operationId, kind: z.literal('ask'), input: askInput }),
   z.strictObject({ clientOperationId: operationId, kind: z.literal('doc'), input: docInput }),
@@ -189,6 +191,17 @@ export function registerAssistantRoutes(app: FastifyInstance, ctx: AssistantRout
     const { actor, rt } = actorOf(request);
     const meta = await rt.client.meta(actor).catch(toHttp);
     return ctx.mailDraftBcc ? { ...meta, mailBcc: ctx.mailDraftBcc } : meta;
+  });
+
+  // Switching the Bot's AI model (2026-11-21, contract §10). Only officers (Manage Server on Discord): the Bot host
+  // checks that, and the Bot checks it again before it rewrites its setting. 202 = the Bot will within seconds.
+  app.post('/api/assistant/ai-model', async (request, reply) => {
+    const { actor, rt } = actorOf(request);
+    const body = parse(aiModelBody, request.body);
+    const answer = await rt.client.setAiModel(actor, { clientOperationId: `ui-${body.clientOperationId}`, model: body.model }).catch(toHttp);
+    const change = answer.body?.change;
+    if (!change || typeof change !== 'object') throw UNAVAILABLE();
+    return reply.code(answer.status === 202 ? 202 : 200).send({ change });
   });
 
   // One signed request, for the home card.

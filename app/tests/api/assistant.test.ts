@@ -212,6 +212,36 @@ describe('input checks (contract §3-2, §3-4)', () => {
   });
 });
 
+describe('AI model switch (2026-11-21, contract §10)', () => {
+  it('sends the model with the ui- operation ID and passes done (200) and pending (202) through', async () => {
+    const op = randomUUID().replace(/-/g, '');
+    const done = await call(EDITOR_A, 'POST', '/api/assistant/ai-model', { clientOperationId: op, model: 'glm-5.3' });
+    expect(done.status).toBe(200);
+    expect(done.json.change).toEqual({ id: `ui-${op}`, state: 'done', model: 'glm-5.3', previous: 'gemini-4-argon' });
+    const sent = fake.calls.at(-1)!;
+    expect([sent.method, sent.path, sent.actor]).toEqual(['POST', '/api/integration/v1/assistant/ai-model', 'user-member-a1']);
+    expect(sent.body).toEqual({ clientOperationId: `ui-${op}`, model: 'glm-5.3' });
+    const pending = await call(EDITOR_A, 'POST', '/api/assistant/ai-model', { clientOperationId: randomUUID().replace(/-/g, ''), model: 'claude-haiku-5-5' });
+    expect(pending.status).toBe(202);
+    expect(pending.json.change.state).toBe('pending');
+  });
+
+  it('checks the input before anything is sent, and keeps the Bot host refusal for outsiders', async () => {
+    const before = fake.calls.length;
+    for (const body of [
+      { clientOperationId: 'short', model: 'glm-5.3' },
+      { clientOperationId: randomUUID().replace(/-/g, ''), model: 'GLM 5.3' },
+      { clientOperationId: randomUUID().replace(/-/g, ''), model: 'glm-5.3', extra: 1 },
+      { model: 'glm-5.3' },
+    ]) {
+      expect((await call(EDITOR_A, 'POST', '/api/assistant/ai-model', body)).status).toBe(400);
+    }
+    expect(fake.calls.length).toBe(before);
+    const outsider = await call(VIEWER_B, 'POST', '/api/assistant/ai-model', { clientOperationId: randomUUID().replace(/-/g, ''), model: 'glm-5.3' });
+    expect(outsider.status).toBe(403);
+  });
+});
+
 describe('job results and links', () => {
   it('rebuilds file links, keeps only allowed files and drops badly named ones', async () => {
     const created = await call(EDITOR_A, 'POST', '/api/assistant/jobs', askBody('資料の質問'));

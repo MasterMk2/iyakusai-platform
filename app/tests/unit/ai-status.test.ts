@@ -77,3 +77,25 @@ describe('aiStatusView', () => {
     expect(v.note).toBeNull();
   });
 });
+
+describe('the last model switch (2026-11-21)', () => {
+  const choices = [
+    { model: 'gemini-4-argon', label: 'Gemini 4 Argon' },
+    { model: 'claude-haiku-5-5', label: 'Claude Haiku 5.5' },
+  ];
+
+  it('says when, who and what it was before, with the label from the Bot list', () => {
+    const view = aiStatusView(go({ choices, lastChange: { model: 'gemini-4-argon', previous: 'claude-haiku-5-5', at: '2026-11-20T17:16:00Z', byName: '委員長' } }), NOW);
+    expect(view?.changed).toBe('02:16 に委員長が切り替え（前は Claude Haiku 5.5）');
+  });
+
+  it('gives the date for another day, and leaves out what is unknown', () => {
+    const view = aiStatusView(go({ choices, lastChange: { model: 'gemini-4-argon', previous: null, at: '2026-11-19T03:00:00Z', byName: null } }), NOW);
+    expect(view?.changed).toBe('11/19 12:00 に切り替え');
+  });
+
+  it('says nothing before any switch or from an older Bot', () => {
+    expect(aiStatusView(go(), NOW)?.changed).toBeNull();
+    expect(aiStatusView(go({ lastChange: null }), NOW)?.changed).toBeNull();
+  });
+});

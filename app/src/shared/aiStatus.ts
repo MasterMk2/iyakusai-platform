@@ -31,6 +31,22 @@ export interface AiStatusView {
   readAt: string | null;
   /** The one sentence to show beside the figures, or null when all is well. */
   note: string | null;
+  /** 「11/21 17:20 に委員長が切り替え（前は Gemini 4 Argon）」, null before any switch (2026-11-21). */
+  changed: string | null;
+}
+
+/** The label of a model id from the Bot's list, or the id itself. */
+export function aiModelLabel(ai: AssistantAiStatus, model: string | null | undefined): string | null {
+  if (!model) return null;
+  return ai.choices?.find((c) => c.model === model)?.label ?? model;
+}
+
+function changedText(ai: AssistantAiStatus, now: Date): string | null {
+  const last = ai.lastChange;
+  if (!last || !last.model) return null;
+  const at = when(last.at, now);
+  const previous = aiModelLabel(ai, last.previous);
+  return `${at ? `${at} に` : ''}${last.byName ? `${last.byName}が` : ''}切り替え${previous && last.previous !== last.model ? `（前は ${previous}）` : ''}`;
 }
 
 const JST = 'Asia/Tokyo';
@@ -54,7 +70,7 @@ export function aiStatusView(ai: AssistantAiStatus | null | undefined, nowMs: nu
   if (!ai) return null;
   const now = new Date(nowMs);
   if (ai.provider !== 'opencode_go') {
-    return { model: ai.modelLabel ?? ai.model ?? 'Claude', route: 'Claude のサブスクリプション', level: 'ok', windows: [], readAt: null, note: null };
+    return { model: ai.modelLabel ?? ai.model ?? 'Claude', route: 'Claude のサブスクリプション', level: 'ok', windows: [], readAt: null, note: null, changed: null };
   }
   const windows = ai.windows.map((w) => ({
     key: w.key,
@@ -66,7 +82,7 @@ export function aiStatusView(ai: AssistantAiStatus | null | undefined, nowMs: nu
   const readAt = ai.fetchedAt ? `${when(ai.fetchedAt, now)} 時点` : null;
   const ageMin = ai.fetchedAt ? (nowMs - new Date(ai.fetchedAt).getTime()) / 60_000 : Infinity;
   const model = ai.modelLabel ?? ai.model ?? '不明なモデル';
-  const base = { model, route: 'OpenCode Go', windows, readAt };
+  const base = { model, route: 'OpenCode Go', windows, readAt, changed: changedText(ai, now) };
   if (windows.length === 0) {
     return { ...base, level: 'unknown', note: '残り枠をまだ読めていません。OpenCode のコンソールで確かめてください。' };
   }

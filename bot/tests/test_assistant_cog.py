@@ -885,6 +885,140 @@ class WebJobPermissionTests(AssistantCase):
         self.assertEqual((folder / "【AI】2-報告.md").read_bytes(), "新".encode("utf-8"))
 
 
+class ModelRequestTests(AssistantCase):
+    """統合アプリの Bot タブからの AI のモデルの切り替え(2026-11-21)。Bot が確かめ直してから設定を書く。"""
+
+    GO = "https://opencode.ai/inference/go/anthropic"
+
+    def setUp(self):
+        super().setUp()
+        self.config = self.dir / "claude-bot"
+        self.config.mkdir()
+        self.settings_file = self.config / "settings.json"
+        self.settings_file.write_text(json.dumps({"env": {
+            "ANTHROPIC_BASE_URL": self.GO, "ANTHROPIC_AUTH_TOKEN": "synthetic-key-0123456789abcdef",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": "gemini-4-argon", "ANTHROPIC_DEFAULT_SONNET_MODEL": "gemini-4-argon",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": "gemini-4-argon", "CLAUDE_CODE_SUBAGENT_MODEL": "gemini-4-argon"}}),
+            encoding="utf-8")
+        saved = os.environ.get("CLAUDE_CONFIG_DIR")
+        os.environ["CLAUDE_CONFIG_DIR"] = str(self.config)
+        self.addCleanup(lambda: os.environ.pop("CLAUDE_CONFIG_DIR", None) if saved is None
+                        else os.environ.__setitem__("CLAUDE_CONFIG_DIR", saved))
+        self.audit = AuditLog(self.dir / "audit")
+        ACHK.configure(ACCESS.AccessSettings(), self.audit)
+        self.addCleanup(ACHK.configure, ACCESS.AccessSettings(), None)
+
+    def model_now(self):
+        return json.loads(self.settings_file.read_text(encoding="utf-8"))["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"]
+
+    def ask(self, actor, model="claude-haiku-5-5", rid="ui-req00001", at=None):
+        from datetime import datetime, timezone
+        self.store.set_meta("ai_model_request", json.dumps({
+            "id": rid, "model": model, "by": f"discord-{actor}",
+            "at": at or datetime.now(timezone.utc).isoformat(timespec="seconds")}))
+        asyncio.run(self.cog()._model_request())
+        raw = self.store.get_meta("ai_model_result")
+        return json.loads(raw) if raw else None
+
+    def test_officer_switches_and_the_change_is_recorded(self):
+        self.store.set_meta("ai_status", json.dumps({"provider": "opencode_go", "model": "gemini-4-argon", "ok": True,
+                                                     "windows": [{"key": "weekly", "percent": 35}]}))
+        result = self.ask(ADMIN)
+        self.assertEqual((result["ok"], result["previous"]), (True, "gemini-4-argon"))
+        self.assertEqual(self.model_now(), "claude-haiku-5-5")
+        status = json.loads(self.store.get_meta("ai_status"))
+        self.assertEqual((status["modelLabel"], status["windows"][0]["percent"]), ("Claude Haiku 5.5", 35))
+        self.assertEqual(status["lastChange"]["byName"], "役員")
+        history = json.loads(self.store.get_meta("ai_model_history"))
+        self.assertEqual([(h["model"], h["previous"], h["source"]) for h in history],
+                         [("claude-haiku-5-5", "gemini-4-argon", "app")])
+        rows = [json.loads(line) for line in (self.dir / "audit" / "audit.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([(r["cmd"], r["result"]) for r in rows], [("assistant.aimodel", "accepted"),
+                                                                    ("assistant.aimodel", "ok")])
+
+    def test_non_officer_is_refused_by_the_bot_itself(self):
+        result = self.ask(ACTOR)
+        self.assertEqual((result["ok"], result["error"]), (False, "FORBIDDEN"))
+        self.assertEqual(self.model_now(), "gemini-4-argon")
+
+    def test_old_request_is_not_applied(self):
+        result = self.ask(ADMIN, at="2026-11-21T00:00:00+00:00")
+        self.assertEqual(result["error"], "EXPIRED")
+        self.assertEqual(self.model_now(), "gemini-4-argon")
+
+    def test_unknown_model_is_refused(self):
+        self.assertEqual(self.ask(ADMIN, model="deepseek-v4-pro")["error"], "UNKNOWN_MODEL")
+        self.assertEqual(self.model_now(), "gemini-4-argon")
+
+    def test_a_handled_request_is_not_applied_twice(self):
+        self.ask(ADMIN)
+        self.settings_file.write_text(self.settings_file.read_text(encoding="utf-8").replace("claude-haiku-5-5",
+                                                                                              "gemini-4-argon"),
+                                      encoding="utf-8")
+        asyncio.run(self.cog()._model_request())
+        self.assertEqual(self.model_now(), "gemini-4-argon")
+
+    def test_a_write_failure_is_answered_and_jobs_are_still_taken(self):
+        # 設定の書き込みが落ちても結果(INTERNAL)を書く。書かないと毎周期やり直し、依頼の取り込み(_claim)も止まる
+        from unittest import mock
+        from iyakusai_bot import ai_model
+        cog = self.cog()
+        claimed = []
+
+        async def fake_claim():
+            claimed.append(True)
+
+        cog._claim = fake_claim
+        cog._started = True
+        cog._snapshot_at = 10 ** 12
+        with mock.patch.object(ai_model, "_write", side_effect=OSError("disk full")):
+            self.store.set_meta("ai_model_request", json.dumps({
+                "id": "ui-req00002", "model": "glm-5.3", "by": f"discord-{ADMIN}",
+                "at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()}))
+            asyncio.run(cog.poll.coro(cog))
+        result = json.loads(self.store.get_meta("ai_model_result"))
+        self.assertEqual((result["ok"], result["error"]), (False, "INTERNAL"))
+        self.assertNotIn("disk full", result["message"])
+        self.assertEqual(claimed, [True])
+        self.assertEqual(self.model_now(), "gemini-4-argon")
+
+    def test_the_discord_command_records_like_the_app(self):
+        from discord import app_commands
+        from iyakusai_bot.usage import Usage
+
+        class Officer(discord.Member):
+            def __init__(self):  # pylint: disable=super-init-not-called
+                pass
+            id = property(lambda self: ADMIN)
+            display_name = property(lambda self: "役員")
+            guild_permissions = property(lambda self: discord.Permissions(manage_guild=True))
+
+        sent = []
+
+        class Response:
+            async def send_message(self, content=None, *, ephemeral=False, **kwargs):
+                sent.append(content)
+
+        cog = self.cog()
+        self.bot.cogs["Assistant"] = cog
+        itx = SimpleNamespace(user=Officer(), response=Response(), guild_id=GUILD, channel_id=SHARE)
+        asyncio.run(Usage.model.callback(Usage(self.bot, usage_log=None), itx,
+                                         app_commands.Choice(name="GLM-5.3", value="glm-5.3")))
+        self.assertIn("GLM-5.3", sent[0])
+        self.assertEqual(self.model_now(), "glm-5.3")
+        history = json.loads(self.store.get_meta("ai_model_history"))
+        self.assertEqual([(h["model"], h["source"], h["byName"]) for h in history], [("glm-5.3", "discord", "役員")])
+        self.assertEqual(json.loads(self.store.get_meta("ai_status"))["model"], "glm-5.3")
+        rows = [json.loads(line) for line in (self.dir / "audit" / "audit.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([(r["cmd"], r["result"]) for r in rows], [("model.set", "accepted"), ("model.set", "ok")])
+
+    def test_malformed_request_is_dropped(self):
+        self.store.set_meta("ai_model_request", "{not json")
+        asyncio.run(self.cog()._model_request())
+        self.assertEqual(self.store.get_meta("ai_model_request"), "")
+        self.assertIsNone(self.store.get_meta("ai_model_result"))
+
+
 class QuietShareTests(ImageEnabledTests):
     """[assistant] post_to_discord = false(2026-11-21): アプリ発の ask/doc/image を #bottest に出さない。
 
