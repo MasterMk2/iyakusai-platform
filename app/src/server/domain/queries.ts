@@ -24,6 +24,13 @@ export interface ThreadQuery {
   status?: HandlingStatus;
   label?: string;
   assignee?: string;
+  /** Threads awaiting a reply or past a deadline. The demo state keeps no deadlines, so this matches no thread. */
+  due?: 'awaiting' | 'overdue';
+  /**
+   * 'due': the nearest deadline first, then the newest (as the committee mailbox orders them). With no deadlines
+   * every thread is last, so the order stays the newest first.
+   */
+  sort?: 'latest' | 'due';
   page: number;
   pageSize: number;
 }
@@ -97,6 +104,7 @@ export function listThreads(state: AppState, user: User, query: ThreadQuery): Th
 
 /** All matching, permitted thread items in list order (no paging). */
 export function collectThreadItems(state: AppState, user: User, query: Omit<ThreadQuery, 'page' | 'pageSize'>): ThreadListItem[] {
+  if (query.due !== undefined) return [];
   const permitted = permittedReceipts(state, user, query.mailboxId);
   const terms = tokens(query.q);
 

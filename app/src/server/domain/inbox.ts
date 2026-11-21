@@ -18,6 +18,8 @@ export interface InboxQuery {
   status?: HandlingStatus;
   label?: string;
   assignee?: string;
+  due?: 'awaiting' | 'overdue';
+  sort?: 'latest' | 'due';
   page: number;
   pageSize: number;
 }
@@ -30,10 +32,11 @@ export function listInbox(mail: AppState, line: LineState | null, user: User, qu
   const filters = { q: query.q, status: query.status, label: query.label, assignee: query.assignee };
   const email: InboxItem[] =
     query.source !== 'line' && query.lineAccountId === undefined
-      ? collectThreadItems(mail, user, { ...filters, mailboxId: query.mailboxId }).map((t) => ({ source: 'email' as const, ...t }))
+      ? collectThreadItems(mail, user, { ...filters, mailboxId: query.mailboxId, due: query.due }).map((t) => ({ source: 'email' as const, ...t }))
       : [];
+  // Deadlines are mail only: a deadline filter or order leaves the LINE conversations out (as in the committee mailbox).
   const lineItems: InboxItem[] =
-    line && query.source !== 'email' && query.mailboxId === undefined
+    line && query.source !== 'email' && query.mailboxId === undefined && query.due === undefined && query.sort !== 'due'
       ? collectLineItems(line, namesFrom(mail), user, { ...filters, accountId: query.lineAccountId }, unread)
       : [];
   const items = [...email, ...lineItems].sort((a, b) => latestOf(b).localeCompare(latestOf(a)) || idOf(a).localeCompare(idOf(b)));

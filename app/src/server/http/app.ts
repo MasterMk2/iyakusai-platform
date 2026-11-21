@@ -141,12 +141,20 @@ const threadParams = z.strictObject({ threadId: idParam('th') });
 const attachmentParams = z.strictObject({ receiptId: idParam('rc'), attachmentId: z.string().regex(/^att\d{1,2}$/) });
 const shortId = z.string().min(1).max(40).regex(/^[a-z0-9-]+$/);
 
+// The deadline filter and order of the mail list (2026-11-03), with the same keys as the committee mailbox, so the
+// list's 期限 and 並べ順 work here too instead of failing with 400 (the demo state has no deadlines: domain/queries.ts).
+const dueQuery = {
+  due: z.enum(['awaiting', 'overdue']).optional(),
+  sort: z.enum(['latest', 'due']).default('latest'),
+};
+
 const threadQuery = z.strictObject({
   mailboxId: shortId.optional(),
   q: z.string().max(LIMITS.queryMaxLength).optional(),
   status: z.enum(HANDLING_STATUSES).optional(),
   label: z.string().min(1).max(LIMITS.labelMaxLength).optional(),
   assignee: shortId.optional(),
+  ...dueQuery,
   page: z.coerce.number().int().min(1).max(10_000).default(1),
   pageSize: z.coerce.number().int().min(1).max(LIMITS.pageSizeMax).default(20),
 });
@@ -169,6 +177,7 @@ const inboxQuery = z
     status: z.enum(HANDLING_STATUSES).optional(),
     label: z.string().min(1).max(LIMITS.labelMaxLength).optional(),
     assignee: shortId.optional(),
+    ...dueQuery,
     page: z.coerce.number().int().min(1).max(10_000).default(1),
     pageSize: z.coerce.number().int().min(1).max(LIMITS.pageSizeMax).default(20),
   })
