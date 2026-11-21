@@ -58,6 +58,27 @@ describe('integrated inbox coexistence', () => {
     expect(labels.json.map((l: { label: string }) => l.label)).not.toContain('契約');
   });
 
+  it('takes the mail list deadline filter and order: no demo thread has a deadline, and LINE is left out', async () => {
+    const ids = (items: { source: string; threadId?: string }[]) => items.map((i) => `${i.source}:${i.threadId ?? ''}`);
+    const mailOnly = await t.call(EDITOR_C, 'GET', '/api/inbox?source=email&pageSize=50');
+    expect(mailOnly.json.total).toBeGreaterThan(0);
+    expect((await t.call(EDITOR_C, 'GET', '/api/inbox?pageSize=50')).json.counts.line).toBeGreaterThan(0);
+    for (const due of ['awaiting', 'overdue']) {
+      const res = await t.call(EDITOR_C, 'GET', `/api/inbox?due=${due}&pageSize=50`);
+      expect(res.status, res.raw).toBe(200);
+      expect(res.json).toMatchObject({ total: 0, items: [], counts: { email: 0, line: 0 } });
+      expect((await t.call(EDITOR_C, 'GET', `/api/threads?due=${due}`)).json.total).toBe(0);
+    }
+    const byDue = await t.call(EDITOR_C, 'GET', '/api/inbox?sort=due&pageSize=50');
+    expect(byDue.status, byDue.raw).toBe(200);
+    expect(byDue.json.counts).toEqual({ email: mailOnly.json.total, line: 0 });
+    expect(ids(byDue.json.items)).toEqual(ids(mailOnly.json.items));
+    const threads = await t.call(EDITOR_C, 'GET', '/api/threads?sort=due&pageSize=50');
+    expect(threads.json.items.map((i: { threadId: string }) => i.threadId)).toEqual(mailOnly.json.items.map((i: { threadId: string }) => i.threadId));
+    expect((await t.call(EDITOR_C, 'GET', '/api/inbox?due=soon')).status).toBe(400);
+    expect((await t.call(EDITOR_C, 'GET', '/api/inbox?sort=oldest')).status).toBe(400);
+  });
+
   it('labels can be asked for one kind: the メール and 公式LINE tabs together make up the merged list', async () => {
     type Facet = { label: string; count: number };
     const all: Facet[] = (await t.call(EDITOR_C, 'GET', '/api/inbox/labels')).json;
