@@ -13,6 +13,11 @@ export default tseslint.config(
     languageOptions: { globals: { ...globals.node } },
   },
   {
+    // The public demo's boot script runs in the browser before the app (a classic script, not a module).
+    files: ['scripts/pages-demo/web/**/*.js'],
+    languageOptions: { sourceType: 'script', globals: { ...globals.browser } },
+  },
+  {
     files: ['src/client/**/*.{ts,tsx}'],
     languageOptions: { globals: { ...globals.browser } },
     plugins: { 'react-hooks': reactHooks },

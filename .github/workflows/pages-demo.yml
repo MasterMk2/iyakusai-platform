@@ -1,0 +1,64 @@
+# 統合アプリの公開デモ（GitHub Pages）を組み立てて公開する。
+# 合成データのサーバーから応答を録った静的なページ（app/scripts/pages-demo/）。本物のデータ・鍵は使わない。
+# PR では組み立てと確認だけを行い、成果物は Actions のアーティファクトに置く。
+# 公開は main への push・毎日・手動のときで、リポジトリ変数 PAGES_DEMO_ENABLED が true のときだけ。
+name: 公開デモ
+
+on:
+  pull_request:
+    paths: ['app/**', '.github/workflows/pages-demo.yml']
+  push:
+    branches: [main]
+    paths: ['app/**', '.github/workflows/pages-demo.yml']
+  schedule:
+    # 毎日 3:00（日本時間）。合成データの一部は「今日」を基準にするので作り直す
+    - cron: '0 18 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-demo-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: 組み立て
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      # 録画に使う合成データのサーバー（dist/server）を作る
+      - run: npm run build
+      # 画面のビルド・応答の録画・合成データ以外が混じっていないかの確認（混じっていたら失敗）
+      - run: npm run build:pages
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: app/dist/pages
+          retention-days: 7
+
+  deploy:
+    name: 公開
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.PAGES_DEMO_ENABLED == 'true'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
