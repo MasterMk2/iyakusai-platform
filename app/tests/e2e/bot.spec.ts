@@ -349,7 +349,7 @@ test('the AI model: an officer switches in place, sees who switched, and can und
   await expect(page.getByTestId('bot-ai-switch-submit')).toBeDisabled();   // the current one is not a switch
   await picker.getByRole('radio', { name: 'Claude Haiku 5.5' }).check();
   await page.getByTestId('bot-ai-switch-submit').click();
-  await expect(page.getByTestId('bot-ai-switch-result')).toContainText('Claude Haiku 5.5 に切り替えました');
+  await expect(page.getByTestId('bot-ai-switch-result')).toContainText('既定を Claude Haiku 5.5 に切り替えました');
   await expect(line.locator('.bot-ai-model')).toContainText('Claude Haiku 5.5');
   await expect(page.getByTestId('bot-ai-changed')).toContainText('委員長が切り替え（前は Gemini 4 Argon）');
   await expect(picker).toHaveCount(0);

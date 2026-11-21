@@ -105,7 +105,8 @@ def build_help_embed(ai_enabled: bool, haiku_enabled: bool = False,
     )
     e.add_field(
         name="🔁 /model — AI のモデル",
-        value="いまの Bot の AI のモデルを表示。`/model モデル:…` で切り替え(役員だけ。統合アプリの Bot タブからも)。",
+        value=("Bot の既定の AI のモデルを表示。`/model モデル:…` で既定を切り替え(役員だけ。統合アプリの Bot タブからも)。"
+               "`/ask`・`/doc`・`/mail` の `モデル:` で、その回だけ別のモデルを選べます(誰でも)。"),
         inline=False,
     )
     e.add_field(

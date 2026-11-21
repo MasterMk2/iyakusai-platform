@@ -520,8 +520,17 @@ class AssistantGateway:
         """ask/doc/image は委員なら誰でも(#bottest に出ているため)。remind・screening・taskdraft は本人だけ。"""
         return job.kind in FILE_KINDS or job.actor_id == context.actor_id
 
+    @staticmethod
+    def _go_models(ai: dict | None) -> tuple:
+        """その場で選べる Go のモデル(Bot が写しに書いた choices)。Go でない・古い Bot なら空。"""
+        if not ai or ai.get("provider") != "opencode_go":
+            return ()
+        return tuple(c["model"] for c in ai.get("choices") or [])
+
     def _validate_file_job(self, kind: str, raw_input: dict, caps: dict) -> dict:
         gemini = caps.get("gemini") is True
+        extra = self._go_models(self._ai_status())
+        more = {"extra_models": extra} if extra else {}   # 空なら渡さない(古い Bot の assistant_logic でも動く)
         with self._input_guard():
             if kind == "taskdraft":
                 check = getattr(self.logic, "taskdraft_input", None)
@@ -529,9 +538,9 @@ class AssistantGateway:
                     raise AssistantError(400, "FEATURE_UNAVAILABLE", "この機能はいまの設定では使えません。")
                 return check(raw_input)
             if kind == "ask":
-                return self.logic.ask_input(raw_input, gemini=gemini)
+                return self.logic.ask_input(raw_input, gemini=gemini, **more)
             if kind == "doc":
-                return self.logic.doc_input(raw_input, gemini=gemini)
+                return self.logic.doc_input(raw_input, gemini=gemini, **more)
             return self.logic.image_input(raw_input)
 
     # ---- 経路の処理 ----
@@ -539,13 +548,22 @@ class AssistantGateway:
     def _route_meta(self, context, raw, payload):
         self._params(raw, set())
         caps = self._capabilities()
-        models = [
-            {"id": "auto", "label": "自動", "ask": True, "doc": True},
-            {"id": "sonnet", "label": "sonnet(標準・速い)", "ask": True, "doc": True},
-            {"id": "opus", "label": "opus(高性能・遅め)", "ask": True, "doc": True},
-        ]
-        if caps.get("gemini") is True:
-            models.append({"id": "gemini", "label": "gemini", "ask": True, "doc": True})
+        ai = self._ai_status()
+        go_models = self._go_models(ai)
+        if go_models:
+            # OpenCode Go 経由(2026-11-22)：既定(役員が決めたモデル)か、その場で Go のモデルを選ぶ。
+            # opus・sonnet は Go ではどちらも既定に読み替わるので出さない(送られてきたら受け付ける＝既定)。
+            current = ai.get("modelLabel") or ai.get("model")
+            models = [{"id": "auto", "label": f"既定({current})" if current else "既定", "ask": True, "doc": True}]
+            models += [{"id": c["model"], "label": c["label"], "ask": True, "doc": True} for c in ai["choices"]]
+        else:
+            models = [
+                {"id": "auto", "label": "自動", "ask": True, "doc": True},
+                {"id": "sonnet", "label": "sonnet(標準・速い)", "ask": True, "doc": True},
+                {"id": "opus", "label": "opus(高性能・遅め)", "ask": True, "doc": True},
+            ]
+            if caps.get("gemini") is True:
+                models.append({"id": "gemini", "label": "gemini", "ask": True, "doc": True})
         heartbeat = self.store.last_heartbeat()
         return 200, {
             "features": self._features(caps),
@@ -555,7 +573,7 @@ class AssistantGateway:
             "shareChannel": self._named(caps.get("shareChannel")),
             "isAdmin": self._manages_guild(context),
             "bot": {"alive": self._alive(heartbeat), "lastSeenAt": heartbeat},
-            "ai": self._ai_status(),
+            "ai": ai,
         }
 
     def _route_ai_model(self, context, raw, payload):

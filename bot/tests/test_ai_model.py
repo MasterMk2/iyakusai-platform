@@ -142,5 +142,41 @@ class RequestTest(unittest.TestCase):
         self.assertEqual(go_quota.merge_for_store(prev, failed)["lastChange"], {"model": "glm-5.3"})
 
 
+class RequestChoicesTest(unittest.TestCase):
+    """質問・文書を頼むときに選べるモデル(2026-11-22)。"""
+
+    def setUp(self):
+        self.saved = os.environ.get("CLAUDE_CONFIG_DIR")
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        self.dir = d.name
+
+    def tearDown(self):
+        if self.saved is None:
+            os.environ.pop("CLAUDE_CONFIG_DIR", None)
+        else:
+            os.environ["CLAUDE_CONFIG_DIR"] = self.saved
+
+    def test_go_offers_the_default_then_each_model(self):
+        Path(self.dir, "settings.json").write_text(json.dumps({"env": {"ANTHROPIC_BASE_URL": GO}}), encoding="utf-8")
+        os.environ["CLAUDE_CONFIG_DIR"] = self.dir
+        choices = go_quota.request_choices()
+        self.assertEqual(choices[0], (go_quota.DEFAULT_CHOICE_LABEL, "auto"))
+        self.assertEqual([v for _, v in choices[1:]], list(go_quota.MODEL_LABELS))
+
+    def test_nothing_without_go(self):
+        os.environ["CLAUDE_CONFIG_DIR"] = self.dir   # settings.json が無い
+        self.assertEqual(go_quota.request_choices(), [])
+
+    def test_the_input_check_takes_the_go_models_only_when_given(self):
+        from iyakusai_bot import assistant_logic as L
+        self.assertEqual(L.ask_input({"question": "q", "model": "glm-5.3"}, gemini=False, extra_models=("glm-5.3",))["model"],
+                         "glm-5.3")
+        with self.assertRaises(L.InputError):
+            L.ask_input({"question": "q", "model": "glm-5.3"}, gemini=False)
+        doc = {"docType": "free", "content": "c", "format": "md", "useSources": False, "model": "gpt-5.6-luna"}
+        self.assertEqual(L.doc_input(doc, gemini=False, extra_models=("gpt-5.6-luna",))["model"], "gpt-5.6-luna")
+
+
 if __name__ == "__main__":
     unittest.main()

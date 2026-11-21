@@ -97,9 +97,10 @@ def _choice(value, allowed, *, field: str, default=None, code: str = "VALIDATION
     return value
 
 
-def ask_input(payload: dict, *, gemini: bool) -> dict:
+def ask_input(payload: dict, *, gemini: bool, extra_models: tuple = ()) -> dict:
+    """extra_models: OpenCode Go 経由のとき、その場で選べる Go のモデル(連携口が Bot の写しから渡す・2026-11-22)。"""
     _only(payload, {"question", "model", "effort", "tone", "format"})
-    models = ASK_MODELS + (("gemini",) if gemini else ())
+    models = ASK_MODELS + (("gemini",) if gemini else ()) + tuple(extra_models)
     model = payload.get("model")
     if model == "gemini" and not gemini:
         raise InputError("Gemini はいまの設定では使えません", code="MODEL_UNAVAILABLE")
@@ -112,7 +113,7 @@ def ask_input(payload: dict, *, gemini: bool) -> dict:
     }
 
 
-def doc_input(payload: dict, *, gemini: bool) -> dict:
+def doc_input(payload: dict, *, gemini: bool, extra_models: tuple = ()) -> dict:
     _only(payload, {"docType", "content", "format", "useSources", "model"})
     model = payload.get("model")
     if model == "gemini" and not gemini:
@@ -125,7 +126,8 @@ def doc_input(payload: dict, *, gemini: bool) -> dict:
         "content": clean_text(payload.get("content"), field="内容", max_len=2000, min_len=1, multiline=True),
         "format": _choice(payload.get("format"), DOC_FORMATS, field="形式"),
         "useSources": use_sources,
-        "model": _choice(model, ASK_MODELS + (("gemini",) if gemini else ()), field="モデル", default="auto"),
+        "model": _choice(model, ASK_MODELS + (("gemini",) if gemini else ()) + tuple(extra_models), field="モデル",
+                         default="auto"),
     }
 
 

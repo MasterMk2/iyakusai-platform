@@ -5,8 +5,9 @@
 - OpenCode Go 経由のときは、Go の残り枠（5 時間・週・月の %）も窓口から読んで出す（2026-11-21。go_quota）。
   読めないときは、前のとおりコンソールで見るよう案内する。
 
-/model — Bot の AI のモデルを見る・切り替える（2026-11-21。ai_model）。切り替えは役員（サーバー管理の権限が
-ある人）だけ。モデルを選ばなければ、いまのモデルと選べるモデルを出す（本人にだけ見える）。
+/model — Bot の既定の AI のモデルを見る・切り替える（2026-11-21。ai_model）。切り替えは役員（サーバー管理の権限が
+ある人）だけ。モデルを選ばなければ、いまの既定と選べるモデルを出す（本人にだけ見える）。その回だけ別のモデルを
+使うのは、/ask・/doc・/mail の モデル: で誰でもできる（2026-11-22）。
 """
 
 from __future__ import annotations
@@ -86,8 +87,8 @@ class Usage(commands.Cog):
         )
         await itx.followup.send(embed=e, ephemeral=True)
 
-    @app_commands.command(name="model", description="Bot の AI のモデルを見る・切り替える(切り替えは役員だけ)")
-    @app_commands.describe(モデル="切り替え先(選ばなければ、いまのモデルを表示)")
+    @app_commands.command(name="model", description="Bot の既定の AI のモデルを見る・切り替える(切り替えは役員だけ)")
+    @app_commands.describe(モデル="新しい既定(選ばなければ、いまの既定を表示)")
     @app_commands.choices(モデル=[app_commands.Choice(name=c["label"], value=c["model"]) for c in go_quota.choices()])
     @access_check.require("model")
     async def model(self, itx: discord.Interaction, モデル: app_commands.Choice[str] | None = None):
@@ -100,8 +101,9 @@ class Usage(commands.Cog):
         if モデル is None:
             others = "・".join(c["label"] for c in go_quota.choices())
             await itx.response.send_message(
-                f"いまの Bot の AI：**{now}**（OpenCode Go）\n選べるモデル：{others}\n"
-                "切り替えは役員だけができます（`/model モデル:…`、または統合アプリの Bot タブ）。", ephemeral=True)
+                f"いまの Bot の既定の AI：**{now}**（OpenCode Go）\n選べるモデル：{others}\n"
+                "既定の切り替えは役員だけができます（`/model モデル:…`、または統合アプリの Bot タブ）。"
+                "`/ask`・`/doc`・`/mail` の `モデル:` で、その回だけ別のモデルを選べます。", ephemeral=True)
             return
         member = itx.user if isinstance(itx.user, discord.Member) else None
         if member is None or not member.guild_permissions.manage_guild:
@@ -128,5 +130,6 @@ class Usage(commands.Cog):
             await itx.response.send_message(f"もう **{モデル.name}** になっています。", ephemeral=True)
             return
         await itx.response.send_message(
-            f"Bot の AI を **{now}** から **{モデル.name}** に切り替えました。次の依頼から使われます"
-            "（Bot・定期スクリーニング・議事録の要約とも。処理中のものは途中から替わります）。", ephemeral=True)
+            f"Bot の既定の AI を **{now}** から **{モデル.name}** に切り替えました。次の依頼から使われます"
+            "（モデルを選ばない質問・文書、定期スクリーニング、議事録の要約。処理中のものは途中から替わります）。",
+            ephemeral=True)
