@@ -50,6 +50,7 @@
 | 登録（`bot/registration/`） | Bot ホスト（Bot のプロセスの中） | Discord の `/register` と、ログイン用の登録コードの DM |
 | GAS（`gas/`・`app/deploy/unified/gas/`） | Google Apps Script（委員会のアカウント） | メールの保存・統合アプリへの送り込み、物品の記録のドライブへの複製 |
 | 収集（`collectors/`） | Bot ホスト | Discord と LINE 公式アカウントの記録 |
+| Webサイトの編集サーバー（[WebGenEngine](https://github.com/MasterMk2/WebGenEngine)、任意） | コンテナ 1 つ（PHP）。ホストの外に公開しない | 公開サイトのページの編集と書き出し。統合アプリが署名して中継した要求にだけ答える（[site-editor.md](site-editor.md)） |
 
 ## 3. データの正本
 

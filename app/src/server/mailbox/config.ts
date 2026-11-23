@@ -7,6 +7,7 @@ import { loadBooksSheetsConfig, type BooksSheetsConfig } from '../books/sheets-c
 import { loadLineConfig, type LineOaConfig } from '../line/oa-config.js';
 import { loadMinutesConfig, type MinutesConfig } from '../minutes/config.js';
 import { parseKeyMaterial } from '../tasks/signing.js';
+import { loadSiteEditorConfig, type SiteEditorConfig } from '../site-editor/config.js';
 import { loadVaultConfig, type VaultConfig } from '../vault/config.js';
 import type { SmtpSettings } from './smtp.js';
 
@@ -65,6 +66,8 @@ export interface MailboxConfig {
   availability?: AvailabilityConfig | null;
   /** パスワード帳 (vault.json next to this file, 2026-11-23); absent or null when it is off. */
   vault?: VaultConfig | null;
+  /** The website editor (site-editor.json next to this file, 2026-11-23); absent or null when it is off. */
+  siteEditor?: SiteEditorConfig | null;
 }
 
 /**
@@ -245,7 +248,25 @@ export function parseMailboxConfig(env: NodeJS.ProcessEnv, discordMode: boolean)
   const send = (raw as Record<string, unknown> | null)?.send;
   const password = send && typeof send === 'object' ? readPassword((send as Record<string, unknown>).smtpPasswordFile) : null;
   const bank = bankOrOff(file, resolve(dir));
-  return { ...validateMailboxConfig(raw, resolve(dir), key, password), line: lineOrOff(file, resolve(dir)), minutes: minutesOrOff(file, resolve(dir)), booksSheets: booksSheetsOrOff(file), bank, availability: availabilityOrOff(file), vault: vaultOrOff(file, [key, ...(bank ? [bank.tokenKey] : [])]) };
+  const vault = vaultOrOff(file, [key, ...(bank ? [bank.tokenKey] : [])]);
+  const siteEditor = siteEditorOrOff(file, [key, ...(bank ? [bank.tokenKey] : []), ...(vault ? [vault.key] : [])]);
+  return { ...validateMailboxConfig(raw, resolve(dir), key, password), line: lineOrOff(file, resolve(dir)), minutes: minutesOrOff(file, resolve(dir)), booksSheets: booksSheetsOrOff(file), bank, availability: availabilityOrOff(file), vault, siteEditor };
+}
+
+/**
+ * A site-editor.json that cannot be used turns off the website editor only (no secret named). Its key is shared with
+ * the editor's server, so it must differ from the other keys of the mail configuration.
+ */
+function siteEditorOrOff(file: string, otherKeys: Buffer[]): SiteEditorConfig | null {
+  try {
+    const config = loadSiteEditorConfig(file);
+    if (config && otherKeys.some((k) => config.key.equals(k))) throw new ConfigError('Webサイトの編集の鍵が、メールの取り込み・銀行のトークン・パスワード帳のどれかの鍵と同じです。別のランダム値のファイルにしてください。');
+    return config;
+  } catch (err) {
+    if (!(err instanceof ConfigError)) throw err;
+    console.error(`Webサイトの編集は無効のまま起動しました: ${err.message}`);
+    return null;
+  }
 }
 
 /**

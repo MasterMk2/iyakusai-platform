@@ -22,6 +22,7 @@ import { Facts } from './books/common';
 import { DayOfSettingsPanel } from './dayof/DayOfSettingsPanel';
 import { SystemStatusPanel } from './SystemStatusPanel';
 import { VaultPanel } from './vault/VaultPanel';
+import { SiteEditorPanel } from './site-editor/SiteEditorPanel';
 import { storeTheme, THEME_LABELS, useTheme, type ThemeChoice } from '../theme';
 import './payments/payments.css';
 
@@ -30,7 +31,7 @@ import './payments/payments.css';
  * PC and in place of it on a phone (../docs/ui-guidelines.md §6): before, every part was on one page, some 20,000px
  * long for an access administrator, with five lists of every member one after another.
  */
-export const SETTINGS_SECTIONS = ['account', 'card', 'theme', 'signature', 'availability', 'managers', 'mail', 'line', 'accounting', 'rental', 'features', 'dayof', 'login', 'system', 'bank', 'vault', 'rollover', 'directory'] as const;
+export const SETTINGS_SECTIONS = ['account', 'card', 'theme', 'signature', 'availability', 'managers', 'mail', 'line', 'accounting', 'rental', 'features', 'dayof', 'login', 'system', 'bank', 'vault', 'site', 'rollover', 'directory'] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
 export function parseSettingsSection(value: string | undefined): SettingsSection | null {
@@ -151,6 +152,9 @@ export function SettingsView({
     // パスワード帳 (2026-11-23): listed for the members of a section and the access administrators, once the server says
     // it is on (vault.json); everyone else never sees it. Its values are dropped whenever another part is shown.
     { key: 'vault', group: 'ops', label: 'パスワード帳', body: <VaultPanel active={section === 'vault'} onAvailable={report('vault')} />, listedWhenKnown: true },
+    // The website editor (2026-11-23): listed for the people site-editor.json names and the access administrators, once
+    // the server says it is on; everyone else never sees it.
+    { key: 'site', group: 'ops', label: 'Webサイト', body: <SiteEditorPanel onAvailable={report('site')} />, listedWhenKnown: true },
     ...(admin ? [{ key: 'rollover', group: 'ops', label: '年度の切り替え', body: <RolloverPanel onAvailable={report('rollover')} /> } as Part] : []),
     ...(account?.composition === 'mock' ? [{ key: 'directory', group: 'ops', label: '模擬ディレクトリ', body: <MockDirectory onChanged={onChanged} /> } as Part] : []),
   ];

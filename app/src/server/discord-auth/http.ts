@@ -2,6 +2,7 @@ import { isIP } from 'node:net';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { AccessManagersResponse, DiscordSessionResponse, LoginActivityResponse, SessionUser, SignInSummary } from '../../shared/api.js';
+import { SITE_EDITOR_PREFIX } from '../../shared/site-editor.js';
 import { normalizeAddress } from '../auth.js';
 import type { User } from '../domain/types.js';
 import { KdfBusyError, PASSWORD_POLICY } from '../login/password.js';
@@ -271,8 +272,10 @@ export function installDiscordAuth(app: FastifyInstance, rt: DiscordAuthRuntime,
 
   // ---- session resolution (server-side only)
   app.addHook('preHandler', async (request, reply) => {
-    // The matched route, so the temporary staff allow-list below compares route patterns, not raw URLs.
-    if (!(request.routeOptions.url ?? '').startsWith('/api/')) return;
+    // The matched route, so the temporary staff allow-list below compares route patterns, not raw URLs. The website
+    // editor (2026-11-23) lives outside /api/ (its own requests carry no X-SMM-CSRF) and needs the person too.
+    const route = request.routeOptions.url ?? '';
+    if (!route.startsWith('/api/') && !route.startsWith(`${SITE_EDITOR_PREFIX}/`)) return;
     const token = singleCookie(request, SESSION_COOKIE);
     if (!token) return;
     try {

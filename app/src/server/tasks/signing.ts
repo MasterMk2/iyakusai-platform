@@ -64,6 +64,22 @@ export function signedHeaders(key: Buffer, request: { client: string; method: st
   };
 }
 
+/** The same headers for a body of bytes (the website editor's requests): the signature covers the bytes' SHA-256. */
+export function signedBytesHeaders(key: Buffer, request: { client: string; method: string; path: string; body: Buffer; actor?: string | null; now?: number }): Record<string, string> {
+  const timestamp = String(request.now ?? Date.now());
+  const nonce = randomBytes(18).toString('base64url');
+  const actor = request.actor ?? '';
+  const bodyHash = createHash('sha256').update(request.body).digest('hex');
+  const canonical = canonicalStringForBodyHash({ client: request.client, method: request.method, path: request.path, timestamp, nonce, actor }, bodyHash);
+  return {
+    [SVC_HEADERS.client]: request.client,
+    [SVC_HEADERS.timestamp]: timestamp,
+    [SVC_HEADERS.nonce]: nonce,
+    [SVC_HEADERS.signature]: createHmac('sha256', key).update(canonical, 'utf8').digest('hex'),
+    ...(actor ? { [SVC_HEADERS.actor]: actor } : {}),
+  };
+}
+
 /** Verifies a response or callback signature (used by test doubles of the peer services). */
 export function verifySignature(key: Buffer, input: SignatureInput, signature: string): boolean {
   if (!/^[0-9a-f]{64}$/.test(signature)) return false;
