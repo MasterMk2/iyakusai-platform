@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { departmentsOfLabel, type MailAccessResponse } from '../../shared/mailbox';
+import { departmentsOfLabel, type MailAccessResponse, type MailApprovalMark, type MailApprovalMarkSkip, type MailApprovalMarksRequest, type MailApprovalMarksResponse } from '../../shared/mailbox';
 import { api, fmtDate, toFailure } from '../api';
 import { useLoader } from '../useLoader';
 import { LoadStatus } from './LoadStatus';
@@ -12,6 +12,16 @@ type Target = { userId: string } | { department: string };
 
 const keyOf = (t: Target, mailboxId: string, kind: Kind) => `${'userId' in t ? `u:${t.userId}` : `d:${t.department}`}|${mailboxId}|${kind}`;
 
+/** Why a mark was not set, as the result line says it (2026-11-23). */
+const SKIP_TEXT: Record<MailApprovalMarkSkip, (n: number) => string> = {
+  cannot_send: (n) => `送信権限の無い ${n} 件（もともと承認を通ります）`,
+  no_reviewer: (n) => `校閲者がいない（本人だけの）受信箱の ${n} 件（付けるとその受信箱から送れなくなるので、先に校閲を付けてください）`,
+  person: (n) => `アカウントが見つからない ${n} 件`,
+  mailbox: (n) => `送信できない受信箱の ${n} 件`,
+};
+
+type BulkResult = { text: string; error: boolean; undo: MailApprovalMarksRequest | null };
+
 /**
  * Grants of the committee mailbox (access administrators), per mailbox. Everyone in the committee reads every
  * mailbox and changes assignees, labels and status. An edit grant allows notes; a send grant allows sending with
@@ -22,6 +32,8 @@ const keyOf = (t: Target, mailboxId: string, kind: Kind) => `${'userId' in t ? `
  * The official LINE account's grants (2026-10-28) use the same panel and rules: `variant="line"`.
  * Approval before sending (2026-11-11, mail only): 校閲 lets a person or a department approve, change and return the
  * mail that waits in that mailbox; 承認必須 marks a person whose mail from it always waits, even with a send grant.
+ * 承認必須 for many people at once (2026-11-23): pick people in the list, then set or remove it in this mailbox or in
+ * every mailbox the server sends from, in one save, with an undo of exactly what changed.
  */
 const TEXT = {
   mail: {
@@ -65,6 +77,12 @@ export function MailAccessPanel({ variant = 'mail' }: { variant?: keyof typeof T
   const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
   // The tick whose save failed (shown on its row too: the message above may be out of sight in a long list).
   const [failed, setFailed] = useState<string | null>(null);
+  // 承認必須 for many people at once: whether the picking is open, who is picked, in which mailboxes, the last result.
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [picked, setPicked] = useState<Set<string>>(() => new Set());
+  const [bulkScope, setBulkScope] = useState<'this' | 'all'>('this');
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkResult, setBulkResult] = useState<BulkResult | null>(null);
 
   const data = saved ?? access.data;
   const selected = data?.mailboxes.find((m) => m.id === mailboxId) ?? data?.mailboxes[0] ?? null;
@@ -88,6 +106,69 @@ export function MailAccessPanel({ variant = 'mail' }: { variant?: keyof typeof T
   const needle = filter.normalize('NFKC').trim().toLowerCase();
   const people = (data?.people ?? []).filter((p) => !needle || `${p.displayName} ${p.roleLabel}`.normalize('NFKC').toLowerCase().includes(needle));
   const departments = data?.departments ?? [];
+  const sendableBoxes = (data?.mailboxes ?? []).filter((m) => data?.sendable?.includes(m.id));
+  const bulkOn = approvalOn && sendableBoxes.length > 0;
+  const scope = sendable ? bulkScope : 'all';
+  const allShownPicked = people.length > 0 && people.every((p) => picked.has(p.id));
+  const hiddenPicked = [...picked].filter((id) => !people.some((p) => p.id === id)).length;
+
+  function pick(ids: string[], on: boolean) {
+    setPicked((now) => {
+      const next = new Set(now);
+      for (const id of ids) {
+        if (on) next.add(id);
+        else next.delete(id);
+      }
+      return next;
+    });
+  }
+
+  function closeBulk() {
+    setBulkOpen(false);
+    setPicked(new Set());
+    setBulkResult(null);
+  }
+
+  /** What one bulk save did, in words: how many people and mailboxes changed, and what was left alone. */
+  function describe(req: MailApprovalMarksRequest, res: MailApprovalMarksResponse, undoing: boolean): BulkResult {
+    const boxName = (id: string) => res.access.mailboxes.find((m) => m.id === id)?.name ?? id;
+    const changedPeople = new Set(res.changed.map((c) => c.userId)).size;
+    const changedBoxes = [...new Set(res.changed.map((c) => c.mailboxId))].map(boxName).join('・');
+    const parts: string[] = [];
+    if (undoing) parts.push(res.changed.length > 0 ? `元に戻しました（${res.changed.length} 件）。` : '戻すものはありませんでした。');
+    else if (res.changed.length > 0) parts.push(`${changedPeople} 人の承認必須を${req.approval ? '付けました' : '外しました'}（${changedBoxes}・計 ${res.changed.length} 件）。`);
+    else parts.push(req.approval ? '新しく付けたものはありません。' : '外すものはありませんでした（選んだ人には付いていません）。');
+    const same = req.items.length - res.changed.length - res.skipped.length;
+    if (!undoing && req.approval && same > 0 && res.changed.length > 0) parts.push(`すでに付いていた ${same} 件はそのままです。`);
+    const counts = new Map<MailApprovalMarkSkip, number>();
+    for (const s of res.skipped) counts.set(s.reason, (counts.get(s.reason) ?? 0) + 1);
+    if (counts.size > 0) parts.push(`付けなかったもの：${[...counts].map(([reason, n]) => SKIP_TEXT[reason](n)).join('、')}。`);
+    // The undo puts back exactly what changed: marks just set are removed, marks just removed are set again as they were.
+    const undo = !undoing && res.changed.length > 0 ? { items: res.changed, approval: !req.approval, ...(req.approval ? {} : { restore: true }) } : null;
+    return { text: parts.join(''), error: false, undo };
+  }
+
+  async function saveBulk(req: MailApprovalMarksRequest, undoing: boolean) {
+    setBulkBusy(true);
+    setMessage(null);
+    setFailed(null);
+    try {
+      const res = await api<MailApprovalMarksResponse>('PUT', '/api/mail/admin/access/approval', req);
+      setSaved(res.access);
+      setBulkResult(describe(req, res, undoing));
+    } catch (err) {
+      setBulkResult({ text: `保存できませんでした：${toFailure(err).message}`, error: true, undo: null });
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  function applyBulk(on: boolean) {
+    if (!selected) return;
+    const boxes = scope === 'this' ? [selected.id] : sendableBoxes.map((m) => m.id);
+    const items: MailApprovalMark[] = [...picked].flatMap((userId) => boxes.map((mailboxId) => ({ userId, mailboxId })));
+    if (items.length > 0) void saveBulk({ items, approval: on }, false);
+  }
 
   async function toggle(target: Target, kind: Kind, on: boolean, name: string) {
     if (!selected) return;
@@ -136,7 +217,7 @@ export function MailAccessPanel({ variant = 'mail' }: { variant?: keyof typeof T
               </select>
             </label>
             <label>
-              名前で絞り込み
+              名前・部局で絞り込み
               <input type="search" value={filter} onChange={(e) => setFilter(e.target.value)} />
             </label>
           </div>
@@ -187,6 +268,60 @@ export function MailAccessPanel({ variant = 'mail' }: { variant?: keyof typeof T
           )}
           <section className="grant-section" aria-labelledby={tid('grant-people-title')}>
             <h4 id={tid('grant-people-title')}>委員ごと</h4>
+            {bulkOn && data.people.length > 0 && !bulkOpen && (
+              <button type="button" className="secondary grant-bulk-open" onClick={() => setBulkOpen(true)}>
+                承認必須をまとめて付ける・外す
+              </button>
+            )}
+            {bulkOn && bulkOpen && selected && (
+              <div className="grant-bulk" role="group" aria-label="承認必須をまとめて付ける・外す" data-testid="approval-bulk">
+                <p className="hint">委員の行の左で人を選び、承認必須をまとめて付けたり外したりします。送信権限の無い人と、校閲者のいない受信箱には付けません。</p>
+                <label className="grant-bulk-check">
+                  <input type="checkbox" checked={allShownPicked} disabled={people.length === 0} onChange={(e) => pick(people.map((p) => p.id), e.target.checked)} />
+                  表示中の {people.length} 人を選ぶ
+                </label>
+                <fieldset className="grant-bulk-scope">
+                  <legend>受信箱</legend>
+                  <label>
+                    <input type="radio" name={tid('approval-bulk-scope')} checked={scope === 'this'} disabled={!sendable} onChange={() => setBulkScope('this')} />
+                    この受信箱（{selected.name}）だけ{!sendable && '：送信できない受信箱です'}
+                  </label>
+                  <label>
+                    <input type="radio" name={tid('approval-bulk-scope')} checked={scope === 'all'} onChange={() => setBulkScope('all')} />
+                    送信できる受信箱すべて（{sendableBoxes.length} 個）
+                  </label>
+                </fieldset>
+                <p className="grant-bulk-count" aria-live="polite">
+                  {picked.size === 0 ? 'まだ誰も選んでいません。' : `${picked.size} 人を選んでいます${hiddenPicked > 0 ? `（うち ${hiddenPicked} 人は絞り込みで隠れています）` : ''}。`}
+                </p>
+                <div className="actions">
+                  <button type="button" disabled={picked.size === 0 || bulkBusy} onClick={() => applyBulk(true)}>
+                    承認必須を付ける
+                  </button>
+                  <button type="button" className="secondary" disabled={picked.size === 0 || bulkBusy} onClick={() => applyBulk(false)}>
+                    承認必須を外す
+                  </button>
+                  <button type="button" className="secondary" disabled={bulkBusy} onClick={closeBulk}>
+                    閉じる
+                  </button>
+                </div>
+                {bulkBusy && (
+                  <p className="status loading" role="status">
+                    保存しています…
+                  </p>
+                )}
+                {bulkResult && !bulkBusy && (
+                  <div className={`status ${bulkResult.error ? 'error' : 'ok'} grant-bulk-result`} role={bulkResult.error ? 'alert' : 'status'} data-testid="approval-bulk-result">
+                    <span>{bulkResult.text}</span>
+                    {bulkResult.undo && (
+                      <button type="button" className="secondary" onClick={() => void saveBulk(bulkResult.undo!, true)}>
+                        元に戻す
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
             {data.people.length === 0 ? (
               <p className="empty">登録済みのアカウントがありません。</p>
             ) : (
@@ -203,7 +338,7 @@ export function MailAccessPanel({ variant = 'mail' }: { variant?: keyof typeof T
                         <input
                           type="checkbox"
                           checked={shown(t, kind, own) || via}
-                          disabled={busy(t, kind) || via}
+                          disabled={busy(t, kind) || via || (kind === 'approval' && bulkBusy)}
                           onChange={(e) => void toggle(t, kind, e.target.checked, name)}
                           aria-label={`${p.displayName} さんの${KIND_NAMES[kind]}`}
                           data-testid={kind === 'edit' ? undefined : tid(`grant-${kind}`)}
@@ -221,6 +356,11 @@ export function MailAccessPanel({ variant = 'mail' }: { variant?: keyof typeof T
                   const canSendNow = ownSend || viaDept('send');
                   return (
                     <li key={p.id} className="grant-row">
+                      {bulkOn && bulkOpen && (
+                        <label className="grant-pick">
+                          <input type="checkbox" checked={picked.has(p.id)} onChange={(e) => pick([p.id], e.target.checked)} aria-label={`${p.displayName} さんを選ぶ`} />
+                        </label>
+                      )}
                       <span className="grant-person">
                         <span className="row-main">{p.displayName}</span>
                         <span className="row-sub">{p.roleLabel}</span>

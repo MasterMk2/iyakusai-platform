@@ -145,6 +145,27 @@ export function setApprovalRequired(store: MailboxStore, userId: string, mailbox
   });
 }
 
+/**
+ * Sets or removes many 承認必須 marks in one transaction (2026-11-23), with the same audit row per mark as one tick.
+ * Returns the pairs that changed: a mark already set (or already absent) is left alone and not audited again.
+ */
+export function setApprovalRequiredMany(store: MailboxStore, pairs: { userId: string; mailboxId: string }[], on: boolean, actorId: string, now: string): { userId: string; mailboxId: string }[] {
+  return store.tx(() => {
+    const has = store.db.prepare('SELECT 1 FROM approval_required WHERE user_id=? AND mailbox_id=?');
+    const insert = store.db.prepare('INSERT INTO approval_required(user_id,mailbox_id,granted_by,granted_at) VALUES(?,?,?,?)');
+    const remove = store.db.prepare('DELETE FROM approval_required WHERE user_id=? AND mailbox_id=?');
+    const changed: { userId: string; mailboxId: string }[] = [];
+    for (const p of pairs) {
+      if (!!has.get(p.userId, p.mailboxId) === on) continue;
+      if (on) insert.run(p.userId, p.mailboxId, actorId, now);
+      else remove.run(p.userId, p.mailboxId);
+      audit(store, now, actorId, on ? 'require_approval' : 'unrequire_approval', `${p.userId} / ${p.mailboxId}`);
+      changed.push(p);
+    }
+    return changed;
+  });
+}
+
 // ---- requests
 
 const row = (value: unknown): SendRequestRow | null => (value as SendRequestRow | undefined) ?? null;

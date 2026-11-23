@@ -207,6 +207,55 @@ describe('who writes mail that waits for an approval', () => {
     expect(sent).toHaveLength(1);
   });
 
+  it('sets and removes 承認必須 for many people and mailboxes at once, skipping what changes nothing or blocks sending', async () => {
+    const { chair, member } = await people();
+    const planner = await signIn(OTHER, '21000003', [ROLE_PLANNING]);
+    await grant(chair.cookie, { userId: member.id, mailboxId: 'sponsorship', send: true });
+    await grant(chair.cookie, { userId: member.id, mailboxId: 'contact', send: true });
+    await grant(chair.cookie, { department: '企画部', mailboxId: 'sponsorship', send: true });
+    await grant(chair.cookie, { userId: chair.id, mailboxId: 'sponsorship', send: true });
+    const marks = (body: Record<string, unknown>, cookie = chair.cookie) => call('PUT', '/api/mail/admin/access/approval', { cookie, body });
+    const pair = (who: { id: string }, mailboxId: string) => ({ userId: who.id, mailboxId });
+    const items = [member, planner, chair].flatMap((who) => ['sponsorship', 'contact', 'adm'].map((mailboxId) => pair(who, mailboxId)));
+
+    expect((await marks({ items, approval: true }, member.cookie)).status).toBe(403);
+    expect((await marks({ items: [], approval: true })).status).toBe(400);
+    expect((await marks({ items, approval: true, department: '企画部' })).status).toBe(400);
+    const before = mail.audit(100).length;
+    const set = await marks({ items: [...items, pair(member, 'sponsorship')], approval: true });
+    expect(set.status).toBe(200);
+    expect(set.json.changed).toEqual([pair(member, 'sponsorship'), pair(planner, 'sponsorship')]);
+    expect(set.json.skipped).toEqual([
+      // contact has no reviewer: with the mark, the member could not send from it at all.
+      { ...pair(member, 'contact'), reason: 'no_reviewer' },
+      { ...pair(member, 'adm'), reason: 'mailbox' },
+      { ...pair(planner, 'contact'), reason: 'cannot_send' },
+      { ...pair(planner, 'adm'), reason: 'mailbox' },
+      // The chair is the only reviewer of 協賛: their own mail there could never be approved.
+      { ...pair(chair, 'sponsorship'), reason: 'no_reviewer' },
+      { ...pair(chair, 'contact'), reason: 'cannot_send' },
+      { ...pair(chair, 'adm'), reason: 'mailbox' },
+    ]);
+    expect(set.json.access.approvalRequired).toEqual(expect.arrayContaining([pair(member, 'sponsorship'), pair(planner, 'sponsorship')]));
+    expect(set.json.access.approvalRequired).toHaveLength(2);
+    expect(mail.audit(100).length - before).toBe(2);
+    expect((await call('GET', '/api/mail/send/options', { cookie: planner.cookie })).json.approvalMailboxIds).toEqual(['sponsorship']);
+    // The same marks again change nothing and write no audit row.
+    expect((await marks({ items: [pair(member, 'sponsorship')], approval: true })).json.changed).toEqual([]);
+    expect(mail.audit(100).length - before).toBe(2);
+
+    // Removing needs a known mailbox only; the undo of a removal puts the marks back as they were.
+    const removed = await marks({ items: [...items, pair(member, 'nowhere')], approval: false });
+    expect(removed.status).toBe(200);
+    expect(removed.json.changed).toEqual([pair(member, 'sponsorship'), pair(planner, 'sponsorship')]);
+    expect(removed.json.skipped).toEqual([{ ...pair(member, 'nowhere'), reason: 'mailbox' }]);
+    expect(removed.json.access.approvalRequired).toEqual([]);
+    expect((await call('POST', '/api/mail/send', { cookie: planner.cookie, raw: form(message()) })).status).toBe(200);
+    const restored = await marks({ items: [...removed.json.changed, pair(member, 'contact')], approval: true, restore: true });
+    expect(restored.json.changed).toEqual([pair(member, 'sponsorship'), pair(planner, 'sponsorship'), pair(member, 'contact')]);
+    expect(restored.json.skipped).toEqual([]);
+  });
+
   it('gives the review grant to everyone in a department', async () => {
     const chair = await signIn(CHAIR, '21000001');
     const member = await signIn(MEMBER, '21000002');

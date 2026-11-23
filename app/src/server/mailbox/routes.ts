@@ -4,7 +4,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { HANDLING_STATUSES, LIMITS } from '../../shared/api.js';
 import type { InboxResponse } from '../../shared/line.js';
-import { MAIL_ATTACHMENTS_MAX, MAIL_BODY_MAX, MAIL_SUBJECT_MAX, REAUTH_REQUIRED, type MailSendOptions, type MailStatusResponse } from '../../shared/mailbox.js';
+import { MAIL_ATTACHMENTS_MAX, MAIL_BODY_MAX, MAIL_SUBJECT_MAX, REAUTH_REQUIRED, type MailApprovalMarksResponse, type MailSendOptions, type MailStatusResponse } from '../../shared/mailbox.js';
 import { DUE_DATE_PATTERN } from '../../shared/mailDue.js';
 import { fiscalYearOf, tokyoDate } from '../../shared/books.js';
 import { registerBankRoutes } from '../bank/routes.js';
@@ -163,6 +163,12 @@ const grantBody = z
   .refine((b) => GRANT_KINDS.filter((k) => b[k] !== undefined).length === 1, { message: 'edit・send・review・approval のどれか 1 つを指定してください' })
   .refine((b) => (b.userId === undefined) !== (b.department === undefined), { message: 'userId か department のどちらか 1 つを指定してください' })
   .refine((b) => b.approval === undefined || b.department === undefined, { message: '承認必須は委員ごとに指定してください' });
+// 承認必須 for many people and mailboxes at once (2026-11-23): the selected people times the chosen mailboxes.
+const approvalMarksBody = z.strictObject({
+  items: z.array(z.strictObject({ userId: z.string().min(1).max(40).regex(/^[a-z0-9-]+$/), mailboxId: shortId })).min(1).max(2000),
+  approval: z.boolean(),
+  restore: z.boolean().optional(),
+});
 const recipientList = z.array(z.string().max(400)).max(100);
 const sendBody = z.strictObject({
   clientToken: z.string().regex(/^[A-Za-z0-9_-]{16,64}$/),
@@ -611,6 +617,12 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
     if (body.approval !== undefined) return service.setApprovalGrant(user, body.userId!, body.mailboxId, 'approval', body.approval, deps.clock());
     if (body.send !== undefined) return service.setSendGrant(user, body.userId!, body.mailboxId, body.send, deps.clock());
     return service.setGrant(user, body.userId!, body.mailboxId, body.edit!, deps.clock());
+  });
+
+  app.put('/api/mail/admin/access/approval', async (request): Promise<MailApprovalMarksResponse> => {
+    const user = administrator(request);
+    const body = deps.parse(approvalMarksBody, request.body);
+    return service.setApprovalMarks(user, body.items, body.approval, body.restore ?? false, deps.clock());
   });
 
   // ---- sending (only with "send" in the configuration)
