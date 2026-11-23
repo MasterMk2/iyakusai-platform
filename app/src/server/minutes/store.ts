@@ -39,6 +39,8 @@ export type WorkerStage = keyof typeof LEASE_MS;
 export type MeetingWorkStage = Exclude<WorkerStage, 'suggest'>;
 /** Segments the AI guesses for in one lease (2026-11-10): one call of the AI, so a summary waiting meanwhile is not held up long. */
 export const SUGGEST_PART = 120;
+/** Why the AI's guesses stopped when the minutes were confirmed (2026-11-24). */
+export const SUGGESTIONS_STOPPED = '議事録が確定されたので、AI の案づくりを取りやめました。訂正を始めてから頼み直すと、続きから作ります。';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -432,6 +434,11 @@ export class MinutesStore {
     // draft without it): it did not come off.
     this.db.exec(`UPDATE meeting_reviews SET status='failed', error='アプリの版が入れ替わる間に処理されたため、コメントに沿った手直しになっていません。', done_at=at
       WHERE status='pending' AND meeting_id NOT IN (SELECT id FROM meetings WHERE stage IN ('summarize_wait','summarize_run'))`);
+    // Guesses left waiting or under way on confirmed minutes (an app before 2026-11-24 kept them on confirming): the
+    // worker takes only drafts, so they would wait for ever and hold up every release (app-release.py check).
+    this.db
+      .prepare("UPDATE meeting_suggestions SET status='failed', error=?, lease_token=NULL, lease_until=NULL, part_end=NULL WHERE status IN ('wait','run') AND meeting_id IN (SELECT id FROM meetings WHERE stage='confirmed')")
+      .run(SUGGESTIONS_STOPPED);
   }
 
   audioPath(row: Pick<MeetingRow, 'id' | 'audioExt'>): string {
@@ -727,6 +734,7 @@ export class MinutesStore {
       this.db
         .prepare('INSERT INTO meeting_versions(meeting_id,no,body,draft_json,draft_round,confirmed_by,confirmed_at,note) VALUES(?,?,?,?,?,?,?,?)')
         .run(id, no, r.body, r.draft ? JSON.stringify(r.draft) : null, r.draftRound, actor, now, no > 1 ? note : '');
+      this.stopSuggestions(id);
       this.history(id, now, actor, 'confirm', null);
       return this.get(id)!;
     });
@@ -761,6 +769,7 @@ export class MinutesStore {
           "UPDATE meetings SET stage='confirmed', body=?, draft_json=?, draft_round=?, confirmed_by=?, confirmed_at=?, version=version+1, updated_by=?, updated_at=? WHERE id=?",
         )
         .run(last.body, last.draft_json, last.draft_round, last.confirmed_by, last.confirmed_at, actor, now, id);
+      this.stopSuggestions(id);
       this.history(id, now, actor, 'discard', r.body);
       return this.get(id)!;
     });
@@ -784,6 +793,17 @@ export class MinutesStore {
   }
 
   // ---- the AI's guesses for the segments to listen to again (2026-11-10)
+
+  /**
+   * Confirmed minutes are not listened to again: guesses still waiting or under way stop (2026-11-24; the worker takes
+   * only drafts, so they would otherwise wait for ever). A part under way is dropped when the worker answers (it no
+   * longer holds the lease). Asked again after a correction begins, the guessing goes on from where it stopped.
+   */
+  private stopSuggestions(id: string): void {
+    this.db
+      .prepare("UPDATE meeting_suggestions SET status='failed', error=?, lease_token=NULL, lease_until=NULL, part_end=NULL WHERE meeting_id=? AND status IN ('wait','run')")
+      .run(SUGGESTIONS_STOPPED, id);
+  }
 
   suggestion(id: string): SuggestionRow | null {
     const r = this.db.prepare('SELECT * FROM meeting_suggestions WHERE meeting_id=?').get(id) as RawSuggestion | undefined;
