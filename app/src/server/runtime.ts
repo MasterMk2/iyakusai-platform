@@ -46,6 +46,10 @@ import type { MailboxRuntime } from './mailbox/routes.js';
 import { MailboxStore } from './mailbox/store.js';
 import { BulletinStore } from './bulletin/store.js';
 import { seedBulletinDemo } from './bulletin/seed.js';
+import { VaultCipher } from './vault/cipher.js';
+import type { VaultRuntime } from './vault/routes.js';
+import { demoVaultCipher, seedVaultDemo } from './vault/seed.js';
+import { VaultStore } from './vault/store.js';
 import { DecisionsStore } from './decisions/store.js';
 import { seedDecisionsDemo } from './decisions/seed.js';
 import { openDemoBooks } from './payments/demo.js';
@@ -391,6 +395,29 @@ export async function composeServer(config: ServerConfig, overrides: ComposeOver
     if (bulletin && config.auth.mode === 'demo') seedBulletinDemo(bulletin, initial.users.find((u) => u.canManageAccess)?.id ?? initial.users[0]?.id ?? 'system', now);
   }
 
+  // パスワード帳 (2026-11-23): vault.sqlite3 beside the decision register (the mail folder in production, so the app's
+  // backup carries the sealed entries; the key stays in the configuration folder). On with vault.json next to the mail
+  // configuration (its key file), or in the demo (synthetic entries, a fixed public demo key). Off otherwise. A file that
+  // cannot be opened turns the password book off only (meta enabled: false).
+  let vault: VaultRuntime | null = null;
+  const vaultConfig = config.mailbox?.vault ?? null;
+  if (decisionsDir && (vaultConfig || config.auth.mode === 'demo')) {
+    try {
+      const vaultStore = new VaultStore(decisionsDir);
+      const cipher = vaultConfig ? new VaultCipher(vaultConfig.key) : demoVaultCipher();
+      vault = { store: vaultStore, cipher, revealMinutes: vaultConfig?.revealMinutes ?? 10 };
+      if (!vaultConfig) {
+        const admin = initial.users.find((u) => u.canManageAccess && !u.disabled)?.id ?? initial.users[0]?.id ?? 'system';
+        const others = initial.users.filter((u) => !u.canManageAccess && !u.disabled && !u.roleLabel.includes('臨時')).map((u) => u.id);
+        const department = initial.users.find((u) => !u.canManageAccess && !u.disabled && !u.roleLabel.includes('・') && !u.roleLabel.includes('臨時'))?.roleLabel ?? null;
+        seedVaultDemo(vaultStore, cipher, { admin, others, department }, now);
+      }
+    } catch {
+      console.error('パスワード帳の保存ファイル（vault.sqlite3）を開けないか、形式が正しくないため、パスワード帳だけを止めました。ファイルは変更していません。ほかの機能は動きます。');
+      vault = null;
+    }
+  }
+
   // Free/busy from members' Google calendars (2026-11-20): availability.sqlite3 beside the decision register (the mail
   // folder in production, so its backup carries the members' choices; the busy periods stay in memory and are never
   // written). On with availability.json next to the mail configuration (Google, as the service account), or in the
@@ -471,6 +498,7 @@ export async function composeServer(config: ServerConfig, overrides: ComposeOver
     demoBooks,
     dayof,
     bulletin,
+    vault,
     rollover,
     ...(discord ? { discord } : {}),
     ...(account ? { account } : {}),
@@ -482,6 +510,10 @@ export async function composeServer(config: ServerConfig, overrides: ComposeOver
   }
   if (bulletin) {
     const opened = bulletin;
+    app.addHook('onClose', async () => opened.close());
+  }
+  if (vault) {
+    const opened = vault.store;
     app.addHook('onClose', async () => opened.close());
   }
   if (availability) {

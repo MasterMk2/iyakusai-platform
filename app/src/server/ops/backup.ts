@@ -330,6 +330,32 @@ async function main(): Promise<void> {
     manifest.files['mailbox/bulletin.sqlite3'] = { bytes: readFileSync(dest).length, sha256: sha256(readFileSync(dest)) };
   }
 
+  // パスワード帳 (2026-11-23): vault.sqlite3 next to mail.sqlite3 — the sealed entries, who opens each section and the
+  // record. Copied as it is: the entries stay encrypted, and the key (vault.json's key file, in the configuration
+  // folder) is never part of this backup.
+  const vaultDb = path.join(data, 'mailbox', 'vault.sqlite3');
+  if (existsSync(vaultDb)) {
+    const dest = path.join(target, 'mailbox', 'vault.sqlite3');
+    mkdirSync(path.dirname(dest), { recursive: true, mode: 0o700 });
+    const source = new DatabaseSync(vaultDb, { readOnly: true });
+    try {
+      await backup(source, dest);
+    } finally {
+      source.close();
+    }
+    const copy = new DatabaseSync(dest, { readOnly: true });
+    try {
+      const check = copy.prepare('PRAGMA integrity_check').get() as { integrity_check: string };
+      if (check.integrity_check !== 'ok') throw new Error('パスワード帳の複製の整合性を確認できませんでした。');
+      for (const table of ['sections', 'members', 'entries', 'events']) {
+        manifest.counts[`vault.${table}`] = Number((copy.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n);
+      }
+    } finally {
+      copy.close();
+    }
+    manifest.files['mailbox/vault.sqlite3'] = { bytes: readFileSync(dest).length, sha256: sha256(readFileSync(dest)) };
+  }
+
   // Free/busy (2026-11-20): availability.sqlite3 next to mail.sqlite3 — each member's connected calendar and choices
   // (who may see, how coarse) and pending checks. The busy periods are never in it (they stay in the app's memory).
   const availabilityDb = path.join(data, 'mailbox', 'availability.sqlite3');
