@@ -7,6 +7,7 @@ import { loadBooksSheetsConfig, type BooksSheetsConfig } from '../books/sheets-c
 import { loadLineConfig, type LineOaConfig } from '../line/oa-config.js';
 import { loadMinutesConfig, type MinutesConfig } from '../minutes/config.js';
 import { parseKeyMaterial } from '../tasks/signing.js';
+import { loadVaultConfig, type VaultConfig } from '../vault/config.js';
 import type { SmtpSettings } from './smtp.js';
 
 // The committee mailbox (SMM_MAIL_DIR + SMM_MAIL_CONFIG, Discord login only). The configuration is an
@@ -62,6 +63,8 @@ export interface MailboxConfig {
   bank?: BankConfig | null;
   /** Free/busy from members' Google calendars (availability.json next to this file, 2026-11-20); absent or null when off. */
   availability?: AvailabilityConfig | null;
+  /** パスワード帳 (vault.json next to this file, 2026-11-23); absent or null when it is off. */
+  vault?: VaultConfig | null;
 }
 
 /**
@@ -241,7 +244,21 @@ export function parseMailboxConfig(env: NodeJS.ProcessEnv, discordMode: boolean)
   const key = readKey((raw as Record<string, unknown> | null)?.ingestKeyFile);
   const send = (raw as Record<string, unknown> | null)?.send;
   const password = send && typeof send === 'object' ? readPassword((send as Record<string, unknown>).smtpPasswordFile) : null;
-  return { ...validateMailboxConfig(raw, resolve(dir), key, password), line: lineOrOff(file, resolve(dir)), minutes: minutesOrOff(file, resolve(dir)), booksSheets: booksSheetsOrOff(file), bank: bankOrOff(file, resolve(dir)), availability: availabilityOrOff(file) };
+  const bank = bankOrOff(file, resolve(dir));
+  return { ...validateMailboxConfig(raw, resolve(dir), key, password), line: lineOrOff(file, resolve(dir)), minutes: minutesOrOff(file, resolve(dir)), booksSheets: booksSheetsOrOff(file), bank, availability: availabilityOrOff(file), vault: vaultOrOff(file, bank) };
+}
+
+/** A vault.json that cannot be used turns off the password book only (no secret named). Its key must not be the bank's. */
+function vaultOrOff(file: string, bank: BankConfig | null): VaultConfig | null {
+  try {
+    const vault = loadVaultConfig(file);
+    if (vault && bank && vault.key.equals(bank.tokenKey)) throw new ConfigError('パスワード帳の鍵が銀行のトークンの鍵と同じです。別のランダム値のファイルにしてください。');
+    return vault;
+  } catch (err) {
+    if (!(err instanceof ConfigError)) throw err;
+    console.error(`パスワード帳は無効のまま起動しました: ${err.message}`);
+    return null;
+  }
 }
 
 /** An availability.json that cannot be used turns off the free/busy only (no secret named). */

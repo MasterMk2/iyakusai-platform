@@ -11,6 +11,7 @@ import { installDiscordAuth, type DiscordAuthRuntime } from '../discord-auth/htt
 import { isTemporaryStaffLoginId } from '../discord-auth/temporary-staff.js';
 import { registerBulletinRoutes } from '../bulletin/routes.js';
 import type { BulletinStore } from '../bulletin/store.js';
+import { registerVaultRoutes, type VaultRuntime } from '../vault/routes.js';
 import { registerDecisionRoutes } from '../decisions/routes.js';
 import type { DecisionsStore } from '../decisions/store.js';
 import { registerDemoBooks, type DemoBooks } from '../payments/demo.js';
@@ -92,6 +93,12 @@ export interface AppOptions {
   demoBooks?: DemoBooks | null;
   /** The notice board (bulletin.sqlite3). Absent: the board is off (its meta route answers enabled: false). */
   bulletin?: BulletinStore | null;
+  /**
+   * パスワード帳 (vault.sqlite3 and the key of vault.json). Absent: off (its meta route answers enabled: false). Used with
+   * the Discord login (the sign-in's password time) or the demo, whose persona has always just typed the password unless
+   * `demoPasswordAt` (tests) says when it did.
+   */
+  vault?: (VaultRuntime & { demoPasswordAt?: (userId: string) => number }) | null;
   /** The festival-day board (dayof.sqlite3). Absent: its routes do not exist (404). */
   dayof?: DayOfStore | null;
   /** The year rollover (rollover.sqlite3 beside the mail, or the demo's), with the demo's organizations file. Absent: no rollover routes. */
@@ -572,6 +579,30 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       (discordApi ? discordApi.listUsers() : store.current.users)
         .filter((u) => isBoardMember(u) && (!discordApi || discordApi.discordUserIdOf(u.id) !== null))
         .map((u) => ({ id: u.id, departments: departmentsOfLabel(u.roleLabel) })),
+    nameOf: (userId) => (discordApi ? discordApi.lookupUser(userId)?.displayName : findUser(store.current, userId)?.displayName) ?? '（不明な利用者）',
+    clock,
+    parse,
+  });
+  // パスワード帳 (2026-11-23): committee members as for the notice board, with the time the password was last typed on
+  // this device (see vault/routes.ts). Only with the Discord login or the demo: the other sign-ins have no such time.
+  const vault = options.vault ?? null;
+  registerVaultRoutes(app, vault && (discordApi || demo) ? vault : null, {
+    viewer: (request) => {
+      const user = requireUser(request);
+      if (!isBoardMember(user)) return null;
+      const departments = departmentsOfLabel(user.roleLabel);
+      if (discordApi) {
+        const session = discordApi.currentSession(request);
+        if (!session || discordApi.discordUserIdOf(user.id) === null || session.temporaryStaff === true || session.discordUserId.startsWith('staff:')) return null;
+        return { user, departments, passwordAt: session.passwordAt };
+      }
+      if (!demo) return null;
+      return { user, departments, passwordAt: vault?.demoPasswordAt?.(user.id) ?? Date.parse(clock()) };
+    },
+    members: () =>
+      (discordApi ? discordApi.listUsers() : store.current.users)
+        .filter((u) => isBoardMember(u) && (!discordApi || discordApi.discordUserIdOf(u.id) !== null))
+        .map((u) => ({ id: u.id, name: u.displayName, departments: departmentsOfLabel(u.roleLabel) })),
     nameOf: (userId) => (discordApi ? discordApi.lookupUser(userId)?.displayName : findUser(store.current, userId)?.displayName) ?? '（不明な利用者）',
     clock,
     parse,
