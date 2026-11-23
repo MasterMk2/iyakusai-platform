@@ -1,20 +1,37 @@
-/* パスワード帳 (2026-11-23): settings › パスワード帳. The app's own parts (chips, buttons, status lines); no new colours. */
+/* パスワード帳 (2026-11-23): its own tab. The app's own parts (chips, buttons, status lines); no new colours. */
 .vault-panel { display: grid; gap: 10px; max-width: 980px; }
 /* Its own tab (2026-11-23): the page of the other single-column tabs (the Bot's width). */
 .main.vault-main { width: 100%; max-width: 1020px; margin: 0 auto; }
 .vault-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .vault-head h3 { margin: 0; }
+.vault-head-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.vault-fresh { margin: 0; }
+.vault-intro { margin: 0; }
 .vault-reauth { margin-top: 4px; }
-.vault-sections { margin-top: 4px; }
+.vault-sections { margin-top: 4px; display: grid; gap: 4px; }
+.vault-sections .filter-chips { align-items: center; }
+.vault-legend { margin: 0; display: flex; align-items: center; gap: 2px; }
+.vault-legend .vault-stale-dot { margin: 0 4px 0 0; }
 .vault-stale-dot { display: inline-block; width: 8px; height: 8px; margin-left: 4px; border-radius: 50%; background: var(--amber); vertical-align: middle; }
 .vault-stale { color: var(--amber); }
-.vault-new-section { margin: 0; }
+.vault-new-section { margin-left: 4px; }
+.vault-section-form { flex-basis: 100%; }
 .vault-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .vault-search { flex: 1 1 260px; min-width: 0; display: flex; }
 .vault-search input { width: 100%; min-height: 40px; }
 .vault-form { padding: 12px; border: 1px solid var(--line); border-radius: 6px; max-width: 640px; }
 .vault-form h4 { margin: 0 0 4px; }
-.vault-password-field { display: grid; gap: 6px; }
+.vault-fieldset { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.vault-fieldset + .vault-fieldset { margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--line); }
+.vault-fieldset legend { padding: 0; margin-bottom: 4px; font-size: 13px; font-weight: 700; color: var(--muted); }
+.vault-password-field { display: flex; flex-direction: column; gap: 2px; font-size: 14px; }
+.vault-password-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.vault-password-row input { flex: 1 1 200px; min-width: 0; }
+.vault-keep { margin: 0; font-size: 14px; }
+.vault-form-openers { display: grid; gap: 2px; padding: 8px 10px; border-radius: 6px; background: var(--hover-strong); font-size: 14px; }
+.vault-form-openers p { margin: 0; }
+.vault-form-openers strong { margin-right: 6px; }
+.vault-form .field-error { color: var(--red); font-size: 13px; }
 /* The new password as dots without type=password (which invites the browser to save it). */
 .vault-masked { -webkit-text-security: disc; text-security: disc; }
 .vault-danger { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
@@ -23,18 +40,28 @@
 .vault-print-confirm { display: grid; gap: 6px; }
 .vault-print-confirm p { margin: 0; }
 .vault-list { list-style: none; margin: 0; padding: 0; display: grid; }
-.vault-item { display: flex; gap: 12px; justify-content: space-between; align-items: flex-start; padding: 10px 0; border-bottom: 1px solid var(--line); }
-.vault-item-main { min-width: 0; flex: 1 1 auto; }
+.vault-item { display: grid; gap: 6px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.vault-item-head { display: flex; gap: 12px; justify-content: space-between; align-items: flex-start; }
+.vault-item-title { min-width: 0; flex: 1 1 auto; }
 .vault-item-name { margin: 0; font-weight: 700; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; overflow-wrap: anywhere; }
 .vault-item-section { font-weight: 400; }
-.vault-item-url { display: block; margin: 2px 0 0; font-size: 14px; overflow-wrap: anywhere; }
-.vault-item-fields { display: grid; grid-template-columns: max-content 1fr; gap: 2px 10px; margin: 6px 0 0; font-size: 14px; }
-.vault-item-fields dt { color: var(--muted); }
-.vault-item-fields dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.vault-item-sub { margin: 2px 0 0; font-size: 14px; display: flex; flex-wrap: wrap; gap: 2px 14px; overflow-wrap: anywhere; }
+.vault-item-purpose { color: var(--ink); }
+.vault-item-url { min-width: 0; overflow-wrap: anywhere; }
+/* The values side by side on a wide screen, one under another on a phone. */
+.vault-item-fields { display: flex; flex-wrap: wrap; gap: 6px 22px; margin: 0; font-size: 14px; }
+.vault-item-field { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.vault-item-fields dt { color: var(--muted); flex: 0 0 auto; }
+.vault-item-fields dd { margin: 0; min-width: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; overflow-wrap: anywhere; }
+/* A note being read takes the whole width; a hidden one sits beside the others. */
+.vault-item-notes.is-shown { flex-basis: 100%; align-items: flex-start; }
+.vault-item-notes.is-shown dt { padding-top: 4px; }
 .vault-item-fields code, .vault-secret { font-family: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace; }
+.vault-dots { letter-spacing: 1px; }
+button.vault-mini { min-height: 30px; padding: 2px 10px; font-size: 13px; font-weight: 400; }
 .vault-notes { white-space: pre-wrap; }
-.vault-item-updated { margin-top: 4px; }
-.vault-item-actions { display: flex; flex-direction: column; gap: 6px; align-items: stretch; flex: 0 0 auto; }
+.vault-item-updated { margin: 0; }
+.vault-item-actions { display: flex; gap: 6px; align-items: center; flex: 0 0 auto; }
 .vault-members, .vault-events { display: grid; gap: 6px; }
 .vault-members h5, .vault-events h5 { margin: 8px 0 0; font-size: 15px; }
 .vault-table { border-collapse: collapse; font-size: 14px; width: 100%; }
@@ -47,10 +74,19 @@
 .vault-locked { display: grid; gap: 6px; justify-items: start; padding: 12px 0; }
 .vault-locked p { margin: 0; }
 
+@media (pointer: coarse) {
+  button.vault-mini { min-height: 44px; padding: 4px 14px; }
+}
 @media (max-width: 600px) {
-  .vault-item { flex-direction: column; }
-  .vault-item-actions { flex-direction: row; flex-wrap: wrap; width: 100%; }
+  /* A phone: the actions go under the values, within the thumb's reach, the copy button wide. */
+  .vault-item-head { display: contents; }
+  .vault-item-actions { order: 9; width: 100%; }
   .vault-item-actions button { flex: 1 1 auto; min-height: 44px; }
+  .vault-item-actions button.secondary { flex: 0 0 auto; }
+  .vault-item-fields { flex-direction: column; flex-wrap: nowrap; gap: 4px; }
+  .vault-item-notes.is-shown { flex-basis: auto; }
+  .vault-item-field { align-items: center; }
+  .vault-item-fields dt { width: 5.5em; }
   .vault-table { display: block; overflow-x: auto; }
 }
 

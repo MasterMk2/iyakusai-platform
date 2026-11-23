@@ -18,10 +18,13 @@ export interface Sealed {
   data: string;
 }
 
+// 用途 and 登録メールアドレス (2026-11-23) default to empty: entries sealed before them open as they were.
 const secretSchema = z.strictObject({
   name: z.string().max(VAULT_LIMITS.entryName),
+  purpose: z.string().max(VAULT_LIMITS.purpose).default(''),
   url: z.string().max(VAULT_LIMITS.url),
   username: z.string().max(VAULT_LIMITS.username),
+  email: z.string().max(VAULT_LIMITS.email).default(''),
   password: z.string().max(VAULT_LIMITS.password),
   notes: z.string().max(VAULT_LIMITS.notes),
 });

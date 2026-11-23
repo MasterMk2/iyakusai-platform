@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
@@ -212,6 +212,41 @@ describe('entries', () => {
     expect((await call(SOMU, 'GET', `/api/vault/sections/${s.id}/events`)).status).toBe(403);
     const forManager = (await call(ADMIN, 'GET', `/api/vault/sections/${s.id}/events`)).json.events;
     expect(forManager[0]).toMatchObject({ action: 'revealed', actorName: '合成 総務', entryName: '合成の管理画面', detail: 'メモ' });
+  });
+
+  it('keeps 用途 and 登録メールアドレス sealed, lists and prints them, names them in the record, and refuses a malformed address', async () => {
+    await build();
+    const s = await newSection();
+    const created = await addEntry(ADMIN, s.id, { purpose: '合成の請求書を出す', email: 'synthetic-owner@example.invalid' });
+    expect(created.status).toBe(201);
+    expect(created.json.entry).toMatchObject({ purpose: '合成の請求書を出す', email: 'synthetic-owner@example.invalid' });
+    // The file and its write-ahead log: neither holds the two new fields in the clear.
+    const file = Buffer.concat(readdirSync(dir).filter((f) => f.startsWith('vault.sqlite3')).map((f) => readFileSync(path.join(dir, f))));
+    expect(file.includes(Buffer.from('synthetic-owner@example.invalid'))).toBe(false);
+    expect(file.includes(Buffer.from('合成の請求書を出す'))).toBe(false);
+    const id = created.json.entry.id;
+    const changed = await call(ADMIN, 'PUT', `/api/vault/entries/${id}`, {
+      sectionId: s.id,
+      name: '合成の管理画面',
+      purpose: '合成の請求書と領収書',
+      url: 'https://console.example.invalid',
+      username: 'synthetic-admin',
+      email: '',
+      password: null,
+      notes: null,
+      expectedVersion: 1,
+    });
+    expect(changed.json.entry).toMatchObject({ purpose: '合成の請求書と領収書', email: '' });
+    expect(store.events(s.id).find((e) => e.action === 'entry_updated')?.detail.changed).toEqual(['purpose', 'email']);
+    const record = (await call(ADMIN, 'GET', `/api/vault/sections/${s.id}/events`)).json.events;
+    expect(record.find((e: { action: string }) => e.action === 'entry_updated')).toMatchObject({ detail: '用途・登録メールアドレス' });
+    const sheet = (await call(ADMIN, 'POST', `/api/vault/sections/${s.id}/print`, {})).json;
+    expect(sheet.entries[0]).toMatchObject({ purpose: '合成の請求書と領収書', email: '' });
+    const bad = await addEntry(ADMIN, s.id, { email: 'not an address' });
+    expect(bad.status).toBe(400);
+    // A form from before the two fields still saves; they stay empty.
+    const plain = await addEntry(ADMIN, s.id);
+    expect(plain.json.entry).toMatchObject({ purpose: '', email: '' });
   });
 
   it('needs 編集する to add, change and remove; a member of another section does not see the entry', async () => {

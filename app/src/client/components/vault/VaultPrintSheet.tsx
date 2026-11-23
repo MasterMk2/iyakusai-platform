@@ -44,9 +44,9 @@ export function VaultPrintSheet({ data, onDone }: { data: VaultPrintResponse; on
       <table>
         <thead>
           <tr>
-            <th>名前</th>
+            <th>サイト名・用途</th>
             <th>URL</th>
-            <th>ID</th>
+            <th>ユーザー名・登録メールアドレス</th>
             <th>パスワード</th>
             <th>メモ</th>
             <th>更新</th>
@@ -55,10 +55,14 @@ export function VaultPrintSheet({ data, onDone }: { data: VaultPrintResponse; on
         <tbody>
           {data.entries.map((e, i) => (
             <tr key={i}>
-              <td>{e.name}</td>
+              <td>
+                <strong>{e.name}</strong>
+                {e.purpose && <div>{e.purpose}</div>}
+              </td>
               <td className="vault-print-url">{e.url}</td>
               <td>
-                <code>{e.username}</code>
+                {e.username && <code>{e.username}</code>}
+                {e.email && <div className="vault-print-url">{e.email}</div>}
               </td>
               <td>
                 <code>{e.password}</code>

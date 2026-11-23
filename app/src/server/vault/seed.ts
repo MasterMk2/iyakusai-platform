@@ -13,7 +13,15 @@ export function demoVaultCipher(): VaultCipher {
   return new VaultCipher(DEMO_VAULT_KEY);
 }
 
-const entry = (name: string, url: string, username: string, password: string, notes: string): VaultSecret => ({ name, url, username, password, notes });
+const entry = (name: string, purpose: string, url: string, username: string, email: string, password: string, notes: string): VaultSecret => ({
+  name,
+  purpose,
+  url,
+  username,
+  email,
+  password,
+  notes,
+});
 
 /** Fills an empty password book with two demo sections. Does nothing otherwise. */
 export function seedVaultDemo(store: VaultStore, cipher: VaultCipher, people: { admin: string; others: string[]; department: string | null }, at: string): void {
@@ -32,12 +40,12 @@ export function seedVaultDemo(store: VaultStore, cipher: VaultCipher, people: { 
     };
     if (people.others[0]) grant('user', people.others[0], 'edit');
     if (people.department) grant('department', people.department, 'view');
-    add(system.id, entry('サーバーの管理画面（合成）', 'https://console.example.invalid', 'demo-admin', 'Demo-Only-Pass-0001', '合成データです。\n実在のサービスではありません。'));
-    add(system.id, entry('ドメインの管理（合成）', 'https://domains.example.invalid', 'demo-owner', 'Demo-Only-Pass-0002', ''));
+    add(system.id, entry('サーバーの管理画面（合成）', 'サーバーの再起動・設定の確認', 'https://console.example.invalid', 'demo-admin', 'system@example.invalid', 'Demo-Only-Pass-0001', '合成データです。\n実在のサービスではありません。'));
+    add(system.id, entry('ドメインの管理（合成）', 'ドメインの更新・DNS の変更', 'https://domains.example.invalid', 'demo-owner', 'system@example.invalid', 'Demo-Only-Pass-0002', ''));
   }
   const accounting = store.createSection(id('vs'), '会計（合成）', '合成データです。', people.admin, at);
   if (typeof accounting !== 'string') {
     if (people.others[1]) store.setMember(accounting.id, accounting.version, 'user', people.others[1], 'manage', people.admin, at);
-    add(accounting.id, entry('経費精算のサービス（合成）', 'https://expenses.example.invalid', 'demo-kaikei', 'Demo-Only-Pass-0003', '合成データです。予備コード：0000-0000（合成）'));
+    add(accounting.id, entry('経費精算のサービス（合成）', '立替金の精算', 'https://expenses.example.invalid', 'demo-kaikei', 'kaikei@example.invalid', 'Demo-Only-Pass-0003', '合成データです。予備コード：0000-0000（合成）'));
   }
 }

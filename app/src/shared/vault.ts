@@ -25,8 +25,10 @@ export const VAULT_LIMITS = {
   sectionNote: 200,
   sections: 50,
   entryName: 100,
+  purpose: 200,
   url: 500,
   username: 200,
+  email: 254,
   password: 1000,
   notes: 4000,
   entriesPerSection: 500,
@@ -36,6 +38,8 @@ export const VAULT_LIMITS = {
 } as const;
 
 export const VAULT_SECTION_ID = /^vs_[0-9a-f]{16}$/;
+/** A registered address (登録メールアドレス), loose on purpose (a service may accept odd forms): text on both sides of an @. */
+export const VAULT_EMAIL = /^[^\s@]+@[^\s@]+$/;
 export const VAULT_ENTRY_ID = /^ve_[0-9a-f]{16}$/;
 /** Token from the form: a retried save returns the entry the first one made (no duplicates). */
 export const VAULT_TOKEN = /^[A-Za-z0-9_-]{16,64}$/;
@@ -45,17 +49,26 @@ export const VAULT_REAUTH_REQUIRED = 'vault_reauth_required';
 
 export const VAULT_REVEAL_MINUTES_DEFAULT = 10;
 
-/** The fields of an entry the server keeps encrypted (all of them). */
+/**
+ * The fields of an entry the server keeps encrypted (all of them). 用途 and 登録メールアドレス came on 2026-11-23 (the
+ * chair's list: サイト名・用途・URL・ユーザー名・登録メールアドレス・パスワード); entries saved before open with them empty.
+ */
 export interface VaultSecret {
+  /** サイト名 */
   name: string;
+  /** 用途 */
+  purpose: string;
   url: string;
+  /** ユーザー名（ログインの ID） */
   username: string;
+  /** 登録メールアドレス */
+  email: string;
   password: string;
   notes: string;
 }
 
-export const VAULT_SECRET_KEYS = ['name', 'url', 'username', 'password', 'notes'] as const satisfies readonly (keyof VaultSecret)[];
-export const VAULT_FIELD_LABELS: Record<keyof VaultSecret, string> = { name: '名前', url: 'URL', username: 'ID', password: 'パスワード', notes: 'メモ' };
+export const VAULT_SECRET_KEYS = ['name', 'purpose', 'url', 'username', 'email', 'password', 'notes'] as const satisfies readonly (keyof VaultSecret)[];
+export const VAULT_FIELD_LABELS: Record<keyof VaultSecret, string> = { name: 'サイト名', purpose: '用途', url: 'URL', username: 'ユーザー名', email: '登録メールアドレス', password: 'パスワード', notes: 'メモ' };
 
 export type VaultMemberKind = 'user' | 'department';
 
@@ -96,8 +109,10 @@ export interface VaultEntryItem {
   id: string;
   sectionId: string;
   name: string;
+  purpose: string;
   url: string;
   username: string;
+  email: string;
   hasPassword: boolean;
   hasNotes: boolean;
   updatedAt: string;
