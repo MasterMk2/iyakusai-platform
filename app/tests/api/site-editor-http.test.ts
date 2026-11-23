@@ -6,6 +6,10 @@ import { StateStore } from '../../src/server/domain/store.js';
 import { buildApp, SESSION_COOKIE } from '../../src/server/http/app.js';
 import type { SiteEditorConfig } from '../../src/server/site-editor/config.js';
 import { canonicalStringForBodyHash } from '../../src/server/tasks/signing.js';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { SiteEditorAccessStore } from '../../src/server/site-editor/access.js';
 import { ADMIN, seedState, TEST_HOST, TEST_PORT } from '../helpers.js';
 
 // The website editor over HTTP in the demo composition (persona cookie), with a stand-in for WebGenEngine's server.
@@ -22,7 +26,7 @@ const CONFIG: SiteEditorConfig = {
   upstream: 'http://wge.invalid:8080',
   key: KEY,
   siteUrl: 'https://site.example.invalid/wge/',
-  editors: { departments: ['広報課'], userIds: [] },
+  editors: { everyone: false, departments: ['広報課'], userIds: [] },
   publishers: { departments: [], userIds: [PUBLISHER] },
 };
 
@@ -45,7 +49,9 @@ const fakeFetch = (async (input: string | URL | Request, init?: RequestInit) => 
   return new Response(status === 204 ? null : body, { status, headers: { 'content-type': type } });
 }) as typeof fetch;
 
-async function build(siteEditor = true) {
+let accessDir: string;
+
+async function build(siteEditor = true, access: SiteEditorAccessStore | null = null) {
   const seed = await seedState();
   seed.users.push(
     { id: EDITOR, displayName: '合成 広報', roleLabel: '総務部・広報課', email: 'koho@example.invalid', canManageAccess: false },
@@ -57,7 +63,7 @@ async function build(siteEditor = true) {
     store: new StateStore(seed, null),
     listenPort: TEST_PORT,
     clock: () => new Date(NOW).toISOString(),
-    siteEditor: siteEditor ? { config: CONFIG, fetch: fakeFetch } : null,
+    siteEditor: siteEditor ? { config: CONFIG, fetch: fakeFetch, access } : null,
   });
 }
 
@@ -96,18 +102,64 @@ function signedRight(s: Seen, path: string): boolean {
 beforeEach(async () => {
   seen = [];
   answer = [200, 'application/json; charset=utf-8', '{"wge":1,"ok":true}'];
+  accessDir = mkdtempSync(path.join(tmpdir(), 'iyakusai-site-access-'));
   await build();
 });
 afterEach(async () => {
   await app?.close();
+  rmSync(accessDir, { recursive: true, force: true });
+});
+
+describe('who may write and publish', () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const put = (userId: string, body: unknown) => app.inject({ method: 'PUT', url: '/api/site-editor/access', headers: { host: TEST_HOST, origin: `http://${TEST_HOST}`, 'x-smm-csrf': '1', cookie: `${SESSION_COOKIE}=${userId}` }, payload: body as any });
+  const rebuild = async () => {
+    await app.close();
+    await build(true, new SiteEditorAccessStore(path.join(accessDir, 'site-editor-access.json')));
+  };
+
+  it('starts from site-editor.json, and an access administrator can open it to everyone and choose publishers', async () => {
+    await rebuild();
+    const first = (await call(ADMIN, 'GET', '/api/site-editor/access')).json;
+    expect(first.access).toMatchObject({ version: 0, editors: { everyone: false, departments: ['広報課'] }, publishers: { userIds: [PUBLISHER] }, updatedAt: null });
+    expect(first.choices.departments).toEqual(expect.arrayContaining(['広報課', '内務部', '企画部']));
+    expect(first.choices.people.map((p: { id: string }) => p.id)).toEqual(expect.arrayContaining([EDITOR, OUTSIDER]));
+    expect(first.choices.people.map((p: { id: string }) => p.id)).not.toContain(TEMP);
+    expect((await call(OUTSIDER, 'GET', '/api/site-editor/meta')).json.canEdit).toBe(false);
+
+    const saved = await put(ADMIN, { editors: { everyone: true, departments: [], userIds: [] }, publishers: { departments: ['内務部'], userIds: [] }, expectedVersion: 0 });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json().access).toMatchObject({ version: 1, editors: { everyone: true }, publishers: { departments: ['内務部'], userIds: [] }, updatedByName: expect.any(String) });
+    // Everyone writes now; 内務部 publishes; the publisher named in the file no longer does.
+    expect((await call(OUTSIDER, 'GET', '/api/site-editor/meta')).json).toMatchObject({ canEdit: true, canPublish: true });
+    expect((await call(EDITOR, 'GET', '/api/site-editor/meta')).json).toMatchObject({ canEdit: true, canPublish: false });
+    expect((await call(PUBLISHER, 'POST', '/site-editor/api/pages/top/publish', '{"revision":1}')).status).toBe(403);
+    expect((await call(TEMP, 'GET', '/site-editor/api/ping')).status).toBe(403);
+
+    // A stale save is refused, and so is a department or a person who is not a member.
+    expect((await put(ADMIN, { editors: { everyone: false, departments: [], userIds: [] }, publishers: { departments: [], userIds: [] }, expectedVersion: 0 })).statusCode).toBe(409);
+    expect((await put(ADMIN, { editors: { everyone: false, departments: ['存在しない部局'], userIds: [] }, publishers: { departments: [], userIds: [] }, expectedVersion: 1 })).statusCode).toBe(422);
+    expect((await put(ADMIN, { editors: { everyone: false, departments: [], userIds: ['u-nobody'] }, publishers: { departments: [], userIds: [] }, expectedVersion: 1 })).statusCode).toBe(422);
+  });
+
+  it('is for access administrators only', async () => {
+    await rebuild();
+    expect((await call(EDITOR, 'GET', '/api/site-editor/access')).status).toBe(403);
+    expect((await put(PUBLISHER, { editors: { everyone: true, departments: [], userIds: [] }, publishers: { departments: [], userIds: [] }, expectedVersion: 0 })).statusCode).toBe(403);
+    expect((await call(ADMIN, 'GET', '/api/site-editor/meta')).json.canAdminister).toBe(true);
+  });
+
+  it('cannot be changed on a server without a place to keep it', async () => {
+    expect((await put(ADMIN, { editors: { everyone: true, departments: [], userIds: [] }, publishers: { departments: [], userIds: [] }, expectedVersion: 0 })).statusCode).toBe(409);
+  });
 });
 
 describe('the website editor', () => {
   it('tells each person what they may do, and nothing to people it does not name', async () => {
-    expect((await call(EDITOR, 'GET', '/api/site-editor/meta')).json).toEqual({ enabled: true, canEdit: true, canPublish: false, editorUrl: '/site-editor/editor/', siteUrl: 'https://site.example.invalid/wge/' });
+    expect((await call(EDITOR, 'GET', '/api/site-editor/meta')).json).toEqual({ enabled: true, canEdit: true, canPublish: false, canAdminister: false, editorUrl: '/site-editor/editor/posts.html', siteUrl: 'https://site.example.invalid/wge/' });
     expect((await call(PUBLISHER, 'GET', '/api/site-editor/meta')).json).toMatchObject({ canEdit: true, canPublish: true });
     expect((await call(ADMIN, 'GET', '/api/site-editor/meta')).json).toMatchObject({ canEdit: true, canPublish: true });
-    expect((await call(OUTSIDER, 'GET', '/api/site-editor/meta')).json).toEqual({ enabled: true, canEdit: false, canPublish: false, editorUrl: null, siteUrl: null });
+    expect((await call(OUTSIDER, 'GET', '/api/site-editor/meta')).json).toEqual({ enabled: true, canEdit: false, canPublish: false, canAdminister: false, editorUrl: null, siteUrl: null });
     expect((await call(TEMP, 'GET', '/api/site-editor/meta')).json).toMatchObject({ enabled: false, editorUrl: null });
     expect((await call(null, 'GET', '/api/site-editor/meta')).status).toBe(401);
   });
@@ -204,7 +256,7 @@ describe('the website editor', () => {
     for (const url of ['/site-editor', '/site-editor/']) {
       const res = await app.inject({ method: 'GET', url, headers: { host: TEST_HOST, cookie: `${SESSION_COOKIE}=${EDITOR}` } });
       expect(res.statusCode, url).toBe(302);
-      expect(res.headers.location).toBe('/site-editor/editor/');
+      expect(res.headers.location).toBe('/site-editor/editor/posts.html');
     }
   });
 
@@ -232,6 +284,28 @@ describe('the website editor', () => {
     expect((await call(EDITOR, 'POST', '/site-editor/api/pages/top/draft', '{}')).json).toEqual({ wge: 1, ok: false, reason: 'conflict' });
     answer = [200, 'application/x-httpd-php', '<?php'];
     expect((await call(EDITOR, 'GET', '/site-editor/editor/editor.css')).type).toBe('application/octet-stream');
+  });
+
+  it('passes the blog\'s paths on: the list of pages, titles, pictures', async () => {
+    for (const [method, url] of [
+      ['GET', '/site-editor/editor/posts.html'],
+      ['GET', '/site-editor/editor/posts.mjs'],
+      ['GET', '/site-editor/api/pages'],
+      ['POST', '/site-editor/api/pages/20261123-a1b2/meta'],
+      ['POST', '/site-editor/api/media'],
+      ['GET', '/site-editor/media/0123456789abcdef.jpg'],
+    ] as const) {
+      expect((await call(EDITOR, method, url, method === 'POST' ? '{}' : undefined)).status, url).toBe(200);
+    }
+    expect(seen.map((s) => s.url.replace('http://wge.invalid:8080', ''))).toEqual(['/editor/posts.html', '/editor/posts.mjs', '/api/pages', '/api/pages/20261123-a1b2/meta', '/api/media', '/media/0123456789abcdef.jpg']);
+    for (const url of ['/site-editor/media/0123456789abcdef.svg', '/site-editor/media/../index.html', '/site-editor/media/x.jpg', '/site-editor/api/media/x']) {
+      expect((await call(EDITOR, 'GET', url)).status, url).toBe(404);
+    }
+    answer = [200, 'image/png', 'png'];
+    expect((await call(EDITOR, 'GET', '/site-editor/media/0123456789abcdef.png')).type).toBe('image/png');
+    // The editor's own refusals of a picture pass as they are.
+    answer = [415, 'application/json', '{"wge":1,"ok":false,"reason":"not-image"}'];
+    expect((await call(EDITOR, 'POST', '/site-editor/api/media', '{}')).json).toMatchObject({ reason: 'not-image' });
   });
 
   it('never caches what it passes on', async () => {

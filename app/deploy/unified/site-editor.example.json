@@ -2,7 +2,7 @@
   "version": 1,
   "upstream": "http://wge:8080",
   "keyFile": "/config/site-editor.key",
-  "siteUrl": "https://example.org/",
-  "editors": { "departments": ["広報課"], "userIds": [] },
+  "siteUrl": "https://example.org/blog/",
+  "editors": { "everyone": true },
   "publishers": { "departments": [], "userIds": [] }
 }

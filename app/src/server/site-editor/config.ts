@@ -12,17 +12,19 @@ import { parseKeyMaterial } from '../tasks/signing.js';
 //     "upstream": "http://wge:8080",
 //     "keyFile": "<file holding a random key of 32 bytes or more>",
 //     "siteUrl": "https://example.org/",
-//     "editors": { "departments": ["…"], "userIds": [] },
-//     "publishers": { "departments": [], "userIds": ["…"] }
+//     "editors": { "everyone": true },
+//     "publishers": { "departments": ["…"], "userIds": [] }
 //   }
 //
 // - upstream: the editor's own server (WebGenEngine's trusted-front.php) on the internal network. It is never published.
 // - keyFile: the key shared with that server (its WGE_SVC_KEY_FILE). Readable by its owner only (600); it must differ
 //   from every other key of the mail configuration (mailbox/config.ts refuses the same bytes).
 // - siteUrl: where the published site is seen (a link on the settings screen). Optional.
-// - editors may change pages; publishers may also publish and take a publish back. Access administrators may always do
-//   both. A department is a name of the person's roles (as on the account screen); a user ID is the account's ID
-//   (iy-…, the 「ログインID」 of the account screen), not the student ID.
+// - editors may change pages (everyone: every committee member); publishers may also publish and take a publish back.
+//   Access administrators may always do both. A department is a name of the person's roles (as on the account screen);
+//   a user ID is the account's ID (iy-…, the 「ログインID」 of the account screen), not the student ID. These are the
+//   first lists only: once the access administrators choose on the settings screen, site-editor-access.json applies
+//   (access.ts).
 
 export const SITE_EDITOR_CONFIG_FILE = 'site-editor.json';
 
@@ -36,12 +38,13 @@ export interface SiteEditorConfig {
   upstream: string;
   key: Buffer;
   siteUrl: string | null;
-  editors: SiteEditorPeople;
+  editors: SiteEditorPeople & { everyone: boolean };
   publishers: SiteEditorPeople;
 }
 
 const KNOWN = new Set(['version', 'upstream', 'keyFile', 'siteUrl', 'editors', 'publishers']);
 const PEOPLE_KNOWN = new Set(['departments', 'userIds']);
+const EDITORS_KNOWN = new Set(['everyone', 'departments', 'userIds']);
 // eslint-disable-next-line no-control-regex
 const CONTROL = /[\u0000-\u001f\u007f]/;
 
@@ -96,13 +99,14 @@ function namesOf(value: unknown, what: string): string[] {
   return [...new Set((value as string[]).map((v) => v.trim()))];
 }
 
-function peopleOf(value: unknown, name: string): SiteEditorPeople {
+function peopleOf(value: unknown, name: string, known = PEOPLE_KNOWN): SiteEditorPeople & { everyone?: boolean } {
   if (value === undefined) return { departments: [], userIds: [] };
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new ConfigError(`${name} は { "departments": [...], "userIds": [...] } の形にしてください。`);
   const o = value as Record<string, unknown>;
-  const unknown = Object.keys(o).filter((k) => !PEOPLE_KNOWN.has(k));
+  const unknown = Object.keys(o).filter((k) => !known.has(k));
   if (unknown.length > 0) throw new ConfigError(`${name} に知らない項目があります: ${unknown.join(', ')}`);
-  return { departments: namesOf(o.departments, `${name}.departments`), userIds: namesOf(o.userIds, `${name}.userIds`) };
+  if (o.everyone !== undefined && typeof o.everyone !== 'boolean') throw new ConfigError(`${name}.everyone は true か false にしてください。`);
+  return { departments: namesOf(o.departments, `${name}.departments`), userIds: namesOf(o.userIds, `${name}.userIds`), ...(o.everyone !== undefined ? { everyone: o.everyone as boolean } : {}) };
 }
 
 export function validateSiteEditorConfig(raw: unknown, key: Buffer): SiteEditorConfig {
@@ -111,7 +115,14 @@ export function validateSiteEditorConfig(raw: unknown, key: Buffer): SiteEditorC
   const unknown = Object.keys(o).filter((k) => !KNOWN.has(k));
   if (unknown.length > 0) throw new ConfigError(`${SITE_EDITOR_CONFIG_FILE} に知らない項目があります: ${unknown.join(', ')}`);
   if (o.version !== 1) throw new ConfigError(`${SITE_EDITOR_CONFIG_FILE} の version は 1 にしてください。`);
-  return { upstream: upstreamOf(o.upstream), key, siteUrl: siteUrlOf(o.siteUrl), editors: peopleOf(o.editors, 'editors'), publishers: peopleOf(o.publishers, 'publishers') };
+  const editors = peopleOf(o.editors, 'editors', EDITORS_KNOWN);
+  return {
+    upstream: upstreamOf(o.upstream),
+    key,
+    siteUrl: siteUrlOf(o.siteUrl),
+    editors: { everyone: editors.everyone ?? false, departments: editors.departments, userIds: editors.userIds },
+    publishers: peopleOf(o.publishers, 'publishers'),
+  };
 }
 
 /** site-editor.json next to the mailbox configuration, or null when there is none (the editor is off). */

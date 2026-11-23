@@ -37,10 +37,14 @@ describe('site-editor.json', () => {
       upstream: 'http://wge:8080',
       key: KEY,
       siteUrl: 'https://site.example.invalid/wge/',
-      editors: { departments: ['総務部'], userIds: ['21000002'] },
+      editors: { everyone: false, departments: ['総務部'], userIds: ['21000002'] },
       publishers: { departments: [], userIds: ['21000003'] },
     });
-    expect(validateSiteEditorConfig({ version: 1, upstream: 'http://wge:8080' }, KEY)).toMatchObject({ siteUrl: null, editors: { departments: [], userIds: [] } });
+    expect(validateSiteEditorConfig({ version: 1, upstream: 'http://wge:8080' }, KEY)).toMatchObject({ siteUrl: null, editors: { everyone: false, departments: [], userIds: [] } });
+    expect(validateSiteEditorConfig({ version: 1, upstream: 'http://wge:8080', editors: { everyone: true } }, KEY).editors.everyone).toBe(true);
+    // Everyone is for writing only: publishing is always chosen.
+    expect(() => validateSiteEditorConfig({ version: 1, upstream: 'http://wge:8080', publishers: { everyone: true } }, KEY)).toThrow(/知らない項目/);
+    expect(() => validateSiteEditorConfig({ version: 1, upstream: 'http://wge:8080', editors: { everyone: 'yes' } }, KEY)).toThrow(/everyone/);
   });
 
   it('refuses an upstream with a path, a query or a user name, and a site that is not http(s)', () => {

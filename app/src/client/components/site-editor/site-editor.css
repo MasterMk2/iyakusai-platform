@@ -1,0 +1,52 @@
+/* The website (blog) editor's part of the settings: who may write and who may publish. */
+.site-access {
+  margin-top: 20px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.site-access h4 {
+  margin: 0 0 4px;
+}
+.site-access-group {
+  margin: 12px 0 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.site-access-group legend {
+  padding: 0;
+  margin-bottom: 6px;
+  font-weight: 700;
+}
+.site-access-sub {
+  margin: 8px 0 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.site-access-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+.site-access-chips .status-option {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.site-access-chips .status-option input[type='radio'] {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+}
+.site-access-filter {
+  display: grid;
+  gap: 4px;
+  margin-top: 12px;
+  max-width: 24em;
+}
+.site-access-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}

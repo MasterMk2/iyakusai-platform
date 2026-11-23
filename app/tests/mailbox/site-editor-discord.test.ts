@@ -47,7 +47,7 @@ beforeEach(async () => {
     discord: { service: ctx.service, store: ctx.store, config: ctx.config, names: new NameRoster(path.join(dir, 'names.json')), publicOrigin: null, publicHost: null, trustedProxies: new Set() },
     mailbox: { store: mail, config, addresses: new CommitteeAddresses(config.mailboxes, config.domainAliases) },
     siteEditor: {
-      config: { upstream: 'http://wge.invalid:8080', key: randomBytes(32), siteUrl: null, editors: { departments: ['企画部'], userIds: [] }, publishers: { departments: [], userIds: [] } },
+      config: { upstream: 'http://wge.invalid:8080', key: randomBytes(32), siteUrl: null, editors: { everyone: false, departments: ['企画部'], userIds: [] }, publishers: { departments: [], userIds: [] } },
       fetch: fakeFetch,
     },
   });

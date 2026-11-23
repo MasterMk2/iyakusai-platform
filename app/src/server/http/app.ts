@@ -626,7 +626,13 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       } else if (!demo) return null;
       return { user, departments: departmentsOfLabel(user.roleLabel) };
     },
-    now: () => Date.parse(clock()),
+    members: () =>
+      (discordApi ? discordApi.listUsers() : store.current.users)
+        .filter((u) => isBoardMember(u) && (!discordApi || discordApi.discordUserIdOf(u.id) !== null))
+        .map((u) => ({ id: u.id, name: u.displayName, departments: departmentsOfLabel(u.roleLabel) })),
+    nameOf: (userId) => (discordApi ? discordApi.lookupUser(userId)?.displayName : findUser(store.current, userId)?.displayName) ?? '（不明な利用者）',
+    clock,
+    parse,
   });
   if (demo && options.demoBooks) registerDemoBooks(app, options.demoBooks, { requireUser, lookupUser: (userId) => findUser(store.current, userId), listUsers: () => store.current.users.filter((u) => !u.disabled), clock, parse });
   // Festival-day board (2026-11-03, dayof/routes.ts). Members as for the decision register above; temporary staff read the notices marked for them.
