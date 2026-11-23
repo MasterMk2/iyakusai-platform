@@ -193,7 +193,7 @@ services:
 
 パスワード帳（[app/docs/vault.md](../app/docs/vault.md)）を使うとき：
 
-1. 鍵を `openssl rand -hex 32 > config/vault.key` で作り、権限を 600 にする（銀行のトークンの鍵を含め、ほかの鍵と別の値。銀行の鍵と同じ値だと、パスワード帳だけを無効にして起動する）。
+1. 鍵を `openssl rand -hex 32 > config/vault.key` で作り、権限を 600 にする（ほかの鍵と別の値。メールの取り込みの鍵か銀行のトークンの鍵と同じ値だと、パスワード帳だけを無効にして起動する）。
 2. `vault.json` を置いてアプリを再起動する（例は [`app/deploy/unified/vault.example.json`](../app/deploy/unified/vault.example.json)）。権限管理者が設定 →「パスワード帳」で区分を作り、見られる部局と人を付ける。
 
 - 項目は `SMM_MAIL_DIR/vault.sqlite3` に暗号化して置く（名前・URL・ID も暗号化）。アプリのバックアップはこのファイルを写すが、鍵は写さない。鍵を失うと項目は開けない（紙の控えから入れ直す）。
