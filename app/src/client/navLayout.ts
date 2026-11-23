@@ -5,7 +5,7 @@
  * the rental screens' HTML (src/rental-web/index.html, supplies.html) to it. Rules: ../../docs/ui-guidelines.md §2.
  */
 
-export type NavKey = 'home' | 'board' | 'tasks' | 'rental' | 'inbox' | 'line' | 'contacts' | 'books' | 'bot' | 'vault' | 'settings';
+export type NavKey = 'home' | 'board' | 'tasks' | 'rental' | 'inbox' | 'line' | 'contacts' | 'books' | 'bot' | 'site' | 'vault' | 'settings';
 export type NavGroupKey = 'contact' | 'ops';
 
 export interface NavLayoutItem {
@@ -40,6 +40,8 @@ export const NAV_LAYOUT: readonly NavLayoutEntry[] = [
       { key: 'contacts', label: '連絡先' },
       // 掲示板 (2026-11-11): the committee's notices (what is new on it also shows on home).
       { key: 'board', label: '掲示板' },
+      // Webサイト (2026-11-23): the committee's site and blog, for the people who may write and the access administrators.
+      { key: 'site', label: 'Webサイト', labelBreaks: ['Web', 'サイト'] },
     ],
   },
   {

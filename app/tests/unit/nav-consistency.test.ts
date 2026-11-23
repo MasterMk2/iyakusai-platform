@@ -25,6 +25,7 @@ const RENTAL_HREF: Record<NavKey, string> = {
   rental: '/rental',
   vault: '/#/vault',
   bot: '/#/bot',
+  site: '/#/site',
   settings: '/#/settings',
 };
 
@@ -75,7 +76,7 @@ const layoutShape = (): Shape[] =>
 describe('module tabs on every screen', () => {
   it('the tabs used every day are tabs, the rest sit in the 連絡 and 運営 menus (2026-11-23)', () => {
     const names = NAV_LAYOUT.map((entry) => (isNavGroup(entry) ? `${entry.label}: ${entry.items.map((i) => i.label).join('・')}` : entry.label));
-    expect(names).toEqual(['ホーム', 'タスク', 'メール', '連絡: 公式LINE・連絡先・掲示板', '運営: 会計・物品貸出・パスワード帳', 'Bot', '設定']);
+    expect(names).toEqual(['ホーム', 'タスク', 'メール', '連絡: 公式LINE・連絡先・掲示板・Webサイト', '運営: 会計・物品貸出・パスワード帳', 'Bot', '設定']);
     // Every module appears once.
     const keys = NAV_LAYOUT.flatMap((entry) => (isNavGroup(entry) ? entry.items.map((i) => i.key) : [entry.key]));
     expect(new Set(keys).size).toBe(keys.length);
@@ -108,6 +109,11 @@ describe('module tabs on every screen', () => {
   it('the パスワード帳 link is hidden on the rental screens until the server says the person can open it', () => {
     for (const page of RENTAL_PAGES) expect(read(page)).toContain('<li hidden data-vault-tab><a href="/#/vault" data-leave>');
     for (const script of ['src/rental-web/app.js', 'src/rental-web/supplies.js']) expect(read(script)).toMatch(/meta\.enabled === true && meta\.canOpen === true/);
+  });
+
+  it('the Webサイト link is hidden on the rental screens until the server says the person may write', () => {
+    for (const page of RENTAL_PAGES) expect(read(page)).toContain('<li hidden data-site-tab><a href="/#/site" data-leave>');
+    for (const script of ['src/rental-web/app.js', 'src/rental-web/supplies.js']) expect(read(script)).toMatch(/meta\.enabled === true && \(meta\.canEdit === true \|\| meta\.canAdminister === true\)/);
   });
 
   it('a temporary staff member keeps the rental tab alone, out of its menu', () => {
@@ -146,6 +152,9 @@ describe('module tabs on every screen', () => {
       'iyakusai-rental-shell-20261109-v24-paused',
       'iyakusai-rental-shell-20261111-v25-board-tab',
       'iyakusai-rental-shell-20261123-v26-vault-tab',
+      'iyakusai-rental-shell-20261123-v27-site-tab',
+      // The first push of the grouped tabs (PR branch only).
+      'iyakusai-rental-shell-20261123-v27-nav-menus',
     ]).not.toContain(cache);
   });
 });

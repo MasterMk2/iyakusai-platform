@@ -32,6 +32,8 @@ import { BulletinView } from './components/bulletin/BulletinView';
 import { BOARD_HREF, boardHash, parseBoardQuery } from '../shared/bulletin';
 import { VAULT_HREF, type VaultMetaResponse } from '../shared/vault';
 import { VaultView } from './components/vault/VaultView';
+import { SITE_HREF, type SiteEditorMetaResponse } from '../shared/site-editor';
+import { SiteView } from './components/site-editor/SiteView';
 import { DecisionsView } from './components/decisions/DecisionsView';
 import { decisionHref, decisionNewHref, parseDecisionPrefill, type DecisionPrefill } from './components/decisions/decisionLinks';
 import { ThreadDetail } from './components/ThreadDetail';
@@ -44,7 +46,7 @@ const PROXY_ERRORS = new Set(['untrusted_proxy', 'unauthenticated', 'invalid_ide
 
 export interface Route {
   /** `line` is the official LINE tab (2026-11-03), apart from the mail tab. */
-  view: 'home' | 'mail' | 'line' | 'admin' | 'tasks' | 'bot' | 'settings' | 'contacts' | 'decisions' | 'books' | 'board' | 'vault';
+  view: 'home' | 'mail' | 'line' | 'admin' | 'tasks' | 'bot' | 'settings' | 'contacts' | 'decisions' | 'books' | 'board' | 'vault' | 'site';
   mailboxId: string | null;
   lineAccountId: string | null;
   /** Selected email thread (`thread=`) or LINE conversation (`conv=`); at most one is set. */
@@ -136,6 +138,8 @@ export function parseHash(hash: string): Route {
   if (parts[0] === 'admin') return { ...EMPTY_ROUTE, view: 'admin' };
   // パスワード帳 has its own tab; its first address under the settings (2026-11-23) opens the tab.
   if (parts[0] === 'vault' || (parts[0] === 'settings' && parts[1] === 'vault')) return { ...EMPTY_ROUTE, view: 'vault' };
+  // Webサイト has its own tab too; its first address under the settings (2026-11-23) opens the tab.
+  if (parts[0] === 'site' || (parts[0] === 'settings' && parts[1] === 'site')) return { ...EMPTY_ROUTE, view: 'site' };
   if (parts[0] === 'settings') return { ...EMPTY_ROUTE, view: 'settings', settingsSection: parseSettingsSection(parts[1]) };
   if (parts[0] === 'contacts') {
     const contactId = params.get('c');
@@ -177,6 +181,7 @@ export function toHash(route: Route): string {
   if (route.view === 'home') return '#/home';
   if (route.view === 'admin') return '#/admin';
   if (route.view === 'vault') return VAULT_HREF;
+  if (route.view === 'site') return SITE_HREF;
   if (route.view === 'settings') return route.settingsSection ? `#/settings/${route.settingsSection}` : '#/settings';
   if (route.view === 'contacts') {
     const q = new URLSearchParams();
@@ -227,6 +232,7 @@ function useHashRoute(): [Route, (r: Route) => void] {
     // パスワード帳's first address, under the settings, is written as its tab's (2026-11-23) without a new history entry.
     const canonical = () => {
       if (/^#\/settings\/vault\/?$/.test(window.location.hash)) window.history.replaceState(window.history.state, '', VAULT_HREF);
+      if (/^#\/settings\/site\/?$/.test(window.location.hash)) window.history.replaceState(window.history.state, '', SITE_HREF);
     };
     canonical();
     const onChange = () => {
@@ -379,6 +385,18 @@ export function App() {
   const vaultMeta = useLoader(loadVaultMeta);
   const vaultTab = !!vaultMeta.data?.enabled && vaultMeta.data.canOpen;
 
+  // Webサイト (2026-11-23): its tab is there for the people who may write and the access administrators, once the server
+  // says the editor is on (site-editor.json). Everyone else never sees it; an error or an older server means no tab.
+  const loadSiteMeta = useCallback(
+    (signal: AbortSignal) => {
+      void refresh;
+      return user ? api<SiteEditorMetaResponse>('GET', '/api/site-editor/meta', undefined, signal).catch(() => null) : Promise.resolve(null);
+    },
+    [refresh, user],
+  );
+  const siteMeta = useLoader(loadSiteMeta);
+  const siteTab = !!siteMeta.data?.enabled && (siteMeta.data.canEdit || siteMeta.data.canAdminister);
+
   // Coming back from the rental screen: after signing in, return to the item that was being read.
   useEffect(() => {
     if (!user) return;
@@ -498,7 +516,7 @@ export function App() {
           : null;
 
   useEffect(() => {
-    const names: Record<Route['view'], string> = { home: 'ホーム', tasks: 'タスク', bot: 'Bot', mail: 'メール', line: '公式LINE', admin: '設定', settings: '設定', contacts: '連絡先', decisions: '決定事項', books: '会計', board: '掲示板', vault: 'パスワード帳' };
+    const names: Record<Route['view'], string> = { home: 'ホーム', tasks: 'タスク', bot: 'Bot', mail: 'メール', line: '公式LINE', admin: '設定', settings: '設定', contacts: '連絡先', decisions: '決定事項', books: '会計', board: '掲示板', vault: 'パスワード帳', site: 'Webサイト' };
     document.title = user ? `${names[route.view]}｜医薬祭 委員会アプリ` : '医薬祭 委員会アプリ';
   }, [route.view, user]);
 
@@ -541,11 +559,13 @@ export function App() {
     rental: rentalPaused ? null : { href: '/rental' },
     // Only for the people who can open it (see vaultTab).
     vault: vaultTab ? { href: VAULT_HREF, onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'vault' }) } : null,
+    // Only for the people who may write and the access administrators (see siteTab).
+    site: siteTab ? { href: SITE_HREF, onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'site' }) } : null,
     bot: { href: '#/bot', onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'bot', botSection: 'ask' }) },
     settings: { href: '#/settings', onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'settings' }) },
   });
   // The decision register has no tab of its own (the tabs stay as they are): it is reached from home, so home stays marked.
-  const currentNav: NavKey = route.view === 'home' || route.view === 'decisions' ? 'home' : route.view === 'board' ? 'board' : route.view === 'tasks' ? 'tasks' : route.view === 'bot' ? 'bot' : route.view === 'contacts' ? 'contacts' : route.view === 'books' ? 'books' : route.view === 'line' ? 'line' : route.view === 'mail' ? 'inbox' : route.view === 'vault' ? 'vault' : 'settings';
+  const currentNav: NavKey = route.view === 'home' || route.view === 'decisions' ? 'home' : route.view === 'board' ? 'board' : route.view === 'tasks' ? 'tasks' : route.view === 'bot' ? 'bot' : route.view === 'contacts' ? 'contacts' : route.view === 'books' ? 'books' : route.view === 'line' ? 'line' : route.view === 'mail' ? 'inbox' : route.view === 'vault' ? 'vault' : route.view === 'site' ? 'site' : 'settings';
   // Contacts exist with the committee mailbox (Discord login), for every committee member.
   const contactsEnabled = !!committeeMail;
   const topNav = <GlobalNav entries={navEntries} current={currentNav} />;
@@ -730,6 +750,16 @@ export function App() {
         {bar}
         {topNav}
         <VaultView />
+      </div>
+    );
+  }
+
+  if (route.view === 'site') {
+    return (
+      <div className="app">
+        {bar}
+        {topNav}
+        <SiteView />
       </div>
     );
   }

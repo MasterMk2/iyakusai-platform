@@ -43,3 +43,34 @@ export interface SiteEditorAccessResponse {
 }
 
 export const SITE_EDITOR_LIMITS = { departments: 50, people: 200 } as const;
+
+/** The website's tab inside the app (2026-11-23; #/settings/site, its first address under the settings, opens it too). */
+export const SITE_HREF = '#/site';
+
+/** A post as the editor's server lists it (GET /site-editor/api/pages, WebGenEngine's blog.md). */
+export interface SiteEditorPage {
+  id: string;
+  /** Null for a page that has no title yet. */
+  title: string | null;
+  /** YYYY-MM-DD, or null. */
+  date: string | null;
+  /** On the site now. */
+  published: boolean;
+  /** Last save of the draft, in milliseconds. */
+  savedAt: number | null;
+}
+
+export interface SiteEditorPagesResponse {
+  ok: boolean;
+  pages: SiteEditorPage[];
+}
+
+/** The editor opened on one post. */
+export function siteEditorPostHref(id: string): string {
+  return `${SITE_EDITOR_PREFIX}/editor/index.html#p=${encodeURIComponent(id)}`;
+}
+
+/** Newest first: by the post's date, then by the last save; a post without a date last. */
+export function sortSitePages(pages: SiteEditorPage[]): SiteEditorPage[] {
+  return [...pages].sort((a, b) => (b.date ?? '').localeCompare(a.date ?? '') || (b.savedAt ?? 0) - (a.savedAt ?? 0) || a.id.localeCompare(b.id));
+}

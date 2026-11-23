@@ -33,6 +33,8 @@ const ICONS: Record<NavKey, ReactNode> = {
   // A receipt with a torn edge and lines (2026-11-05).
   books: <path d="M6 3.5h12v17l-2-1.5-2 1.5-2-1.5-2 1.5-2-1.5-2 1.5zM9 8h6M9 11.5h6M9 15h4" />,
   bot: <path d="M4.5 6.5h15a1.5 1.5 0 0 1 1.5 1.5v7.5a1.5 1.5 0 0 1-1.5 1.5h-8.5L7 20.5V17h-2.5A1.5 1.5 0 0 1 3 15.5V8a1.5 1.5 0 0 1 1.5-1.5zM8 12h.01M12 12h.01M16 12h.01" />,
+  // A globe (Webサイト, 2026-11-23). The rental screen draws the same path.
+  site: <path d="M12 3.5a8.5 8.5 0 1 0 0 17 8.5 8.5 0 0 0 0-17zM3.5 12h17M12 3.5c2.2 2.3 3.4 5.2 3.4 8.5s-1.2 6.2-3.4 8.5M12 3.5C9.8 5.8 8.6 8.7 8.6 12s1.2 6.2 3.4 8.5" />,
   // A padlock (パスワード帳, 2026-11-23). The rental screen draws the same path.
   vault: <path d="M6.5 10.5h11a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1v-8a1 1 0 0 1 1-1zM8.5 10.5V7.5a3.5 3.5 0 0 1 7 0v3M12 14.5v2.5" />,
   settings: <path d="M4 7h9m4 0h3M4 17h3m4 0h9M15 4.5v5M9 14.5v5" />,

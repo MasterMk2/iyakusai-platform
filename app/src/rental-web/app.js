@@ -1129,3 +1129,12 @@ fetch('/api/vault/meta', { credentials: 'same-origin' })
     if (meta && meta.enabled === true && meta.canOpen === true) document.querySelectorAll('[data-vault-tab]').forEach((li) => { li.hidden = false; });
   })
   .catch(() => {});
+
+// Webサイト (2026-11-23): its tab, like the app's, is there only for the people who may write and the access
+// administrators, on a server that has the editor. Anything else, an error included, leaves it hidden.
+fetch('/api/site-editor/meta', { credentials: 'same-origin' })
+  .then((response) => (response.ok ? response.json() : null))
+  .then((meta) => {
+    if (meta && meta.enabled === true && (meta.canEdit === true || meta.canAdminister === true)) document.querySelectorAll('[data-site-tab]').forEach((li) => { li.hidden = false; });
+  })
+  .catch(() => {});
