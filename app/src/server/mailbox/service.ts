@@ -1,5 +1,5 @@
 import { LIMITS, STATUS_LABELS, type AssigneeCandidate, type AttachmentView, type HandlingStatus, type LabelFacet, type MailboxSummary, type NoteView, type ReceiptImagesView, type ReceiptView, type ThreadDetailResponse, type ThreadListResponse, type ThreadStatusResponse, type TriageView } from '../../shared/api.js';
-import { departmentsOfLabel, TEMPORARY_STAFF_DEPARTMENT, type MailAccessResponse } from '../../shared/mailbox.js';
+import { departmentsOfLabel, TEMPORARY_STAFF_DEPARTMENT, type MailAccessResponse, type MailApprovalMark, type MailApprovalMarkSkip, type MailApprovalMarksResponse } from '../../shared/mailbox.js';
 import { sanitizeMailHtml } from '../domain/sanitize.js';
 import { normalizeLabels } from '../domain/triage.js';
 import { DomainError, notFound, type User } from '../domain/types.js';
@@ -9,7 +9,7 @@ import { AUTO_ACTOR, AUTO_ACTOR_NAME, dueEntries, loadDue, messageDueView, NO_DU
 import type { MailboxDefinition } from './config.js';
 import { contentIdOf, eachLimited, imageSources, MAIL_IMAGE_MAX_BYTES, MAIL_IMAGES_TOTAL_BYTES, MAIL_REMOTE_IMAGES_MAX, remoteImageUrl, sniffMailImage, type RemoteImageFetch } from './images.js';
 import { SIGN_IN_MAIL_SUBJECT, SIGN_IN_MAIL_TEXT } from './restricted.js';
-import { approvalRequired, approvalRequiredMailboxesOf, departmentReviewGrants, departmentReviewMailboxes, reviewedMailboxes, reviewGrants, reviewMailboxesOf, setApprovalRequired, setDepartmentReviewGrant, setReviewGrant } from './approval-store.js';
+import { approvalRequired, approvalRequiredMailboxesOf, departmentReviewGrants, departmentReviewMailboxes, reviewedMailboxes, reviewGrants, reviewMailboxesOf, setApprovalRequired, setApprovalRequiredMany, setDepartmentReviewGrant, setReviewGrant } from './approval-store.js';
 import { normalizeForSearch, type AttachmentRow, type ListFilter, type MailboxStore, type MessageRow } from './store.js';
 
 // What the committee mailbox shows. Every signed-in committee member reads every configured mailbox
@@ -530,6 +530,50 @@ export class MailboxService {
     if (kind === 'review') setReviewGrant(this.store, userId, mailboxId, on, actor.id, now);
     else setApprovalRequired(this.store, userId, mailboxId, on, actor.id, now);
     return this.accessMatrix();
+  }
+
+  /**
+   * 承認必須 for many people and mailboxes at once (2026-11-23), saved in one transaction. Setting skips, instead of
+   * failing the whole change: a mailbox the server cannot send from, an account that is gone, a person with no send
+   * grant there (their mail waits already: the mark would change nothing), and a mailbox nobody but the person
+   * reviews (with the mark their mail from it could not be sent at all). `restore` puts back what an undo took
+   * away, with the rules of one tick only. Removing needs only a known mailbox, as for one tick.
+   */
+  setApprovalMarks(actor: User, items: MailApprovalMark[], on: boolean, restore: boolean, now: string): MailApprovalMarksResponse {
+    const seen = new Set<string>();
+    const unique = items.filter((i) => {
+      const key = `${i.userId}|${i.mailboxId}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    const marked = new Set(approvalRequired(this.store).map((g) => `${g.user_id}|${g.mailbox_id}`));
+    const active = this.people.list().filter((u) => !u.disabled);
+    const reviewers = new Map<string, string[]>();
+    const reviewersOf = (mailboxId: string) => {
+      let ids = reviewers.get(mailboxId);
+      if (!ids) reviewers.set(mailboxId, (ids = active.filter((u) => this.grantedMailboxes(u, 'review').has(mailboxId)).map((u) => u.id)));
+      return ids;
+    };
+    const kept: MailApprovalMark[] = [];
+    const skipped: MailApprovalMarksResponse['skipped'] = [];
+    for (const item of unique) {
+      const reason = ((): MailApprovalMarkSkip | null => {
+        if (!this.mailbox(item.mailboxId)) return 'mailbox';
+        if (!on || marked.has(`${item.userId}|${item.mailboxId}`)) return null;
+        if (!this.sendable?.includes(item.mailboxId)) return 'mailbox';
+        const person = this.people.lookup(item.userId);
+        if (!person || person.disabled) return 'person';
+        if (restore) return null;
+        if (departmentsOfLabel(person.roleLabel).includes(TEMPORARY_STAFF_DEPARTMENT) || !this.grantedMailboxes(person, 'send').has(item.mailboxId)) return 'cannot_send';
+        if (!reviewersOf(item.mailboxId).some((id) => id !== person.id)) return 'no_reviewer';
+        return null;
+      })();
+      if (reason) skipped.push({ ...item, reason });
+      else kept.push(item);
+    }
+    const changed = setApprovalRequiredMany(this.store, kept, on, actor.id, now);
+    return { access: this.accessMatrix(), changed, skipped };
   }
 
   setGrant(actor: User, userId: string, mailboxId: string, edit: boolean, now: string): MailAccessResponse {

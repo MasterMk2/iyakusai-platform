@@ -88,13 +88,13 @@ test('a PC shows the list beside one part; a link opens another part and keeps a
   await expect(page.getByTestId('mail-access')).toBeVisible();
   await expect(part(page, 'account')).toBeHidden();
   await expect(nav(page).getByRole('link', { name: 'メールの権限' })).toHaveAttribute('aria-current', 'page');
-  await page.getByTestId('mail-access').getByRole('searchbox', { name: '名前で絞り込み' }).fill('花子');
+  await page.getByTestId('mail-access').getByRole('searchbox', { name: '名前・部局で絞り込み' }).fill('花子');
 
   await nav(page).getByRole('link', { name: '物品の権限' }).click();
   await expect(page.getByTestId('rental-access')).toBeVisible();
   await page.goBack();
   await expect(page.getByTestId('mail-access')).toBeVisible();
-  await expect(page.getByTestId('mail-access').getByRole('searchbox', { name: '名前で絞り込み' })).toHaveValue('花子');
+  await expect(page.getByTestId('mail-access').getByRole('searchbox', { name: '名前・部局で絞り込み' })).toHaveValue('花子');
 
   // The mail and the official LINE ticks have the same names; only the part on the screen can be found.
   await expect(page.getByRole('checkbox', { name: 'システム課 の送信権限' })).toHaveCount(1);

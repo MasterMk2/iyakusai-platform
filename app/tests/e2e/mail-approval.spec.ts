@@ -1,6 +1,6 @@
 import { mkdirSync } from 'node:fs';
 import type { Page } from '@playwright/test';
-import type { MailAccessResponse, MailApprovalDetail, MailApprovalEditRequest, MailApprovalMessage, MailApprovalSubmitRequest, MailSendOptions } from '../../src/shared/mailbox.js';
+import type { MailAccessResponse, MailApprovalDetail, MailApprovalEditRequest, MailApprovalMark, MailApprovalMarksRequest, MailApprovalMessage, MailApprovalSubmitRequest, MailSendOptions } from '../../src/shared/mailbox.js';
 import { expect, test } from './fixtures.js';
 
 // Approval before sending (2026-11-11) on the production UI with synthetic responses: asking from the compose
@@ -286,5 +286,93 @@ test('the grants screen has the review tick for people and departments and the �
     { userId: 'iy-000001', mailboxId: 'contact', review: true },
     { userId: 'iy-000002', mailboxId: 'contact', approval: true },
     { department: '総務部', mailboxId: 'contact', review: true },
+  ]);
+});
+
+test('the grants screen sets 承認必須 for the picked people in every mailbox at once, and undoes exactly that', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const HANAKO = '合成 花子';
+  const sponsor = { id: 'sponsorship', name: '協賛', address: 'sponsor@committee.example' };
+  const data: MailAccessResponse = {
+    people: [
+      { id: 'iy-000001', displayName: CHAIR, roleLabel: '総務部' },
+      { id: 'iy-000002', displayName: ME, roleLabel: '企画部' },
+      { id: 'iy-000003', displayName: HANAKO, roleLabel: '企画部' },
+    ],
+    mailboxes: [{ id: 'contact', name: '問い合わせ', address: 'contact@committee.example' }, sponsor],
+    grants: [], sendGrants: [{ userId: 'iy-000002', mailboxId: 'sponsorship' }], sendable: ['contact', 'sponsorship'], departments: ['企画部', '総務部'],
+    departmentGrants: [{ department: '企画部', mailboxId: 'contact', kind: 'send' }],
+    reviewGrants: [{ userId: 'iy-000001', mailboxId: 'contact' }, { userId: 'iy-000001', mailboxId: 'sponsorship' }], approvalRequired: [],
+    ingest: { messages: 1, latestStoredAt: '2026-11-11T00:00:00Z', sources: {} },
+  };
+  const bodies: MailApprovalMarksRequest[] = [];
+  await page.route('**/api/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const respond = (json: unknown, status = 200) => route.fulfill({ status, json });
+    if (path === '/api/session') return respond({
+      demoAuthentication: false, authMode: 'discord', user: { id: 'iy-000001', displayName: CHAIR, roleLabel: '総務部', canManageAccess: true },
+      account: { initialLoginId: 'iy-000001', studentId: '21000001', departments: ['総務部'], signIn: { previousLoginAt: null, failedSince: 0 } },
+      degraded: false, passwordPolicy: { minLength: 12, maxLength: 128 }, sessionDays: 14,
+    });
+    if (path === '/api/mail/status') return respond({ enabled: true, canOpen: true, reauthRequired: false, idleHours: 12, unhandledTotal: 0, approvals: { toReview: 0, returned: 0 } });
+    if (path === '/api/mail/admin/access/approval') {
+      // As the server does: only people who can send at once from a mailbox get the mark there.
+      const body = route.request().postDataJSON() as MailApprovalMarksRequest;
+      bodies.push(body);
+      const canSend = (m: MailApprovalMark) => (m.userId !== 'iy-000001' && m.mailboxId === 'contact') || data.sendGrants.some((g) => g.userId === m.userId && g.mailboxId === m.mailboxId);
+      const key = (m: MailApprovalMark) => `${m.userId}|${m.mailboxId}`;
+      const marked = new Set((data.approvalRequired ?? []).map(key));
+      const skipped = body.approval && !body.restore ? body.items.filter((m) => !canSend(m)).map((m) => ({ ...m, reason: 'cannot_send' as const })) : [];
+      const changed = body.items.filter((m) => !skipped.some((s) => key(s) === key(m)) && marked.has(key(m)) !== body.approval);
+      for (const m of changed) {
+        if (body.approval) marked.add(key(m));
+        else marked.delete(key(m));
+      }
+      data.approvalRequired = [...marked].map((k) => ({ userId: k.split('|')[0]!, mailboxId: k.split('|')[1]! }));
+      return respond({ access: data, changed, skipped });
+    }
+    if (path === '/api/mail/admin/access') return respond(data);
+    return respond({ error: 'not_found' }, 404);
+  });
+  await page.goto('/#/settings/mail');
+  const panel = page.getByTestId('mail-access');
+  await expect(panel.getByLabel(`${ME} さんを選ぶ`)).toHaveCount(0);
+  await panel.getByRole('button', { name: '承認必須をまとめて付ける・外す' }).click();
+  const bulk = panel.getByTestId('approval-bulk');
+  await expect(bulk.getByRole('button', { name: '承認必須を付ける' })).toBeDisabled();
+  // The department's people through the filter, then everyone shown, in every mailbox the server sends from.
+  await panel.getByRole('searchbox', { name: '名前・部局で絞り込み' }).fill('企画部');
+  await bulk.getByLabel('表示中の 2 人を選ぶ').check();
+  await expect(panel.getByLabel(`${ME} さんを選ぶ`)).toBeChecked();
+  await expect(panel.getByLabel(`${HANAKO} さんを選ぶ`)).toBeChecked();
+  await panel.getByRole('searchbox', { name: '名前・部局で絞り込み' }).fill('');
+  await expect(bulk.getByText('2 人を選んでいます。')).toBeVisible();
+  await bulk.getByLabel('送信できる受信箱すべて（2 個）').check();
+  await bulk.getByRole('button', { name: '承認必須を付ける' }).click();
+  const result = bulk.getByTestId('approval-bulk-result');
+  await expect(result).toContainText('2 人の承認必須を付けました（問い合わせ・協賛・計 3 件）。');
+  await expect(result).toContainText('付けなかったもの：送信権限の無い 1 件（もともと承認を通ります）。');
+  await expect(panel.getByLabel(`${ME} さんの承認必須`)).toBeChecked();
+  await expect(panel.getByLabel(`${HANAKO} さんの承認必須`)).toBeChecked();
+  await page.screenshot({ path: '.tmp/mail-approval-bulk-desktop.png', fullPage: true });
+  await page.setViewportSize({ width: 375, height: 800 });
+  await bulk.screenshot({ path: '.tmp/mail-approval-bulk-phone.png' });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.setViewportSize({ width: 1280, height: 900 });
+
+  await result.getByRole('button', { name: '元に戻す' }).click();
+  await expect(result).toHaveText('元に戻しました（3 件）。');
+  await expect(panel.getByLabel(`${ME} さんの承認必須`)).not.toBeChecked();
+  await bulk.getByRole('button', { name: '閉じる' }).click();
+  await expect(panel.getByLabel(`${ME} さんを選ぶ`)).toHaveCount(0);
+  expect(bodies).toEqual([
+    {
+      items: [
+        { userId: 'iy-000002', mailboxId: 'contact' }, { userId: 'iy-000002', mailboxId: 'sponsorship' },
+        { userId: 'iy-000003', mailboxId: 'contact' }, { userId: 'iy-000003', mailboxId: 'sponsorship' },
+      ],
+      approval: true,
+    },
+    { items: [{ userId: 'iy-000002', mailboxId: 'contact' }, { userId: 'iy-000002', mailboxId: 'sponsorship' }, { userId: 'iy-000003', mailboxId: 'contact' }], approval: false },
   ]);
 });

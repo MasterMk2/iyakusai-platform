@@ -41,6 +41,34 @@ export interface MailAccessResponse {
   ingest: { messages: number; latestStoredAt: string | null; sources: Record<string, number> };
 }
 
+/** A person and a mailbox: one 承認必須 mark. */
+export interface MailApprovalMark {
+  userId: string;
+  mailboxId: string;
+}
+
+/** PUT /api/mail/admin/access/approval (2026-11-23): 承認必須 for many people and mailboxes at once. */
+export interface MailApprovalMarksRequest {
+  items: MailApprovalMark[];
+  approval: boolean;
+  /** Puts back the marks an earlier change took away, with the rules of one tick (sending and reviewers are not checked). */
+  restore?: boolean;
+}
+
+/**
+ * Why a mark was not set: `mailbox` the server cannot send from it, `person` the account is gone, `cannot_send`
+ * the person has no send grant there (their mail waits already, so the mark would change nothing), `no_reviewer`
+ * nobody but the person reviews that mailbox (with the mark, their mail from it could not be sent at all).
+ */
+export type MailApprovalMarkSkip = 'mailbox' | 'person' | 'cannot_send' | 'no_reviewer';
+
+export interface MailApprovalMarksResponse {
+  access: MailAccessResponse;
+  /** The marks that were set or removed now (the others were already so, or skipped). */
+  changed: MailApprovalMark[];
+  skipped: (MailApprovalMark & { reason: MailApprovalMarkSkip })[];
+}
+
 /** The department of temporary staff accounts: never granted mail (they use the rental screen only). */
 export const TEMPORARY_STAFF_DEPARTMENT = '臨時スタッフ';
 
