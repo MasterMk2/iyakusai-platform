@@ -1399,6 +1399,17 @@ button.task-tree-toggle:focus-visible { outline-offset: -3px; }
 .mail-compose .confirm-check { cursor: pointer; min-height: 44px; }
 .grant-via { font-size: 14px; border-radius: 10px; padding: 0 6px; background: var(--neutral-bg); color: var(--muted); }
 .grant-failed { font-size: 14px; color: var(--red); font-weight: 700; }
+/* 承認必須 for many people at once (2026-11-23): the bar above the people, and the pick box at the start of a row. */
+.grant-bulk-open { margin: 0 0 8px; }
+.grant-bulk { border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; margin: 0 0 8px; background: var(--surface); display: grid; gap: 6px; max-width: 680px; }
+.grant-bulk .hint, .grant-bulk-count { margin: 0; font-size: 14px; }
+.grant-bulk-check, .grant-bulk-scope label, .grant-pick { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; font-size: 14px; cursor: pointer; }
+.grant-bulk-scope { border: 0; margin: 0; padding: 0; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 0 16px; }
+.grant-bulk-scope legend { float: left; margin-right: 4px; padding: 0; font-size: 14px; font-weight: 700; color: var(--muted); line-height: 44px; }
+.grant-bulk input[type='checkbox'], .grant-bulk input[type='radio'], .grant-pick input { width: 20px; height: 20px; min-height: 0; padding: 0; margin: 0; flex: none; cursor: pointer; }
+.grant-bulk-result { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 0; }
+.grant-bulk-result span { flex: 1 1 18em; }
+.grant-pick { padding: 0 6px; }
 
 /* Committee contacts (2026-10-26): a list to search and the opened contact, two panes like the tasks (one on a phone). */
 .contacts-layout { grid-template-columns: minmax(380px, 0.9fr) minmax(0, 1fr); }
