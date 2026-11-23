@@ -15,7 +15,7 @@ export interface MailStatusResponse {
   unhandledTotal: number | null;
   /** Mail waiting for an approval (2026-11-11); null while the mailbox cannot be opened, absent without sending or on an older server. */
   approvals?: MailApprovalCounts | null;
-  /** The server lists sent mail (GET /api/mail/sent, 2026-11-23); absent on an older server. */
+  /** The server lists sent mail (GET /api/mail/sent, 2026-11-23); absent while the mailbox cannot be opened, or on an older server. */
   sentBox?: true;
 }
 

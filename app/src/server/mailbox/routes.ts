@@ -476,7 +476,7 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
     const reauthRequired = canOpen && idle(session, now());
     const open = canOpen && !reauthRequired;
     // The approval counts exist only with sending (absent otherwise, as on a server before 2026-11-11).
-    return { enabled: true, canOpen, reauthRequired, idleHours: rt.config.idleHours, unhandledTotal: open ? service.unhandledTotal() : null, ...(approvals ? { approvals: open ? approvals.counts(deps.requireUser(request)) : null } : {}), sentBox: true };
+    return { enabled: true, canOpen, reauthRequired, idleHours: rt.config.idleHours, unhandledTotal: open ? service.unhandledTotal() : null, ...(approvals ? { approvals: open ? approvals.counts(deps.requireUser(request)) : null } : {}), ...(open ? { sentBox: true as const } : {}) };
   });
 
   // Mailbox names and counts (home screen and side bar): needs the idle limit, but is not mail use.

@@ -748,7 +748,7 @@ export function App() {
     </span>
   );
   // 送信箱 (2026-11-23): mail sent from the committee mailboxes, for everyone who reads the mail (sending or not).
-  const sentEntry = !lineTab && !isAdminView && committeeMail?.sentBox === true;
+  const sentEntry = !lineTab && !isAdminView && committeeMail?.sentBox === true && committeeMail.canOpen && !committeeMail.reauthRequired;
   const sentView = sentEntry && route.mailSent && !approvalView;
   const inboxDetail = !isAdminView && (lineTab ? !!route.conversationId || !!broadcastAccount : !!route.threadId || composing || !!approvalId);
   // One message in two mailboxes counts once in the committee total; the per-mailbox counts would count it twice.
