@@ -14,8 +14,32 @@ export interface SiteEditorMetaResponse {
   canEdit: boolean;
   /** Publishing and taking a publish back; implies canEdit. */
   canPublish: boolean;
-  /** The editor's page in this app, for a person who may edit. */
+  /** An access administrator: chooses who may write and who may publish. */
+  canAdminister: boolean;
+  /** The editor's page in this app (the list of posts), for a person who may edit. */
   editorUrl: string | null;
   /** Where the published site is seen, for a person who may edit, when the configuration says. */
   siteUrl: string | null;
 }
+
+/** Who may write (edit) and who may publish (2026-11-23): chosen by the access administrators on the settings screen. */
+export interface SiteEditorAccess {
+  /** Writing: every committee member, or only the departments and people listed. */
+  editors: { everyone: boolean; departments: string[]; userIds: string[] };
+  /** Publishing (and taking a publish back): the departments and people listed. Access administrators always may. */
+  publishers: { departments: string[]; userIds: string[] };
+  /** 0 until the first save on the screen (then the configuration's lists apply). */
+  version: number;
+  updatedAt: string | null;
+  updatedByName: string | null;
+}
+
+export interface SiteEditorAccessResponse {
+  access: SiteEditorAccess;
+  choices: {
+    departments: string[];
+    people: { id: string; name: string; departments: string[] }[];
+  };
+}
+
+export const SITE_EDITOR_LIMITS = { departments: 50, people: 200 } as const;

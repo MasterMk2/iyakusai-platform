@@ -50,6 +50,7 @@ import { VaultCipher } from './vault/cipher.js';
 import type { VaultRuntime } from './vault/routes.js';
 import { demoVaultCipher, seedVaultDemo } from './vault/seed.js';
 import { VaultStore } from './vault/store.js';
+import { SITE_EDITOR_ACCESS_FILE, SiteEditorAccessStore } from './site-editor/access.js';
 import { DecisionsStore } from './decisions/store.js';
 import { seedDecisionsDemo } from './decisions/seed.js';
 import { openDemoBooks } from './payments/demo.js';
@@ -500,7 +501,8 @@ export async function composeServer(config: ServerConfig, overrides: ComposeOver
     bulletin,
     vault,
     // The website editor (2026-11-23): on with site-editor.json next to the mail configuration (site-editor/config.ts).
-    siteEditor: config.mailbox?.siteEditor ? { config: config.mailbox.siteEditor } : null,
+    // Who may write and publish, as the access administrators chose: site-editor-access.json in the mail folder.
+    siteEditor: config.mailbox?.siteEditor ? { config: config.mailbox.siteEditor, access: new SiteEditorAccessStore(path.join(config.mailbox.dataDir, SITE_EDITOR_ACCESS_FILE)) } : null,
     rollover,
     ...(discord ? { discord } : {}),
     ...(account ? { account } : {}),

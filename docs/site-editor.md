@@ -1,6 +1,6 @@
-# Webサイトの編集
+# Webサイトの編集（ブログ）
 
-委員会の公開サイトのページを、統合アプリのログインと権限の内側から編集・公開する仕組みです（2026-11-23）。編集画面と保存には [WebGenEngine](https://github.com/MasterMk2/WebGenEngine)（WGE。MIT ライセンス）を使います。
+委員会の公開サイトのブログを、統合アプリのログインと権限の内側から書いて公開する仕組みです（2026-11-23）。編集画面と保存には [WebGenEngine](https://github.com/MasterMk2/WebGenEngine)（WGE。MIT ライセンス）を使います。WGE の側の仕組みは、WGE の `docs/design/server.md` §6 と `docs/design/blog.md` にあります。
 
 ## 1. 構成
 
@@ -13,17 +13,31 @@
 - 統合アプリは、誰がどこまでしてよいかを確かめ、許した要求だけを署名して編集サーバーへ中継します（`app/src/server/site-editor/routes.ts`）。
 - 編集サーバーは、署名の正しい要求にだけ答えます。署名の形式はほかの部品の間と同じ `svc-auth/v1` で、actor はアカウントの ID（`iy-…`）です。学籍番号は渡しません。
 - 公開サイトは統合アプリでは配りません。委員が書いた HTML を、メールやパスワード帳と同じオリジンに載せないためです。公開用のフォルダは、別のオリジンの静的配信が配ります。
+- ブログとして動かすと（WGE の `WGE_BLOG_TITLE`）、記事の一覧（`posts.html`）から書き始め、公開のたびに目次（`index.html`）とフィード（`feed.xml`）が作り直されます。
 
 ## 2. 中継の決まり
 
-- 通すのは、エディタの道と方法だけです（`GET /site-editor/editor/…`・`/site-editor/source/…`・`/site-editor/api/ping`・版の読み出し、`POST …/load`・`…/draft`・`…/publish`・`…/undo-publish`）。クエリ、`%` のエスケープ、`.` から始まる名前、`..`、`//` を含む道は 404 にします。
-- 編集の権限で、エディタ・保存・版の読み出しができます。公開と公開の取り消しには、公開の権限が要ります。
+- 通すのは、エディタの道と方法だけです。
+  - 画面：`GET /site-editor/editor/…`（`index.html`・`posts.html` とその部品）・`/site-editor/source/…`
+  - 画像（プレビュー用）：`GET /site-editor/media/<16 桁の 16 進>.(jpg|png|gif|webp)`。SVG は通しません
+  - API：`GET /site-editor/api/ping`・`…/pages`・版の読み出し、`POST …/load`・`…/draft`・`…/meta`（題名と日付）・`…/api/media`（画像を送る）・`…/publish`・`…/undo-publish`
+  - クエリ、`%` のエスケープ、`.` から始まる名前、`..`、`//` を含む道は 404 にします。
+- 書く権限で、エディタ・保存・題名と日付・画像・版の読み出しができます。公開と公開の取り消しには、公開の権限が要ります。
 - 編集サーバーに渡すのは、本文のバイト列と、`Content-Type: application/json`・`X-WGE-Request` の 2 つのヘッダーだけです。Cookie は渡しません。
 - 返すのは、状態・決まった種類の型・本文だけです。リダイレクトは追わず、20 秒で打ち切り、8MB を超える応答は返しません。編集サーバーが署名を断った（403）ときは、鍵か時計の食い違いとして 502 にし、ログに 1 回だけ書きます（利用者は書きません）。
 - エディタの API への断りは、`{ "wge": 1, "ok": false, "reason": …, "message": … }` の形です。エディタは `message` をそのまま出し、`forbidden`・`unauthenticated` では保存を再試行しません。
 - `/site-editor/` は `/api/` の外にあるので、エディタの書き込みに `X-SMM-CSRF` は要りません。ログインの関門（公開オリジンからの書き込みだけを受ける）はそのままかかり、Discord のログインのセッションもこの道で引きます。臨時スタッフのアカウントは使えません。
 
-## 3. 設定（`site-editor.json`）
+## 3. 書ける人・公開できる人
+
+- 設定 →「Webサイト（ブログ）」で、権限管理者が選びます。
+  - 書ける人：「委員全員」か「選んだ部局と人だけ」
+  - 公開できる人：部局（役員会など）と人
+- 権限管理者は、選ばなくても書くことと公開ができます。
+- 選んだ内容は、メールの保存先の `site-editor-access.json` に置きます（アプリのバックアップに入ります）。画面から一度も選んでいないあいだは、`site-editor.json` の `editors`・`publishers` が効きます。
+- API は `GET /api/site-editor/access`・`PUT /api/site-editor/access`（権限管理者だけ）です。保存するときは読んだときの版（`expectedVersion`）を送り、先にほかの人が変えていれば 409 で断ります。いまの委員にいない部局や人を新しく選ぶことはできません（前から選ばれている名前は残せます）。
+
+## 4. 設定（`site-editor.json`）
 
 `mailbox.json` と同じフォルダに置きます。無ければ、この機能は何も出ません。読めないときは、この機能だけを止めて起動します。
 
@@ -32,9 +46,9 @@
   "version": 1,
   "upstream": "http://wge:8080",
   "keyFile": "/config/site-editor.key",
-  "siteUrl": "https://example.org/",
-  "editors": { "departments": ["広報課"], "userIds": [] },
-  "publishers": { "departments": [], "userIds": ["iy-00000000"] }
+  "siteUrl": "https://example.org/blog/",
+  "editors": { "everyone": true },
+  "publishers": { "departments": [], "userIds": [] }
 }
 ```
 
@@ -42,36 +56,33 @@
 |---|---|
 | `upstream` | 編集サーバーの場所（`http://ホスト名:ポート`。道・クエリ・利用者名は付けない）。統合アプリと同じ内部のネットワークに置く |
 | `keyFile` | 編集サーバーと共有する鍵のファイル。32 バイト以上の乱数（`openssl rand -hex 32`）。権限 600。メールの取り込み・銀行のトークン・パスワード帳の鍵と同じ値だと、この機能を止める |
-| `siteUrl` | 公開サイトの URL（任意）。設定の画面に出す |
-| `editors` | 編集できる人。`departments` は役割の名前（アカウントの画面の「所属」）、`userIds` はアカウントの ID（アカウントの画面の「ログインID」） |
-| `publishers` | 公開もできる人。権限管理者は、書かなくても編集と公開ができる |
+| `siteUrl` | 公開サイト（ブログ）の URL（任意）。設定の画面に出す |
+| `editors` | 最初の書ける人。`everyone: true` で委員全員。`departments` は役割の名前（アカウントの画面の「所属」）、`userIds` はアカウントの ID（アカウントの画面の「ログインID」） |
+| `publishers` | 最初の公開できる人（`departments`・`userIds`） |
 
-## 4. 編集サーバー（WebGenEngine）
+## 5. 編集サーバー（WebGenEngine）
 
-WGE のリポジトリの `Dockerfile` で作ったコンテナを、統合アプリと同じ内部のネットワークで動かします。ポートはホストに公開しません。詳しくは WGE の `docs/design/server.md` §6 です。
+WGE のリポジトリの `Dockerfile` で作ったコンテナを、統合アプリと同じ内部のネットワークで動かします。ポートはホストに公開しません。
 
 | 環境変数 | 内容 |
 |---|---|
 | `WGE_SVC_KEY_FILE` | 上の `keyFile` と同じ鍵（読み取り専用でつなぐ） |
 | `WGE_SVC_CLIENT` | `iyakusai-app`（統合アプリが名乗るクライアント ID） |
-| `WGE_DATA` | 下書き・版・変更の記録（`wge.sqlite`・`audit.jsonl`）。バックアップの対象にする |
-| `WGE_SITE_DIR` | 公開で書き出す先。公開サイト用の静的配信がここを配る |
-| `WGE_SITE_URL` | 公開サイトの URL。エディタの「サイトを見る」が開く |
+| `WGE_DATA` | 下書き・版・題名・変更の記録（`wge.sqlite`・`audit.jsonl`）。バックアップの対象にする |
+| `WGE_SITE_DIR` | 公開で書き出す先。公開サイト用の静的配信がここを配る。記事の画像も `media/` に置かれる |
+| `WGE_SITE_URL` | 公開サイトの URL。エディタの「サイトを見る」とフィードのリンクに使う |
+| `WGE_BLOG_TITLE` | ブログの名前。あるとブログとして動く（目次とフィードを作る） |
 
 鍵かクライアント ID が無いとき、編集サーバーは何も配りません。
 
-## 5. 確かめたこと（2026-11-23）
+## 6. 確かめたこと（2026-11-23）
 
-- テスト：`tests/api/site-editor-http.test.ts`（中継・権限・署名・道の制限・断りの形）、`tests/mailbox/site-editor-discord.test.ts`（Discord のログインでの関門とセッション）、`tests/unit/site-editor-config.test.ts`（設定）。
-- 手元で、実際のブラウザ → 統合アプリ（デモ）→ WGE のコンテナの順につないで確かめた。
-  - 編集の権限だけの人：見出しを書き換えると下書きが保存される。「公開」は統合アプリの文言で断られる
-  - 権限管理者：その下書きを開いて公開できる。公開ページにはエディタ用の印が残らない
-  - 名前の挙がっていない人：エディタが開かない
-  - 変更の記録：誰が保存・公開したかが残る
+- テスト：`tests/api/site-editor-http.test.ts`（中継・権限・署名・道の制限・ブログの道・断りの形・書ける人と公開できる人の選択）、`tests/mailbox/site-editor-discord.test.ts`（Discord のログインでの関門とセッション）、`tests/unit/site-editor-config.test.ts`（設定）。
+- 手元で、実際のブラウザ → 統合アプリ（デモ）→ WGE のコンテナの順につないで確かめた（第 1 段：書く権限だけの人は保存でき公開は断られる、権限管理者は公開できる、名前の無い人は開けない、変更の記録が残る）。ブログの操作の確かめは PR に書く。
 - 統合アプリの CSP（`script-src 'self'`・`frame-ancestors 'none'` など）のままで、エディタのプレビュー（srcdoc の枠）が動く。
 
-## 6. まだのこと
+## 7. まだのこと
 
-- 画像のアップロード、記事（ブログ）の追加と一覧、ページの題名。今のエディタが編集するのは `top` の 1 ページだけです。
 - 生の HTML をそのまま出す経路（WGE の `trustRaw`）。公開の Html は無害化します。
-- 編集・公開できる人を設定の画面で選ぶこと（今は `site-editor.json`）。
+- 記事の削除（今は公開を取り消して下書きに戻すだけ）。
+- 画像は記事（1 段下のページ）向けです（`../media/…`）。
