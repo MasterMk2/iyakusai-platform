@@ -12,6 +12,7 @@ import { isTemporaryStaffLoginId } from '../discord-auth/temporary-staff.js';
 import { registerBulletinRoutes } from '../bulletin/routes.js';
 import type { BulletinStore } from '../bulletin/store.js';
 import { registerVaultRoutes, type VaultRuntime } from '../vault/routes.js';
+import { registerSiteEditorRoutes, type SiteEditorRuntime } from '../site-editor/routes.js';
 import { registerDecisionRoutes } from '../decisions/routes.js';
 import type { DecisionsStore } from '../decisions/store.js';
 import { registerDemoBooks, type DemoBooks } from '../payments/demo.js';
@@ -99,6 +100,11 @@ export interface AppOptions {
    * `demoPasswordAt` (tests) says when it did.
    */
   vault?: (VaultRuntime & { demoPasswordAt?: (userId: string) => number }) | null;
+  /**
+   * The website editor (site-editor.json: WebGenEngine's server and the key shared with it). Absent: off (its meta route
+   * answers enabled: false, /site-editor/ does not exist). Used with the Discord login or the demo.
+   */
+  siteEditor?: SiteEditorRuntime | null;
   /** The festival-day board (dayof.sqlite3). Absent: its routes do not exist (404). */
   dayof?: DayOfStore | null;
   /** The year rollover (rollover.sqlite3 beside the mail, or the demo's), with the demo's organizations file. Absent: no rollover routes. */
@@ -606,6 +612,21 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     nameOf: (userId) => (discordApi ? discordApi.lookupUser(userId)?.displayName : findUser(store.current, userId)?.displayName) ?? '（不明な利用者）',
     clock,
     parse,
+  });
+  // The website editor (2026-11-23): committee members as for the notice board, then by site-editor.json's editors and
+  // publishers (see site-editor/routes.ts). Only with the Discord login or the demo.
+  const siteEditor = options.siteEditor ?? null;
+  await registerSiteEditorRoutes(app, siteEditor && (discordApi || demo) ? siteEditor : null, {
+    viewer: (request) => {
+      const user = requireUser(request);
+      if (!isBoardMember(user)) return null;
+      if (discordApi) {
+        const session = discordApi.currentSession(request);
+        if (!session || discordApi.discordUserIdOf(user.id) === null || session.temporaryStaff === true || session.discordUserId.startsWith('staff:')) return null;
+      } else if (!demo) return null;
+      return { user, departments: departmentsOfLabel(user.roleLabel) };
+    },
+    now: () => Date.parse(clock()),
   });
   if (demo && options.demoBooks) registerDemoBooks(app, options.demoBooks, { requireUser, lookupUser: (userId) => findUser(store.current, userId), listUsers: () => store.current.users.filter((u) => !u.disabled), clock, parse });
   // Festival-day board (2026-11-03, dayof/routes.ts). Members as for the decision register above; temporary staff read the notices marked for them.

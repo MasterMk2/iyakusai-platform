@@ -499,6 +499,8 @@ export async function composeServer(config: ServerConfig, overrides: ComposeOver
     dayof,
     bulletin,
     vault,
+    // The website editor (2026-11-23): on with site-editor.json next to the mail configuration (site-editor/config.ts).
+    siteEditor: config.mailbox?.siteEditor ? { config: config.mailbox.siteEditor } : null,
     rollover,
     ...(discord ? { discord } : {}),
     ...(account ? { account } : {}),
