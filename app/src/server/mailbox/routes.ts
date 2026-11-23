@@ -132,8 +132,11 @@ const filters = {
 };
 const dueDay = z.string().regex(DUE_DATE_PATTERN);
 const threadQuery = z.strictObject({ ...filters, ...page });
-// 送信箱 (2026-11-23): the From mailbox, a search, the signed-in person's own, and the ones that may not have gone out.
-const sentQuery = z.strictObject({ mailboxId: shortId.optional(), q: z.string().max(LIMITS.queryMaxLength).optional(), mine: z.enum(['1']).optional(), state: z.enum(['problem']).optional(), ...page });
+// 送信箱 (2026-11-23): the From mailbox or members' own addresses, a search, the signed-in person's own, and the ones
+// that may not have gone out.
+const sentQuery = z
+  .strictObject({ mailboxId: shortId.optional(), personal: z.enum(['1']).optional(), q: z.string().max(LIMITS.queryMaxLength).optional(), mine: z.enum(['1']).optional(), state: z.enum(['problem']).optional(), ...page })
+  .refine((q) => !(q.mailboxId && q.personal), { message: '受信箱と個人のアドレスは同時に指定できません' });
 const inboxQuery = z.strictObject({ ...filters, ...page, source: z.enum(['all', 'email', 'line']).default('all'), lineAccountId: shortId.optional() });
 // `source` narrows the labels to one tab's kind (2026-11-03: メール and 公式LINE are separate tabs).
 const labelQuery = z.strictObject({ source: z.enum(['all', 'email', 'line']).default('all'), mailboxId: shortId.optional(), lineAccountId: shortId.optional() });
@@ -500,7 +503,7 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
   // 送信箱 (2026-11-23): mail sent from the committee mailboxes, read like the thread list.
   app.get('/api/mail/sent', async (request): Promise<MailSentResponse> => {
     const user = reader(request, true);
-    return service.listSent(user, deps.parse(sentQuery, request.query));
+    return service.listSent(user, deps.parse(sentQuery, request.query), (address) => signatures?.ownerOf(address) ?? null);
   });
 
   app.get('/api/inbox', async (request): Promise<InboxResponse> => {

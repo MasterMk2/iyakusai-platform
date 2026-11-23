@@ -15,8 +15,8 @@ import { seedState, TEST_HOST, TEST_PORT } from '../helpers.js';
 import { CHAIR, MEMBER, OTHER, PASSWORD, register, setup } from '../discord-auth/helpers.js';
 import { ADM, ALIAS_DOMAIN, COLLECTOR, CONTACT, DOMAIN, ingest, OUTSIDE, PERSONAL, rawMail, SPONSOR, testMailboxConfig } from './helpers.js';
 
-// 送信箱 (2026-11-23): mail sent from the committee mailboxes, from this app or from the account's Gmail directly,
-// and the sends from this app that did not go out (or may not have). Synthetic addresses only (.example).
+// 送信箱 (2026-11-23): mail the committee sent, from this app, from the account's Gmail directly or from a member's own
+// address, and the sends from this app that did not go out (or may not have). Synthetic addresses only (.example).
 
 const ARCHIVE = `archive@${DOMAIN}`;
 const SEND = { smtpHost: 'smtp.example.invalid', smtpPort: 465, smtpUser: COLLECTOR, smtpPasswordFile: '/not/read/in/tests', fromName: '合成 医学薬学祭実行委員会', mailboxes: ['contact', 'sponsorship'] };
@@ -132,7 +132,7 @@ async function grantSend(chair: { cookie: string }, userId: string, mailboxId: s
 const list = async (cookie: string, query = '') => (await call('GET', `/api/mail/sent${query ? `?${query}` : ''}`, { cookie })).json as { items: MailSentItem[]; total: number };
 
 describe('送信箱', () => {
-  it('lists mail sent from the app and from Gmail, newest first, and leaves out mail a group delivered for someone else', async () => {
+  it('lists mail sent from the app, from Gmail and from members own addresses, newest first, and leaves out mail a group delivered for someone else', async () => {
     const chair = await signIn(CHAIR, '21000001');
     const member = await signIn(MEMBER, '21000002');
     expect((await call('GET', '/api/mail/status', { cookie: member.cookie })).json.sentBox).toBe(true);
@@ -140,8 +140,9 @@ describe('送信箱', () => {
     // Sent from Gmail directly with a mailbox's address (on the alias domain too, with a +tag).
     await put(rawMail({ messageId: 'gmail-1@committee.example', from: `"問い合わせ" <${CONTACT}>`, to: `"取引先" <${OUTSIDE}>`, cc: ADM, subject: 'Gmail から送った案内' }), ago(500));
     await put(rawMail({ messageId: 'gmail-2@committee.example', from: `contact+news@${ALIAS_DOMAIN}`, to: OUTSIDE, subject: '別ドメインから送った案内' }), ago(400));
-    // Not the committee's: a post a group delivered with its own address as From, a member's own address, and outside mail.
+    // Not the committee's: a post a group delivered with its own address as From, and outside mail.
     await put(rawMail({ messageId: 'via-1@partner.example', from: `"'取引先 担当' via 協賛" <${SPONSOR}>`, to: SPONSOR, subject: 'グループに届いた問い合わせ' }), ago(300));
+    // A member's own address counts, to a committee group too (decided 2026-11-23).
     await put(rawMail({ messageId: 'own-1@committee.example', from: PERSONAL, to: CONTACT, subject: '委員の個人アドレスから' }), ago(200));
     await put(rawMail({ messageId: 'out-1@partner.example', to: CONTACT, subject: '外からの問い合わせ' }), ago(100));
 
@@ -150,22 +151,29 @@ describe('送信箱', () => {
     const res = await call('POST', '/api/mail/send', { cookie: chair.cookie, raw: form(message({ cc: [CONTACT], bcc: ['hidden@partner.example'] })) });
     expect(res.status).toBe(200);
 
+    // Without a signature naming the address, the row has the address (the mail gives no name).
+    expect((await list(member.cookie)).items[1]).toMatchObject({ subject: '委員の個人アドレスから', via: 'personal', mailbox: null, senderName: PERSONAL });
+    expect((await call('PUT', '/api/signature', { cookie: chair.cookie, body: { title: '', personalEmail: PERSONAL } })).status).toBe(200);
+
     const all = await list(member.cookie);
-    expect(all.total).toBe(3);
-    expect(all.items.map((i) => i.subject)).toEqual(['協賛のお願い', '別ドメインから送った案内', 'Gmail から送った案内']);
+    expect(all.total).toBe(4);
+    expect(all.items.map((i) => i.subject)).toEqual(['協賛のお願い', '委員の個人アドレスから', '別ドメインから送った案内', 'Gmail から送った案内']);
+    expect(all.items[1]).toMatchObject({ via: 'personal', mailbox: null, senderName: '合成 委員長', to: ['contact@committee.example'], recipients: 1 });
     expect(all.items[0]).toMatchObject({ id: res.json.receiptId, threadId: res.json.threadId, state: 'sent', via: 'app', senderName: '合成 委員長', mailbox: { id: 'sponsorship', name: '協賛' }, to: ['取引先 ご担当者様'], recipients: 3, attachments: 0, reason: null });
-    expect(all.items[2]).toMatchObject({ state: 'sent', via: 'gmail', senderName: null, mailbox: { id: 'contact' }, to: ['取引先'], recipients: 2 });
+    expect(all.items[3]).toMatchObject({ state: 'sent', via: 'gmail', senderName: null, mailbox: { id: 'contact' }, to: ['取引先'], recipients: 2 });
     expect(JSON.stringify(all)).not.toContain('hidden@partner.example');
 
     // The account's own copy of the app's mail, collected later, is the same row.
     expect((await put(sent[0]!, ctx.clock.now)).json.status).toBe('linked');
-    expect((await list(member.cookie)).total).toBe(3);
+    expect((await list(member.cookie)).total).toBe(4);
 
     expect((await list(member.cookie, 'mailboxId=contact')).items.map((i) => i.subject)).toEqual(['別ドメインから送った案内', 'Gmail から送った案内']);
-    expect((await list(chair.cookie, 'mine=1')).items.map((i) => i.subject)).toEqual(['協賛のお願い']);
+    expect((await list(chair.cookie, 'mine=1')).items.map((i) => i.subject)).toEqual(['協賛のお願い', '委員の個人アドレスから']);
+    expect((await list(member.cookie, 'personal=1')).items.map((i) => i.subject)).toEqual(['委員の個人アドレスから']);
+    expect((await call('GET', '/api/mail/sent?personal=1&mailboxId=contact', { cookie: member.cookie })).status).toBe(400);
     expect((await list(member.cookie, 'mine=1')).total).toBe(0);
     expect((await list(member.cookie, `q=${encodeURIComponent('gmail 案内')}`)).items.map((i) => i.subject)).toEqual(['Gmail から送った案内']);
-    expect((await list(member.cookie, 'pageSize=1&page=2')).items.map((i) => i.subject)).toEqual(['別ドメインから送った案内']);
+    expect((await list(member.cookie, 'pageSize=1&page=3')).items.map((i) => i.subject)).toEqual(['別ドメインから送った案内']);
     expect((await call('GET', '/api/mail/sent?mailboxId=nowhere', { cookie: member.cookie })).status).toBe(404);
     expect((await call('GET', '/api/mail/sent?state=sent', { cookie: member.cookie })).status).toBe(400);
     expect((await call('GET', '/api/mail/sent')).status).toBe(401);
@@ -194,6 +202,8 @@ describe('送信箱', () => {
     expect(shown.items[1]).toMatchObject({ mailbox: { id: 'contact' }, threadId: null, attachments: null, replyTo: { threadId, subject: '出展の問い合わせ' }, reason: '宛先が受け付けられませんでした（550）' });
     expect(shown.items[0]).toMatchObject({ replyTo: null, reason: null });
     expect((await list(member.cookie, 'state=problem')).total).toBe(2);
+    // A send from this app always has a mailbox's address: none is from an own address.
+    expect((await list(member.cookie, 'personal=1')).total).toBe(0);
     // A search looks in subjects and text, which these sends do not have.
     expect((await list(member.cookie, 'q=%E5%87%BA%E5%B1%95')).items.map((i) => i.state)).toEqual([]);
 

@@ -346,11 +346,17 @@ export interface MailSentItem {
   state: MailSentState;
   /** When it was sent (or the send was started, for one not kept). */
   at: string;
-  /** The From mailbox. */
-  mailbox: { id: string; name: string };
-  /** Sent from this app (the member who wrote it is known) or from the account's Gmail directly. */
-  via: 'app' | 'gmail';
-  /** The member who wrote it; null for mail sent from Gmail. */
+  /** The From mailbox; null for mail a member sent from their own address (2026-11-23). */
+  mailbox: { id: string; name: string } | null;
+  /**
+   * Sent from this app (the member who wrote it is known), from the account's Gmail directly with a mailbox's address,
+   * or from a member's own address on a committee domain.
+   */
+  via: 'app' | 'gmail' | 'personal';
+  /**
+   * The member who wrote it; for a member's own address, the member whose signature names it (設定 › 署名), else the
+   * name the mail gives. Null for mail sent from the account's Gmail.
+   */
   senderName: string | null;
   /** The thread of the message; null for a send whose message is not kept. */
   threadId: string | null;
@@ -368,7 +374,10 @@ export interface MailSentItem {
   reason: string | null;
 }
 
-/** GET /api/mail/sent: `mine=1` the signed-in person's, `state=problem` the ones that may not have gone out (unknown, failed). */
+/**
+ * GET /api/mail/sent: `mailboxId` from one mailbox, `personal=1` from members' own addresses, `mine=1` the signed-in
+ * person's, `state=problem` the ones that may not have gone out (unknown, failed).
+ */
 export interface MailSentResponse {
   items: MailSentItem[];
   total: number;

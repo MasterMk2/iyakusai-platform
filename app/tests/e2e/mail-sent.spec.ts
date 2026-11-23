@@ -4,7 +4,7 @@ import type { MailSendOptions, MailSentItem } from '../../src/shared/mailbox.js'
 import { expect, test } from './fixtures.js';
 
 // 送信箱 (2026-11-23) on the production UI with synthetic responses: the entry for members who send and who do not,
-// the rows (sent from the app, from Gmail, cut off, refused), filters, and opening a thread beside the list on a PC and
+// the rows (sent from the app, from Gmail, from a member's own address, cut off, refused), filters, and opening a thread beside the list on a PC and
 // on a phone. The HTTP tests (tests/mailbox/sent.test.ts) cover the server.
 const box = { id: 'contact', name: '問い合わせ', address: 'contact@committee.example' };
 const sponsor = { id: 'sponsorship', name: '協賛', address: 'sponsorship@committee.example' };
@@ -18,6 +18,7 @@ const item = (changes: Partial<MailSentItem>): MailSentItem => ({
 const ITEMS: MailSentItem[] = [
   item({ id: 'og_0000000000000002', state: 'unknown', at: '2026-11-22T03:00:00Z', via: 'app', senderName: '合成 太郎', threadId: null, subject: null, to: [], recipients: 3, attachments: null }),
   item({ id: 'og_0000000000000001', state: 'failed', at: '2026-11-22T02:00:00Z', mailbox: { id: sponsor.id, name: sponsor.name }, senderName: '合成 委員長', threadId: null, subject: null, to: [], recipients: 1, attachments: null, replyTo: { threadId: 'th_0000000000000002', subject: '協賛の件' }, reason: '宛先が受け付けられませんでした（550）' }),
+  item({ id: 'rc_0000000000000004', at: '2026-11-21T05:00:00Z', mailbox: null, via: 'personal', senderName: '合成 委員長', threadId: 'th_0000000000000004', subject: '個人アドレスから送った連絡', to: ['取引先 営業部'], recipients: 1, attachments: 0 }),
   item({ id: 'rc_0000000000000003', at: '2026-11-21T01:00:00Z', mailbox: { id: sponsor.id, name: sponsor.name }, via: 'gmail', senderName: null, threadId: 'th_0000000000000003', subject: 'Gmail から送ったお礼', to: ['協賛企業 ご担当者様'], recipients: 1, attachments: 0 }),
   item({}),
 ];
@@ -56,7 +57,8 @@ async function mailbox(page: Page, o: { canSend?: boolean; sentBox?: boolean } =
     if (path === '/api/mail/sent') {
       const q = url.searchParams;
       asked.push(q);
-      const items = ITEMS.filter((i) => (!q.get('mailboxId') || i.mailbox.id === q.get('mailboxId')) && (q.get('state') !== 'problem' || i.state === 'unknown' || i.state === 'failed') && (q.get('mine') !== '1' || i.senderName === '合成 太郎') && (!q.get('q') || (i.subject ?? '').includes(q.get('q')!)));
+      if (q.get('mailboxId') && q.get('personal')) return respond({ error: 'validation', message: '受信箱と個人のアドレスは同時に指定できません' }, 400);
+      const items = ITEMS.filter((i) => (!q.get('mailboxId') || i.mailbox?.id === q.get('mailboxId')) && (q.get('personal') !== '1' || i.mailbox === null) && (q.get('state') !== 'problem' || i.state === 'unknown' || i.state === 'failed') && (q.get('mine') !== '1' || i.senderName === '合成 太郎') && (!q.get('q') || (i.subject ?? '').includes(q.get('q')!)));
       return respond({ items, total: items.length, page: 1, pageSize: Number(q.get('pageSize') ?? 20) });
     }
     const thread = /^\/api\/threads\/(th_[0-9a-f]{16})$/.exec(path);
@@ -82,9 +84,9 @@ test('a member without sending opens 送信箱 from the side column and reads wh
 
   const list = page.getByTestId('sent-list');
   await expect(list.getByRole('heading', { name: '送信箱' })).toBeVisible();
-  await expect(list.getByTestId('sent-count')).toHaveText('全 4 件中 1–4 件');
+  await expect(list.getByTestId('sent-count')).toHaveText('全 5 件中 1–5 件');
   const rows = list.locator('.rows-list > li');
-  await expect(rows).toHaveCount(4);
+  await expect(rows).toHaveCount(5);
   // Cut off: may have gone out; no subject is kept, so the row is not a link.
   await expect(rows.nth(0)).toContainText('新しいメール（件名は残っていません）');
   await expect(rows.nth(0)).toContainText('送信できたか不明');
@@ -96,15 +98,18 @@ test('a member without sending opens 送信箱 from the side column and reads wh
   await expect(rows.nth(1)).toContainText('送れなかった');
   await expect(rows.nth(1)).toContainText('宛先が受け付けられませんでした（550）。相手には届いていません。');
   await expect(rows.nth(1)).toContainText('送った人: 合成 委員長');
-  await expect(rows.nth(2)).toContainText('Gmail から送信');
-  await expect(rows.nth(3)).toContainText('宛先: 取引先 ご担当者様 ほか1');
-  await expect(rows.nth(3)).toContainText('添付 1');
+  // From a member's own address: no mailbox; the member is named.
+  await expect(rows.nth(2)).toContainText('個人のアドレス');
+  await expect(rows.nth(2)).toContainText('送った人: 合成 委員長');
+  await expect(rows.nth(3)).toContainText('Gmail から送信');
+  await expect(rows.nth(4)).toContainText('宛先: 取引先 ご担当者様 ほか1');
+  await expect(rows.nth(4)).toContainText('添付 1');
   await page.screenshot({ path: '.tmp/sent-box-pc.png' });
 
-  await rows.nth(3).getByRole('button').click();
+  await rows.nth(4).getByRole('button').click();
   await expect(page).toHaveURL(/#\/all\?sent=1&thread=th_0000000000000001$/);
   await expect(page.locator('.detail-pane')).toContainText('合成テストの本文です。');
-  await expect(rows.nth(3).locator('.row-open')).toHaveAttribute('aria-current', 'true');
+  await expect(rows.nth(4).locator('.row-open')).toHaveAttribute('aria-current', 'true');
   await expect(list).toBeVisible();
 
   await rows.nth(1).getByRole('button', { name: '返信先のスレッドを開く' }).click();
@@ -123,8 +128,22 @@ test('a member without sending opens 送信箱 from the side column and reads wh
   await expect(list.getByText('条件に一致する送ったメールはありません。')).toBeVisible();
   await list.locator('.list-empty').getByRole('button', { name: '条件をクリア' }).click();
   await expect(page).toHaveURL(/#\/all\?sent=1$/);
-  await expect(rows).toHaveCount(4);
+  await expect(rows).toHaveCount(5);
   await expect(list.getByLabel('状態')).toHaveValue('');
+
+  // Members' own addresses are a From choice too; from a mailbox's list, the address bar leaves the mailbox.
+  await list.getByLabel('差出').selectOption(sponsor.id);
+  await expect(rows).toHaveCount(2);
+  await list.getByLabel('差出').selectOption({ label: '委員の個人アドレス' });
+  await expect(page).toHaveURL(/#\/all\?sent=1$/);
+  await expect(rows).toHaveCount(1);
+  await expect(rows.nth(0)).toContainText('個人アドレスから送った連絡');
+  await expect(rows.nth(0)).not.toContainText('個人のアドレス');
+  expect(asked.at(-1)?.get('personal')).toBe('1');
+  expect(asked.at(-1)?.get('mailboxId')).toBeNull();
+  expect(asked.filter((q) => q.get('personal') && q.get('mailboxId'))).toEqual([]);
+  await list.getByLabel('差出').selectOption('');
+  await expect(rows).toHaveCount(5);
 
   // Back to the mailboxes from the side column.
   await page.locator('nav[aria-label="受信箱"]').getByRole('button', { name: 'すべての受信箱' }).click();
@@ -145,7 +164,7 @@ test('on a phone, 送信箱 is above the list, a thread opens over it and goes b
   expect(scroll).toBeLessThanOrEqual(0);
   await page.screenshot({ path: '.tmp/sent-box-phone.png', fullPage: true });
 
-  await list.locator('.rows-list > li').nth(3).getByRole('button').click();
+  await list.locator('.rows-list > li').nth(4).getByRole('button').click();
   await expect(list).toBeHidden();
   await page.getByRole('button', { name: '← 一覧に戻る' }).click();
   await expect(page).toHaveURL(/#\/all\?sent=1$/);

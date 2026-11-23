@@ -5,19 +5,23 @@ import { api, fmtListDate } from '../api';
 import { useLoader } from '../useLoader';
 import { LoadStatus } from './LoadStatus';
 
-// 送信箱 (2026-11-23): mail sent from the committee mailboxes, newest first, one row per message. A sent row opens
+// 送信箱 (2026-11-23): mail the committee sent (from its mailboxes' addresses and members' own addresses), newest first, one row per message. A sent row opens
 // its thread (the partner's answers show there too). A send that did not go out, or may not have, has no subject or
 // text kept: its row says what to do, and opens the thread it answers when it was a reply.
 
 interface Filters {
   q: string;
+  /** '' | '1' (委員の個人アドレス: the From choice that is not a mailbox, so it is not in the address bar). */
+  personal: string;
   /** '' | '1' (自分が送った). */
   mine: string;
   /** '' | 'problem' (送信できたか不明・送れなかった). */
   state: string;
 }
 
-const EMPTY: Filters = { q: '', mine: '', state: '' };
+const EMPTY: Filters = { q: '', personal: '', mine: '', state: '' };
+/** The From choice for members' own addresses (never a mailbox id: those are lower-case letters, digits and "-"). */
+const PERSONAL = '@personal';
 // The same remembered page size as the mail list (this device only; storage may be blocked).
 const PAGE_SIZE_KEY = 'iyakusai-mail-page-size';
 
@@ -49,7 +53,7 @@ function SentRow({ item, selected, showMailbox, onOpen }: { item: MailSentItem; 
       <span className="senders" title={item.to.join('、')}>
         {recipientsText(item)}
       </span>
-      {showMailbox && <span className="mailbox-names">{item.mailbox.name}</span>}
+      {showMailbox && <span className="mailbox-names">{item.mailbox?.name ?? '個人のアドレス'}</span>}
       <span className="sent-by">{item.senderName ? `送った人: ${item.senderName}` : 'Gmail から送信'}</span>
       {(item.attachments ?? 0) > 0 && <span>添付 {item.attachments}</span>}
     </span>
@@ -128,7 +132,8 @@ export function MailSentList(props: {
     (signal: AbortSignal) => {
       void refresh;
       const params = new URLSearchParams();
-      if (mailboxId) params.set('mailboxId', mailboxId);
+      // While the address bar still names a mailbox, the own addresses (chosen just now) win: never both (400).
+      if (mailboxId && !applied.personal) params.set('mailboxId', mailboxId);
       for (const [key, value] of Object.entries(applied)) if (value) params.set(key, value);
       params.set('page', String(page));
       params.set('pageSize', String(pageSize));
@@ -155,10 +160,18 @@ export function MailSentList(props: {
   }
 
   // A choice in a list box filters at once (the keyword waits for Enter or 検索, as it is typed).
-  function choose(key: 'mine' | 'state', value: string) {
+  function choose(key: 'personal' | 'mine' | 'state', value: string) {
     setDraft((d) => ({ ...d, [key]: value }));
     setPage(1);
     setApplied((a) => ({ ...a, [key]: value }));
+  }
+
+  // From: a mailbox is the route's (the address bar keeps it); members' own addresses are a filter of the list.
+  function chooseFrom(value: string) {
+    const personal = value === PERSONAL;
+    if (personal !== !!applied.personal) choose('personal', personal ? '1' : '');
+    const mailbox = personal ? null : value || null;
+    if (mailbox !== mailboxId) props.onChooseMailbox(mailbox);
   }
 
   function changePageSize(next: number) {
@@ -191,7 +204,7 @@ export function MailSentList(props: {
       <header className="pane-head">
         <div className="pane-title">
           <h2>送信箱</h2>
-          <span className="pane-sub">委員会のアドレスから送ったメール（このアプリからと、Gmail から直接）</span>
+          <span className="pane-sub">委員会のアドレスと委員の個人アドレスから送ったメール</span>
         </div>
       </header>
       <form className="list-tools filters" onSubmit={submit} role="search" aria-label="送ったメールの検索">
@@ -204,13 +217,14 @@ export function MailSentList(props: {
         <div className="filter-row">
           <label>
             差出
-            <select aria-label="差出" value={mailboxId ?? ''} onChange={(e) => props.onChooseMailbox(e.target.value || null)}>
-              <option value="">すべての受信箱</option>
+            <select aria-label="差出" value={applied.personal ? PERSONAL : (mailboxId ?? '')} onChange={(e) => chooseFrom(e.target.value)}>
+              <option value="">すべて</option>
               {props.mailboxes.map((m) => (
                 <option key={m.id} value={m.id}>
                   {m.name}
                 </option>
               ))}
+              <option value={PERSONAL}>委員の個人アドレス</option>
             </select>
           </label>
           <label>
@@ -273,7 +287,7 @@ export function MailSentList(props: {
           )}
           <ul className="rows-list threads">
             {data.items.map((item) => (
-              <SentRow key={item.id} item={item} selected={!!item.threadId && item.threadId === props.selectedThreadId} showMailbox={!mailboxId} onOpen={props.onOpenThread} />
+              <SentRow key={item.id} item={item} selected={!!item.threadId && item.threadId === props.selectedThreadId} showMailbox={!mailboxId && !applied.personal} onOpen={props.onOpenThread} />
             ))}
           </ul>
           {data.total > data.pageSize && (

@@ -6,11 +6,13 @@ import type { MailboxDefinition } from './config.js';
 import { SIGN_IN_MAIL_SUBJECT } from './restricted.js';
 import { normalizeForSearch, type MailboxStore, type MessageRow, type OutgoingRow } from './store.js';
 
-// 送信箱 (2026-11-23): mail sent from the committee mailboxes, one row per message, newest first. Two records make it:
-// - Stored messages whose From is a mailbox's address: sent from this app (a send row, so the member who wrote it is
-//   known) or from the account's Gmail directly (collected like received mail; who wrote it is not known). Google
-//   Groups deliver mail posted to a group with the group's address as From and "<name> via <group>" as the name:
-//   someone else wrote such mail (often outside the committee), so it is not counted.
+// 送信箱 (2026-11-23): mail the committee sent, one row per message, newest first. Two records make it:
+// - Stored messages from an address on a committee domain: sent from this app (a send row, so the member who wrote it
+//   is known), from the account's Gmail directly with a mailbox's address (who wrote it is not known), or from a
+//   member's own address (the member whose signature names the address, else the name in the mail). A member's own
+//   mail to a committee group counts too (decided 2026-11-23). Google Groups deliver mail posted to a group with the
+//   group's address as From and "<name> via <group>" as the name: someone else wrote such mail (often outside the
+//   committee), so it is not counted.
 // - Sends from this app whose message is not kept here: refused by the mail server, cut off half way, or sent but
 //   their copy not stored yet. Their subject and text are never stored: the row has the time, the mailbox, the
 //   number of recipients and the member.
@@ -24,6 +26,8 @@ const CUT_OFF_MS = 10 * 60_000;
 
 export interface SentQuery {
   mailboxId?: string;
+  /** Only mail from members' own addresses. */
+  personal?: '1';
   q?: string;
   /** Only the signed-in person's sends. */
   mine?: '1';
@@ -37,6 +41,8 @@ export interface SentDeps {
   store: MailboxStore;
   addresses: CommitteeAddresses;
   nameOf(userId: string): string;
+  /** The member whose own address this is (設定 › 署名), or null. */
+  ownerOf(address: string): string | null;
   /** Sign-in mail this person may not read. */
   hidden(user: User, row: MessageRow): boolean;
   now: Date;
@@ -67,7 +73,8 @@ function stateOf(send: OutgoingRow, now: Date): MailSentState {
 
 const shown = (a: Address) => a.name?.trim() || a.address;
 
-type Entry = { kind: 'message'; id: string; at: string; mailbox: MailboxDefinition; senderId: string | null } | { kind: 'send'; send: OutgoingRow; at: string; mailbox: MailboxDefinition; state: MailSentState };
+/** A stored message: `mailbox` null when a member sent it from their own address; `fromApp` when it is a send from this app. */
+type Entry = { kind: 'message'; id: string; at: string; mailbox: MailboxDefinition | null; senderId: string | null; fromApp: boolean } | { kind: 'send'; send: OutgoingRow; at: string; mailbox: MailboxDefinition; state: MailSentState };
 
 const keyOf = (e: Entry) => (e.kind === 'message' ? e.id : e.send.id);
 
@@ -75,18 +82,22 @@ export function listSentMail(deps: SentDeps, user: User, query: SentQuery): Mail
   const { store, addresses } = deps;
   if (query.mailboxId !== undefined && !addresses.mailboxes.some((m) => m.id === query.mailboxId)) throw notFound();
   const terms = query.q ? normalizeForSearch(query.q).split(/\s+/).filter(Boolean) : [];
-  const wanted = (mailbox: MailboxDefinition, senderId: string | null) => (!query.mailboxId || mailbox.id === query.mailboxId) && (!query.mine || senderId === user.id);
+  const wanted = (mailbox: MailboxDefinition | null, senderId: string | null) =>
+    (!query.mailboxId || mailbox?.id === query.mailboxId) && (!query.personal || mailbox === null) && (!query.mine || senderId === user.id);
   const entries: Entry[] = [];
   if (query.state !== 'problem') {
     for (const c of store.sentCandidates(addresses.domainsWithAliases(), terms, !user.canManageAccess)) {
-      const mailbox = addresses.ofAddress(c.from_address);
-      if (!mailbox) continue;
-      if (c.sender_id === null && GROUP_REWRITE.test(c.from_name ?? '')) continue;
-      if (wanted(mailbox, c.sender_id)) entries.push({ kind: 'message', id: c.id, at: c.received_at, mailbox, senderId: c.sender_id });
+      const mailbox = addresses.ofAddress(c.from_address) ?? null;
+      const fromApp = c.sender_id !== null;
+      // A send from this app always has a mailbox's address; without one, the configuration has changed since.
+      if (fromApp && !mailbox) continue;
+      if (!fromApp && (GROUP_REWRITE.test(c.from_name ?? '') || !addresses.isCommitteeAddress(c.from_address))) continue;
+      const senderId = fromApp ? c.sender_id : mailbox ? null : deps.ownerOf(c.from_address);
+      if (wanted(mailbox, senderId)) entries.push({ kind: 'message', id: c.id, at: c.received_at, mailbox, senderId, fromApp });
     }
   }
-  // A search looks in subjects and text, which a send not kept here does not have.
-  if (terms.length === 0) {
+  // A search looks in subjects and text, which a send not kept here does not have; such a send has a mailbox.
+  if (terms.length === 0 && !query.personal) {
     for (const send of store.unkeptOutgoing()) {
       const mailbox = addresses.mailboxes.find((m) => m.id === send.mailbox_id);
       if (!mailbox || !wanted(mailbox, send.user_id)) continue;
@@ -106,14 +117,15 @@ function messageItem(deps: SentDeps, user: User, e: Extract<Entry, { kind: 'mess
   const hidden = deps.hidden(user, row);
   const to = JSON.parse(row.to_json) as Address[];
   const cc = JSON.parse(row.cc_json) as Address[];
-  const send = e.senderId ? deps.store.outgoingOfMessage(row.internet_message_id) : null;
+  const send = e.fromApp ? deps.store.outgoingOfMessage(row.internet_message_id) : null;
+  const personal = !send && e.mailbox === null;
   return {
     id: row.id,
     state: 'sent',
     at: e.at,
-    mailbox: { id: e.mailbox.id, name: e.mailbox.name },
-    via: send ? 'app' : 'gmail',
-    senderName: send ? deps.nameOf(send.user_id) : null,
+    mailbox: e.mailbox ? { id: e.mailbox.id, name: e.mailbox.name } : null,
+    via: send ? 'app' : personal ? 'personal' : 'gmail',
+    senderName: send ? deps.nameOf(send.user_id) : personal ? (e.senderId ? deps.nameOf(e.senderId) : row.from_name?.trim() || row.from_address) : null,
     threadId: row.thread_id,
     subject: hidden ? SIGN_IN_MAIL_SUBJECT : row.subject,
     to: hidden ? [] : to.map(shown),
