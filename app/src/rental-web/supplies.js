@@ -1117,3 +1117,12 @@
 
   boot();
 })();
+
+// パスワード帳 (2026-11-23): its tab, like the app's, is there only for the people who can open it (a member of a section
+// or an access administrator, on a server that has it). Anything else, an error included, leaves it hidden.
+fetch('/api/vault/meta', { credentials: 'same-origin' })
+  .then((response) => (response.ok ? response.json() : null))
+  .then((meta) => {
+    if (meta && meta.enabled === true && meta.canOpen === true) document.querySelectorAll('[data-vault-tab]').forEach((li) => { li.hidden = false; });
+  })
+  .catch(() => {});

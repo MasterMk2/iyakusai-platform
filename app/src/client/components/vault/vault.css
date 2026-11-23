@@ -1,5 +1,7 @@
 /* パスワード帳 (2026-11-23): settings › パスワード帳. The app's own parts (chips, buttons, status lines); no new colours. */
 .vault-panel { display: grid; gap: 10px; max-width: 980px; }
+/* Its own tab (2026-11-23): the page of the other single-column tabs (the Bot's width). */
+.main.vault-main { width: 100%; max-width: 1020px; margin: 0 auto; }
 .vault-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .vault-head h3 { margin: 0; }
 .vault-reauth { margin-top: 4px; }

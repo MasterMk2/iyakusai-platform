@@ -14,8 +14,17 @@ describe('module tabs on every screen', () => {
     const navBlock = /<nav class="global-nav"[^>]*>([\s\S]*?)<\/nav>/.exec(read('src/rental-web/index.html'));
     expect(navBlock).not.toBeNull();
     const rental = [...navBlock![1]!.matchAll(/<span>(.*?)<\/span>/g)].map((m) => m[1]!.replace(/<wbr>/g, ''));
-    expect(app).toEqual(['ホーム', '掲示板', 'タスク', '物品貸出', 'メール', '公式LINE', '連絡先', '会計', 'Bot', '設定']);
+    // パスワード帳 (2026-11-23) is in both lists, before 設定; both screens show it only to the people who can open it.
+    expect(app).toEqual(['ホーム', '掲示板', 'タスク', '物品貸出', 'メール', '公式LINE', '連絡先', '会計', 'Bot', 'パスワード帳', '設定']);
     expect(rental).toEqual(app);
+  });
+
+  it('the パスワード帳 tab is hidden on the rental screen until the server says the person can open it, and wraps the same way', () => {
+    const html = read('src/rental-web/index.html');
+    expect(html).toContain('<li hidden data-vault-tab><a href="/#/vault" data-leave>');
+    expect(html).toContain('<span>パス<wbr>ワード帳</span>');
+    expect(read('src/client/App.tsx')).toMatch(/label: 'パスワード帳', labelBreaks: \['パス', 'ワード帳'\]/);
+    for (const script of ['src/rental-web/app.js', 'src/rental-web/supplies.js']) expect(read(script)).toMatch(/meta\.enabled === true && meta\.canOpen === true/);
   });
 
   it('a long label wraps only where both screens allow it (物品 | 貸出 on a 320px phone)', () => {
@@ -49,6 +58,7 @@ describe('module tabs on every screen', () => {
       'iyakusai-rental-shell-20261104-v22-supplies',
       'iyakusai-rental-shell-20261105-v23-books-tab',
       'iyakusai-rental-shell-20261109-v24-paused',
+      'iyakusai-rental-shell-20261111-v25-board-tab',
     ]).not.toContain(cache);
   });
 });
