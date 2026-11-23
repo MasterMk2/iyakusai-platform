@@ -162,7 +162,11 @@ describe('access', () => {
     expect((await call(ADMIN, 'POST', `/api/vault/entries/${created.id}/reveal`, { field: 'password', purpose: 'show' })).status).toBe(404);
     // The section is known to them (it is in their list), so the print is refused rather than hidden.
     expect((await call(ADMIN, 'POST', `/api/vault/sections/${s.id}/print`, {})).status).toBe(403);
-    expect((await call(ADMIN, 'GET', `/api/vault/sections/${s.id}/events`)).status).toBe(200);
+    // The record says what happened, not to which entry.
+    const record = await call(ADMIN, 'GET', `/api/vault/sections/${s.id}/events`);
+    expect(record.status).toBe(200);
+    expect(record.json.events.find((e: { action: string }) => e.action === 'entry_created')).toMatchObject({ entryName: '（項目）' });
+    expect(JSON.stringify(record.json)).not.toContain('合成の管理画面');
     // Putting themselves back is a recorded change.
     expect((await grant(ADMIN, s.id, 'user', ADMIN, 'view')).status).toBe(200);
     const events = (await call(SOMU, 'GET', `/api/vault/sections/${s.id}/events`)).json.events;
@@ -275,6 +279,9 @@ describe('the password typed again', () => {
       expect(res.status, `${method} ${url}`).toBe(401);
       expect(res.json.error).toBe('vault_reauth_required');
     }
+    // The record still opens past the window, without the entries' names.
+    const record = (await call(ADMIN, 'GET', `/api/vault/sections/${s.id}/events`)).json;
+    expect(JSON.stringify(record)).not.toContain('合成の管理画面');
     typedAt.set(ADMIN, now - 9 * 60_000);
     expect((await call(ADMIN, 'GET', '/api/vault/meta')).json.freshUntil).toBe(new Date(now + 60_000).toISOString());
     expect((await call(ADMIN, 'GET', '/api/vault/entries')).status).toBe(200);

@@ -146,9 +146,10 @@ export function registerVaultRoutes(app: FastifyInstance, runtime: VaultRuntime 
   };
   const isAdmin = (v: VaultViewer) => v.user.canManageAccess;
   const roleOf = (v: VaultViewer, sectionId: string) => VaultStore.roleIn(store.members(sectionId), v.user.id, v.departments);
+  const isFresh = (v: VaultViewer) => Date.parse(deps.clock()) - v.passwordAt <= runtime.revealMinutes * 60_000;
   /** The password typed on this device recently enough; otherwise the screen asks for it again. */
   const fresh = (v: VaultViewer) => {
-    if (Date.parse(deps.clock()) - v.passwordAt > runtime.revealMinutes * 60_000) {
+    if (!isFresh(v)) {
       throw new HttpError(401, { error: VAULT_REAUTH_REQUIRED, message: `パスワード帳を使うには、パスワードをもう一度入力してください（入力してから ${runtime.revealMinutes} 分を過ぎたため）。` });
     }
   };
@@ -321,10 +322,14 @@ export function registerVaultRoutes(app: FastifyInstance, runtime: VaultRuntime 
     const v = member(request);
     const { sectionId } = deps.parse(sectionParams, request.params);
     const q = deps.parse(eventsQuery, request.query);
-    sectionFor(v, sectionId, 'manage', true);
+    const { role } = sectionFor(v, sectionId, 'manage', true);
+    // Entry names are as private as the list: only for a member of the section who typed the password recently. An
+    // administrator off the section, or a device past the window, sees that something happened, not to which entry.
+    const showNames = role !== null && isFresh(v);
     const names = new Map<string, string | null>();
     const entryName = (entryId: string | null): string | null => {
       if (entryId === null) return null;
+      if (!showNames) return '（項目）';
       if (!names.has(entryId)) {
         const row = store.entry(entryId);
         let name: string | null = '（消した項目）';

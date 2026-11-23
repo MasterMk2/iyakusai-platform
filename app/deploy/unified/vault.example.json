@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "keyFile": "/config/vault.key",
+  "revealMinutes": 10
+}
