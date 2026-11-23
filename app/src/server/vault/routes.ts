@@ -314,7 +314,8 @@ export function registerVaultRoutes(app: FastifyInstance, runtime: VaultRuntime 
       const known = b.kind === 'user' ? people.some((p) => p.id === b.target) : people.some((p) => p.departments.includes(b.target));
       if (!known) invalid(b.kind === 'user' ? '委員の中にその人がいません。' : '委員の所属にその部局がありません。', 'target');
     }
-    const section = settled(store.setMember(sectionId, b.expectedVersion, b.kind, b.target, b.role, v.user.id, deps.clock()));
+    const current = new Set(deps.members().map((p) => p.id));
+    const section = settled(store.setMember(sectionId, b.expectedVersion, b.kind, b.target, b.role, v.user.id, deps.clock(), (id) => current.has(id)));
     return membersOf(v, section);
   });
 
@@ -333,7 +334,9 @@ export function registerVaultRoutes(app: FastifyInstance, runtime: VaultRuntime 
       if (!names.has(entryId)) {
         const row = store.entry(entryId);
         let name: string | null = '（消した項目）';
-        if (row) {
+        // An entry moved to another section is named there, for that section's members only.
+        if (row && row.sectionId !== sectionId) name = '（別の区分へ移した項目）';
+        else if (row) {
           try {
             name = open(row).name;
           } catch {

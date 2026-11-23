@@ -69,6 +69,9 @@ describe('cipher', () => {
     expect(other.keyId).not.toBe(cipher.keyId);
     expect(() => other.open('vs_0000000000000001', 've_0000000000000001', sealed)).toThrow(VaultUnreadable);
     expect(() => other.open('vs_0000000000000001', 've_0000000000000001', { ...sealed, keyId: other.keyId })).toThrow(VaultUnreadable);
+    // A tag cut down to 4 bytes is refused, not checked as a shorter tag.
+    const short = { ...sealed, tag: Buffer.from(sealed.tag, 'base64').subarray(0, 4).toString('base64') };
+    expect(() => cipher.open('vs_0000000000000001', 've_0000000000000001', short)).toThrow(VaultUnreadable);
     const tampered = { ...sealed, data: Buffer.from(Buffer.from(sealed.data, 'base64').map((b, i) => (i === 0 ? b ^ 1 : b))).toString('base64') };
     expect(() => cipher.open('vs_0000000000000001', 've_0000000000000001', tampered)).toThrow(VaultUnreadable);
   });

@@ -149,6 +149,20 @@ describe('access', () => {
     expect((await grant(NAIMU, s.id, 'user', NAIMU, 'edit')).status).toBe(409);
   });
 
+  it('does not count a manager who is no longer a member, and still lets a section whose managers left be fixed', async () => {
+    await build();
+    const s = await newSection();
+    // A manager named in person who has since left the committee (not among the members any more).
+    let version = (await call(ADMIN, 'GET', `/api/vault/sections/${s.id}/members`)).json.section.version;
+    const left = store.setMember(s.id, version, 'user', 'u-left-member', 'manage', ADMIN, new Date(now).toISOString());
+    expect(typeof left).toBe('object');
+    expect((await grant(ADMIN, s.id, 'user', ADMIN, null)).status).toBe(409);
+    // With the administrator gone too (by hand), adding someone is still allowed.
+    version = store.section(s.id)!.version;
+    store.db.prepare("DELETE FROM members WHERE section_id=? AND target=?").run(s.id, ADMIN);
+    expect((await call(ADMIN, 'PUT', `/api/vault/sections/${s.id}/members`, { kind: 'user', target: SOMU, role: 'manage', expectedVersion: version })).status).toBe(200);
+  });
+
   it('an access administrator who left a section sees its name and members, never its values', async () => {
     await build();
     const s = await newSection();
@@ -247,6 +261,10 @@ describe('entries', () => {
     expect((await call(ADMIN, 'POST', `/api/vault/entries/${created.id}/reveal`, { field: 'password', purpose: 'show' })).json.value).toBe(PASSWORD);
     expect(store.printState(a.id).changesSincePrint).toBe(2);
     expect(store.printState(b.id).changesSincePrint).toBe(1);
+    // A manager of A only does not read, in A's record, the name the entry has in B.
+    await grant(ADMIN, a.id, 'user', SOMU, 'manage');
+    const record = (await call(SOMU, 'GET', `/api/vault/sections/${a.id}/events`)).json.events;
+    expect(record.filter((e: { entryName: string | null }) => e.entryName !== null).map((e: { entryName: string }) => e.entryName)).toEqual(['（別の区分へ移した項目）', '（別の区分へ移した項目）']);
   });
 
   it('a section with entries cannot be removed; an empty one can', async () => {

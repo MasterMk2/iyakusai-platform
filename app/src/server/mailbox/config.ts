@@ -245,14 +245,17 @@ export function parseMailboxConfig(env: NodeJS.ProcessEnv, discordMode: boolean)
   const send = (raw as Record<string, unknown> | null)?.send;
   const password = send && typeof send === 'object' ? readPassword((send as Record<string, unknown>).smtpPasswordFile) : null;
   const bank = bankOrOff(file, resolve(dir));
-  return { ...validateMailboxConfig(raw, resolve(dir), key, password), line: lineOrOff(file, resolve(dir)), minutes: minutesOrOff(file, resolve(dir)), booksSheets: booksSheetsOrOff(file), bank, availability: availabilityOrOff(file), vault: vaultOrOff(file, bank) };
+  return { ...validateMailboxConfig(raw, resolve(dir), key, password), line: lineOrOff(file, resolve(dir)), minutes: minutesOrOff(file, resolve(dir)), booksSheets: booksSheetsOrOff(file), bank, availability: availabilityOrOff(file), vault: vaultOrOff(file, [key, ...(bank ? [bank.tokenKey] : [])]) };
 }
 
-/** A vault.json that cannot be used turns off the password book only (no secret named). Its key must not be the bank's. */
-function vaultOrOff(file: string, bank: BankConfig | null): VaultConfig | null {
+/**
+ * A vault.json that cannot be used turns off the password book only (no secret named). Its key must differ from the
+ * other keys of the mail configuration (the mail collector's, which is also on the collector's side, and the bank's).
+ */
+function vaultOrOff(file: string, otherKeys: Buffer[]): VaultConfig | null {
   try {
     const vault = loadVaultConfig(file);
-    if (vault && bank && vault.key.equals(bank.tokenKey)) throw new ConfigError('パスワード帳の鍵が銀行のトークンの鍵と同じです。別のランダム値のファイルにしてください。');
+    if (vault && otherKeys.some((k) => vault.key.equals(k))) throw new ConfigError('パスワード帳の鍵が、メールの取り込みか銀行のトークンの鍵と同じです。別のランダム値のファイルにしてください。');
     return vault;
   } catch (err) {
     if (!(err instanceof ConfigError)) throw err;

@@ -20,6 +20,8 @@ import {
 
 export function VaultSectionTools(props: {
   section: VaultSectionSummary;
+  /** The book is open (the list is on the screen): printing and the record are offered only then. */
+  open: boolean;
   canAdminister: boolean;
   tool: 'members' | 'events' | null;
   onTool: (tool: 'members' | 'events' | null) => void;
@@ -51,7 +53,7 @@ export function VaultSectionTools(props: {
         {!s.myRole && <p className="hint">権限管理者として、名前・見られる人・記録だけを見ています。値を見るには、自分を見られる人に加えてください（記録に残ります）。</p>}
       </div>
       <div className="admin-actions">
-        {s.myRole && s.entryCount > 0 && (
+        {props.open && s.myRole && s.entryCount > 0 && (
           <button type="button" className="secondary" onClick={() => setConfirmPrint(true)} aria-expanded={confirmPrint} data-testid="vault-print">
             紙に印刷
           </button>
@@ -59,7 +61,7 @@ export function VaultSectionTools(props: {
         <button type="button" className="secondary" aria-pressed={props.tool === 'members'} onClick={() => props.onTool(props.tool === 'members' ? null : 'members')} data-testid="vault-members">
           見られる人
         </button>
-        {s.canManage && (
+        {props.open && s.canManage && (
           <button type="button" className="secondary" aria-pressed={props.tool === 'events'} onClick={() => props.onTool(props.tool === 'events' ? null : 'events')} data-testid="vault-events">
             記録
           </button>
@@ -70,7 +72,7 @@ export function VaultSectionTools(props: {
           </button>
         )}
       </div>
-      {confirmPrint && (
+      {props.open && confirmPrint && (
         <div className="status warning vault-print-confirm" role="group" aria-label="印刷の確認">
           <p>
             この区分のパスワードとメモを {s.entryCount} 件すべて紙に出します（印刷したことは記録に残ります）。印刷の画面では「PDF に保存」を選ばず、プリンターで印刷してください。刷った紙は封筒に入れて封をし、決めてある金庫へ。
@@ -94,7 +96,7 @@ export function VaultSectionTools(props: {
       )}
       {more && props.canAdminister && <SectionAdmin section={s} onChanged={props.onChanged} onRemoved={props.onRemoved} onFail={props.onFail} />}
       {props.tool === 'members' && <Members section={s} onChanged={props.onChanged} onFail={props.onFail} />}
-      {props.tool === 'events' && s.canManage && <Events section={s} />}
+      {props.open && props.tool === 'events' && s.canManage && <Events section={s} />}
     </div>
   );
 }

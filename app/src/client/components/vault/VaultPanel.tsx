@@ -35,6 +35,37 @@ type Revealed = Record<string, Partial<Record<VaultRevealField, string>>>;
 type Editing = { mode: 'new' } | { mode: 'edit'; entry: VaultEntryItem } | null;
 type Tool = 'members' | 'events' | null;
 
+// The clipboard is cleared 30 seconds after a copy even when the book has closed meanwhile (the usual case: the person
+// went to another tab to paste). The timer lives outside the components, and a clear the browser refused because the
+// page was not in front is tried again when the page comes back.
+let clipboardDue: number | null = null;
+let clipboardTimer: number | null = null;
+let clipboardWatched = false;
+function clearClipboardIfDue(): void {
+  if (clipboardDue === null || Date.now() < clipboardDue) return;
+  navigator.clipboard.writeText('').then(
+    () => {
+      clipboardDue = null;
+    },
+    () => undefined,
+  );
+}
+function scheduleClipboardClear(): void {
+  clipboardDue = Date.now() + CLIPBOARD_CLEAR_MS;
+  if (clipboardTimer !== null) window.clearTimeout(clipboardTimer);
+  clipboardTimer = window.setTimeout(() => {
+    clipboardTimer = null;
+    clearClipboardIfDue();
+  }, CLIPBOARD_CLEAR_MS);
+  if (!clipboardWatched) {
+    clipboardWatched = true;
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') clearClipboardIfDue();
+    });
+    window.addEventListener('focus', clearClipboardIfDue);
+  }
+}
+
 const isReauth = (err: unknown) => err instanceof ApiFailure && err.status === 401 && err.body?.error === VAULT_REAUTH_REQUIRED;
 const fold = (s: string) => s.normalize('NFKC').toLowerCase();
 const newToken = () => {
@@ -131,6 +162,7 @@ function VaultBook({ meta, onMetaChanged }: { meta: VaultMetaResponse; onMetaCha
     setPhase('closed');
     setClosedWhy(why);
     setPrinting(null);
+    setTool((t) => (t === 'events' ? null : t));
   }, []);
   const reopen = () => {
     setPhase('open');
@@ -199,6 +231,7 @@ function VaultBook({ meta, onMetaChanged }: { meta: VaultMetaResponse; onMetaCha
             <VaultSectionTools
               key={section.id}
               section={section}
+              open={phase === 'open'}
               canAdminister={meta.canAdminister}
               tool={tool}
               onTool={setTool}
@@ -301,13 +334,6 @@ function OpenBook({
     };
   }, [onClose]);
 
-  const clipboardTimer = useRef<number | null>(null);
-  useEffect(
-    () => () => {
-      if (clipboardTimer.current !== null) window.clearTimeout(clipboardTimer.current);
-    },
-    [],
-  );
   const failHere = (err: unknown) => {
     if (isReauth(err)) onFail(err);
     else setMessage({ text: toFailure(err).message, error: true });
@@ -323,11 +349,7 @@ function OpenBook({
       setMessage({ text: `${what}をコピーしました。`, error: false });
       return;
     }
-    if (clipboardTimer.current !== null) window.clearTimeout(clipboardTimer.current);
-    clipboardTimer.current = window.setTimeout(() => {
-      clipboardTimer.current = null;
-      void navigator.clipboard.writeText('').catch(() => undefined);
-    }, CLIPBOARD_CLEAR_MS);
+    scheduleClipboardClear();
     setMessage({ text: `${what}をコピーしました。30 秒後にクリップボードを空にします。`, error: false });
   };
   const reveal = async (entry: VaultEntryItem, field: VaultRevealField, purpose: 'show' | 'copy' | 'edit'): Promise<string | null> => {
@@ -738,7 +760,22 @@ function EntryForm({
         <div className="vault-password-field">
           <label>
             パスワード{entry ? '（新しい値）' : ''}
-            <input type={showPassword ? 'text' : 'password'} value={password} onChange={(e) => setPassword(e.target.value)} maxLength={VAULT_LIMITS.password} autoComplete="new-password" data-testid="vault-form-password" />
+            {/* A text field shown as dots (not type=password): the browser must not offer to save a committee account's
+                password into a member's own browser and its sync. */}
+            <input
+              type="text"
+              className={showPassword ? undefined : 'vault-masked'}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              maxLength={VAULT_LIMITS.password}
+              autoComplete="off"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+              data-1p-ignore="true"
+              data-lpignore="true"
+              data-testid="vault-form-password"
+            />
           </label>
           <div className="admin-actions">
             <label>
@@ -783,7 +820,7 @@ function EntryForm({
         <div className="vault-danger">
           {confirmDelete ? (
             <span className="confirm">
-              消すと戻せません（前の値も残りません）。
+              消すと戻せません（アプリからは前の値も見られなくなります）。
               <button type="button" className="danger" onClick={() => void remove()} disabled={busy}>
                 消す
               </button>

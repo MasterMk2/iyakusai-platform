@@ -13,6 +13,8 @@
 .vault-form { padding: 12px; border: 1px solid var(--line); border-radius: 6px; max-width: 640px; }
 .vault-form h4 { margin: 0 0 4px; }
 .vault-password-field { display: grid; gap: 6px; }
+/* The new password as dots without type=password (which invites the browser to save it). */
+.vault-masked { -webkit-text-security: disc; text-security: disc; }
 .vault-danger { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
 .vault-section { display: grid; gap: 6px; padding: 10px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .vault-section-head h4 { margin: 0; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }

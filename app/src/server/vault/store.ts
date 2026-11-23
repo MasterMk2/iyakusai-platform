@@ -118,7 +118,8 @@ export class VaultStore {
     mkdirSync(root, { recursive: true });
     this.db = new DatabaseSync(path.join(root, VAULT_FILE));
     try {
-      this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;');
+      // secure_delete: a removed entry, and the sealed message an update replaced, are overwritten in the file.
+      this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000; PRAGMA secure_delete=ON;');
       this.db.exec(SCHEMA);
       const version = this.db.prepare("SELECT value FROM meta WHERE key='schema'").get() as { value: string } | undefined;
       if (!version) this.db.prepare("INSERT INTO meta(key,value) VALUES('schema',?)").run(SCHEMA_VERSION);
@@ -228,9 +229,10 @@ export class VaultStore {
 
   /**
    * Gives a role to a department or a member, changes it, or (role null) takes it away. Refused when another change came
-   * first (the section's version), or when no member named in person would keep 管理する.
+   * first (the section's version), or when the change would leave no current member named in person with 管理する
+   * (`current`: still a committee member; someone who left does not count).
    */
-  setMember(sectionId: string, expectedVersion: number, kind: VaultMemberKind, target: string, role: VaultRole | null, actor: string, now: string): SectionRow | VaultRefusal | null {
+  setMember(sectionId: string, expectedVersion: number, kind: VaultMemberKind, target: string, role: VaultRole | null, actor: string, now: string, current: (userId: string) => boolean = () => true): SectionRow | VaultRefusal | null {
     return this.tx(() => {
       const cur = this.section(sectionId);
       if (!cur) return null;
@@ -240,7 +242,9 @@ export class VaultStore {
       if ((existing?.role ?? null) === role) return cur;
       const after = before.filter((m) => !(m.kind === kind && m.target === target));
       if (role) after.push({ kind, target, role, grantedBy: actor, grantedAt: now });
-      if (!after.some((m) => m.kind === 'user' && m.role === 'manage')) return 'last_manager';
+      const managers = (list: MemberRow[]) => list.filter((m) => m.kind === 'user' && m.role === 'manage' && current(m.target)).length;
+      // Only a change that takes away the last one is refused: a section whose managers have all left can still be fixed.
+      if (managers(after) === 0 && managers(before) > 0) return 'last_manager';
       if (role && !existing && before.length >= VAULT_LIMITS.membersPerSection) return 'too_many';
       if (role) {
         this.db
