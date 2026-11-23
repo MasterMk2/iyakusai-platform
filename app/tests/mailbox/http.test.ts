@@ -353,7 +353,7 @@ describe('the idle limit of the mail screens', () => {
   it('asks for the password after 12 hours without mail use, and only for mail', async () => {
     const member = await signIn(MEMBER, '21000002');
     await put(rawMail({ to: CONTACT }));
-    expect((await call('GET', '/api/mail/status', { cookie: member.cookie })).json).toEqual({ enabled: true, canOpen: true, reauthRequired: false, idleHours: 12, unhandledTotal: 1 });
+    expect((await call('GET', '/api/mail/status', { cookie: member.cookie })).json).toEqual({ enabled: true, canOpen: true, reauthRequired: false, idleHours: 12, unhandledTotal: 1, sentBox: true });
 
     // Using mail at 11 hours keeps it open for another 12.
     ctx.clock.now += 11 * HOUR;
@@ -369,7 +369,11 @@ describe('the idle limit of the mail screens', () => {
     expect(locked.json.error).toBe('reauth_required');
     expect((await call('PATCH', '/api/receipts/rc_0000000000000000/triage', { cookie: member.cookie, body: { expectedVersion: 1, labels: ['再認証待ち'] } })).json.error).toBe('reauth_required');
     expect((await call('GET', '/api/receipts/rc_0000000000000000/assignees', { cookie: member.cookie })).json.error).toBe('reauth_required');
-    expect((await call('GET', '/api/mail/status', { cookie: member.cookie })).json).toMatchObject({ reauthRequired: true, unhandledTotal: null });
+    const lockedStatus = (await call('GET', '/api/mail/status', { cookie: member.cookie })).json;
+    expect(lockedStatus).toMatchObject({ reauthRequired: true, unhandledTotal: null });
+    // 送信箱 (2026-11-23) is offered only while the mail opens.
+    expect(lockedStatus).not.toHaveProperty('sentBox');
+    expect((await call('GET', '/api/mail/sent', { cookie: member.cookie })).json.error).toBe('reauth_required');
     // Other screens keep the 14-day sign-in.
     expect((await call('GET', '/api/session', { cookie: member.cookie })).json.user).not.toBeNull();
 
@@ -391,7 +395,9 @@ describe('the trial before opening the mailbox to everyone', () => {
     const chair = await signIn(CHAIR, '21000001');
     const member = await signIn(MEMBER, '21000002');
     await put(rawMail({ to: CONTACT }));
-    expect((await call('GET', '/api/mail/status', { cookie: member.cookie })).json).toMatchObject({ enabled: true, canOpen: false });
+    const closed = (await call('GET', '/api/mail/status', { cookie: member.cookie })).json;
+    expect(closed).toMatchObject({ enabled: true, canOpen: false });
+    expect(closed).not.toHaveProperty('sentBox');
     expect((await call('GET', '/api/mailboxes', { cookie: member.cookie })).json).toEqual([]);
     expect((await call('GET', '/api/inbox', { cookie: member.cookie })).status).toBe(404);
     expect((await call('PATCH', '/api/receipts/rc_0000000000000000/triage', { cookie: member.cookie, body: { expectedVersion: 1, labels: ['公開対象外'] } })).status).toBe(404);

@@ -136,6 +136,16 @@ export interface OutgoingRow {
 
 export type StoreOutcome = { status: 'stored' | 'linked' | 'duplicate'; id: string };
 
+/** A message that may be mail the committee sent (送信箱), without its addresses, subject or text. */
+export interface SentCandidateRow {
+  id: string;
+  from_address: string;
+  from_name: string | null;
+  received_at: string;
+  /** The member whose send from this app it is (the latest send of the same Message-ID that was not refused). */
+  sender_id: string | null;
+}
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS messages(
@@ -645,6 +655,43 @@ export class MailboxStore {
       const row = this.db.prepare('SELECT mailbox_id, recipients FROM outgoing WHERE id=?').get(id) as { mailbox_id: string; recipients: number };
       this.db.prepare('INSERT INTO audit(at,actor_id,action,detail) VALUES(?,?,?,?)').run(now, actorId, `send_${outcome.status}`, `${id} / ${row.mailbox_id} / 宛先 ${row.recipients} 件`);
     });
+  }
+
+  // ---- 送信箱 (2026-11-23): reads only; no table, column or index is added
+
+  /**
+   * Messages that may be mail the committee sent, newest first: from an address on these domains, or sent from this
+   * app (a send with the same Message-ID). Which of them the committee sent is decided by the caller (sent.ts). Every
+   * such message is read: they are a few thousand a year, and the rule depends on the configuration.
+   */
+  sentCandidates(domains: string[], terms: string[], termsSkipSignIn: boolean): SentCandidateRow[] {
+    const params: string[] = domains.map((d) => `%@${d.replace(/[!%_]/g, (c) => `!${c}`)}`);
+    const from = [...domains.map(() => "m.from_address LIKE ? ESCAPE '!'"), 'EXISTS (SELECT 1 FROM outgoing o WHERE o.internet_message_id = m.internet_message_id)'];
+    const parts = [`(${from.join(' OR ')})`];
+    for (const t of terms) {
+      parts.push('instr(m.search_text, ?) > 0');
+      params.push(t);
+    }
+    if (terms.length > 0 && termsSkipSignIn) parts.push('sign_in_mail(m.subject, m.from_address, m.text) = 0');
+    return this.db
+      .prepare(
+        `SELECT m.id, m.from_address, m.from_name, m.received_at,
+                (SELECT o.user_id FROM outgoing o WHERE o.internet_message_id = m.internet_message_id AND o.status <> 'failed' ORDER BY o.created_at DESC LIMIT 1) AS sender_id
+         FROM messages m WHERE ${parts.join(' AND ')} ORDER BY m.received_at DESC, m.id`,
+      )
+      .all(...params) as unknown as SentCandidateRow[];
+  }
+
+  /** Sends from this app whose message is not kept here (refused, cut off, or its copy not stored yet), newest first. */
+  unkeptOutgoing(): OutgoingRow[] {
+    return this.db
+      .prepare('SELECT o.* FROM outgoing o WHERE NOT EXISTS (SELECT 1 FROM messages m WHERE m.internet_message_id = o.internet_message_id) ORDER BY o.created_at DESC, o.id')
+      .all() as unknown as OutgoingRow[];
+  }
+
+  /** The latest send from this app of this Message-ID that the mail server did not refuse. */
+  outgoingOfMessage(internetMessageId: string): OutgoingRow | null {
+    return (this.db.prepare("SELECT * FROM outgoing WHERE internet_message_id=? AND status<>'failed' ORDER BY created_at DESC LIMIT 1").get(internetMessageId) as unknown as OutgoingRow | undefined) ?? null;
   }
 
   audit(limit = 100): { id: number; at: string; actor_id: string; action: string; detail: string }[] {

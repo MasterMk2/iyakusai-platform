@@ -17,6 +17,7 @@ import { LoadStatus } from './components/LoadStatus';
 import { LineBroadcast } from './components/LineBroadcast';
 import { LineConversation } from './components/LineConversation';
 import { MailApprovalDetailView, MailApprovalList } from './components/MailApprovals';
+import { MailSentList } from './components/MailSentList';
 import { MailCompose, newDraft, resubmitDraft, sentNoteText } from './components/MailCompose';
 import { MailReauth } from './components/MailReauth';
 import { Login } from './components/Login';
@@ -61,6 +62,8 @@ export interface Route {
   mailCompose: boolean;
   /** Committee mailbox: the mail that waits for an approval (`approval=list`) or one request (`approval=ar_…`), 2026-11-11. */
   approval: string | null;
+  /** Committee mailbox: the 送信箱 (`sent=1`, 2026-11-23) as the list, its From mailbox the route's mailbox; a thread opens beside it. */
+  mailSent: boolean;
   /** Official LINE: the broadcast screen (`broadcast=1`) instead of a conversation (2026-11-02). */
   lineBroadcast: boolean;
   /** Bot tab: the sub-view (`#/bot/<section>`) and an opened job (`?job=`). */
@@ -98,6 +101,7 @@ const EMPTY_ROUTE: Route = {
   inboxFilter: null,
   mailCompose: false,
   approval: null,
+  mailSent: false,
   lineBroadcast: false,
   botSection: null,
   botJobId: null,
@@ -148,14 +152,15 @@ export function parseHash(hash: string): Route {
   const approvalParam = params.get('approval');
   const approval = !threadId && !conversationId && approvalParam && (approvalParam === 'list' || /^ar_[0-9a-f]{16}$/.test(approvalParam)) ? approvalParam : null;
   const mailCompose = !threadId && !conversationId && !approval && params.get('compose') === '1';
-  if (parts[0] === 'mailbox' && parts[1]) return { ...EMPTY_ROUTE, mailboxId: decodeURIComponent(parts[1]), threadId, inboxFilter, mailCompose, approval };
+  const mailSent = !conversationId && !approval && params.get('sent') === '1';
+  if (parts[0] === 'mailbox' && parts[1]) return { ...EMPTY_ROUTE, mailboxId: decodeURIComponent(parts[1]), threadId, inboxFilter, mailCompose, approval, mailSent };
   if (parts[0] === 'line') {
     const lineBroadcast = !threadId && !conversationId && params.get('broadcast') === '1';
     return { ...EMPTY_ROUTE, view: 'line', lineAccountId: parts[1] ? decodeURIComponent(parts[1]) : null, conversationId, inboxFilter, lineBroadcast };
   }
   // An older link to a LINE conversation from the shared inbox (`#/all?conv=`) opens the LINE tab.
   if (conversationId) return { ...EMPTY_ROUTE, view: 'line', conversationId, inboxFilter };
-  return { ...EMPTY_ROUTE, threadId, inboxFilter, mailCompose, approval };
+  return { ...EMPTY_ROUTE, threadId, inboxFilter, mailCompose, approval, mailSent };
 }
 
 /** The official LINE tab: also a route that names a LINE account or conversation (callers spread EMPTY_ROUTE). */
@@ -202,6 +207,7 @@ export function toHash(route: Route): string {
     return q.size > 0 ? `${base}?${q.toString()}` : base;
   }
   const base = route.mailboxId ? `#/mailbox/${encodeURIComponent(route.mailboxId)}` : '#/all';
+  if (route.mailSent && !route.approval) q.set('sent', '1');
   if (route.threadId) q.set('thread', route.threadId);
   else if (route.approval) q.set('approval', route.approval);
   else if (route.mailCompose) q.set('compose', '1');
@@ -741,6 +747,9 @@ export function App() {
       {approvalTotal}
     </span>
   );
+  // 送信箱 (2026-11-23): mail sent from the committee mailboxes, for everyone who reads the mail (sending or not).
+  const sentEntry = !lineTab && !isAdminView && committeeMail?.sentBox === true && committeeMail.canOpen && !committeeMail.reauthRequired;
+  const sentView = sentEntry && route.mailSent && !approvalView;
   const inboxDetail = !isAdminView && (lineTab ? !!route.conversationId || !!broadcastAccount : !!route.threadId || composing || !!approvalId);
   // One message in two mailboxes counts once in the committee total; the per-mailbox counts would count it twice.
   const mailUnhandled = committeeMail?.unhandledTotal ?? mailboxList.reduce((n, m) => n + m.unhandledCount, 0);
@@ -989,6 +998,7 @@ export function App() {
     navigate({ ...route, threadId: null, approval: null, mailCompose: true });
   };
   const openApprovals = () => navigate({ ...EMPTY_ROUTE, approval: 'list' });
+  const openSent = () => navigate({ ...EMPTY_ROUTE, mailSent: true });
   const resubmitting = composing && resubmitOf ? resubmitDraft(resubmitOf) : null;
   return (
     <div className="app">
@@ -997,7 +1007,7 @@ export function App() {
       <div className={`layout inbox-layout ${inboxDetail ? 'has-detail' : ''}`}>
         <div className="sidebar">
           {/* Sending apart from the mailboxes: a new-mail button above the list reads as part of the inbox. */}
-          {(canSendMail || approvalEntry) && !isAdminView && (
+          {(canSendMail || approvalEntry || sentEntry) && !isAdminView && (
             <section className="sidebar-send" aria-labelledby="sidebar-send-title">
               <h2 className="sidebar-title" id="sidebar-send-title">
                 送信
@@ -1009,6 +1019,11 @@ export function App() {
                   </button>
                   <p className="hint">委員会のアドレスから送ります。</p>
                 </>
+              )}
+              {sentEntry && (
+                <button type="button" className={`nav-item ${sentView ? 'active' : ''}`} aria-current={sentView ? 'page' : undefined} onClick={openSent} data-testid="sent-open">
+                  <span className="mailbox-name">送信箱</span>
+                </button>
               )}
               {approvalEntry && (
                 <button type="button" className={`nav-item ${approvalView ? 'active' : ''}`} aria-current={approvalView ? 'page' : undefined} onClick={openApprovals} data-testid="approvals-open">
@@ -1026,8 +1041,8 @@ export function App() {
               <>
                 <button
                   type="button"
-                  className={`nav-item ${route.view === 'mail' && route.mailboxId === null && !composing && !approvalView ? 'active' : ''}`}
-                  aria-current={route.mailboxId === null && !composing && !approvalView ? 'page' : undefined}
+                  className={`nav-item ${route.view === 'mail' && route.mailboxId === null && !composing && !approvalView && !sentView ? 'active' : ''}`}
+                  aria-current={route.mailboxId === null && !composing && !approvalView && !sentView ? 'page' : undefined}
                   onClick={() => navigate({ ...EMPTY_ROUTE })}
                 >
                   <span className="mailbox-name">{allMailTitle}</span>
@@ -1040,8 +1055,8 @@ export function App() {
                     <li key={m.id}>
                       <button
                         type="button"
-                        className={`nav-item ${route.mailboxId === m.id && !composing && !approvalView ? 'active' : ''}`}
-                        aria-current={route.mailboxId === m.id && !composing && !approvalView ? 'page' : undefined}
+                        className={`nav-item ${route.mailboxId === m.id && !composing && !approvalView && !sentView ? 'active' : ''}`}
+                        aria-current={route.mailboxId === m.id && !composing && !approvalView && !sentView ? 'page' : undefined}
                         title={`${m.name}（${m.address}）`}
                         onClick={() => navigate({ ...EMPTY_ROUTE, mailboxId: m.id })}
                         data-mailbox-id={m.id}
@@ -1066,7 +1081,7 @@ export function App() {
           <>
             <section className="list-pane" aria-label="スレッド一覧">
               {/* Below 1200px the side column is folded: sending shows here, marked apart from the mailbox list below. */}
-              {(canSendMail || approvalEntry) && (
+              {(canSendMail || approvalEntry || sentEntry) && (
                 <section className="list-compose" aria-labelledby="list-send-title">
                   <h2 className="list-compose-label" id="list-send-title">
                     送信
@@ -1074,6 +1089,11 @@ export function App() {
                   {canSendMail && (
                     <button type="button" className="secondary" onClick={openCompose} data-testid="compose-new-list">
                       メールを送信
+                    </button>
+                  )}
+                  {sentEntry && !sentView && (
+                    <button type="button" className="secondary" onClick={openSent} data-testid="sent-open-list">
+                      送信箱
                     </button>
                   )}
                   {approvalEntry && !approvalView && (
@@ -1085,6 +1105,18 @@ export function App() {
               )}
               {approvalView ? (
                 <MailApprovalList refresh={refresh} selectedId={approvalId} onSelect={(id) => navigate({ ...EMPTY_ROUTE, approval: id })} onBack={() => navigate({ ...EMPTY_ROUTE })} />
+              ) : sentView ? (
+                <MailSentList
+                  mailboxId={route.mailboxId}
+                  mailboxes={mailboxList}
+                  selectedThreadId={route.threadId}
+                  refresh={refresh}
+                  canSend={canSendMail}
+                  onOpenThread={(threadId) => navigate({ ...EMPTY_ROUTE, mailboxId: route.mailboxId, mailSent: true, threadId })}
+                  onChooseMailbox={(mailboxId) => navigate({ ...EMPTY_ROUTE, mailboxId, mailSent: true })}
+                  onBack={() => navigate({ ...EMPTY_ROUTE })}
+                  onReauthRequired={bump}
+                />
               ) : (
               <ThreadList
                 key={scopeKey}
@@ -1204,8 +1236,8 @@ export function App() {
                 />
               ) : (
                 <div className="detail-placeholder">
-                  <h2>{approvalView ? '依頼を選択' : '受信内容を選択'}</h2>
-                  <p>{approvalView ? '一覧から選ぶと、送る内容と、承認・差し戻しなどの操作がここに出ます。' : '一覧から選ぶと、本文と対応状況・担当・ラベル・内部メモがここに出ます。'}</p>
+                  <h2>{approvalView ? '依頼を選択' : sentView ? '送ったメールを選択' : '受信内容を選択'}</h2>
+                  <p>{approvalView ? '一覧から選ぶと、送る内容と、承認・差し戻しなどの操作がここに出ます。' : sentView ? '一覧から選ぶと、そのメールのスレッド（相手からの返信も）がここに出ます。' : '一覧から選ぶと、本文と対応状況・担当・ラベル・内部メモがここに出ます。'}</p>
                 </div>
               )}
             </section>
