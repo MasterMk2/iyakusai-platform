@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test';
-import { expect, loginAs, resetSample, test } from './fixtures.js';
+import { expect, loginAs, resetSample, tabRow, test } from './fixtures.js';
 import { installBotFake, jstTodayForTest, MAIL_BODY, MAIL_SUBJECT, type BotFake, type BotFakeOptions } from './assistant-fake.js';
 
 // The Bot tab against the page-level fake of the Bot browser API (tests/e2e/assistant-fake.ts). The fake
@@ -17,7 +17,7 @@ test('the Bot tab sits between 受信箱 and 設定 and opens the question scree
   await start(page);
   await page.goto('/#/home');
   const tabs = page.getByRole('navigation', { name: '機能' });
-  await expect(tabs.getByRole('link')).toHaveText(['ホーム', 'タスク', '物品貸出', 'メール', '公式LINE', '連絡先', 'Bot', '設定']);
+  await expect.poll(() => tabRow(page)).toEqual(['ホーム', 'タスク', 'メール', '連絡▾', '運営▾', 'Bot', '設定']);
   await tabs.getByRole('link', { name: 'Bot', exact: true }).click();
   await expect(page.getByTestId('nav-bot')).toHaveAttribute('aria-current', 'page');
   await expect(page).toHaveURL(/#\/bot\/ask$/);
@@ -275,8 +275,8 @@ test('phone widths: no horizontal scroll on the Bot screens and the module tabs,
     await page.goto('/#/home');
     await expect(page.getByTestId('home-bot')).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `home at ${width}px`).toBe(true);
-    const tabs = await page.locator('.global-nav a').evaluateAll((els) => els.map((el) => el.getBoundingClientRect().height));
-    expect(tabs).toHaveLength(8);
+    const tabs = await page.locator('.global-nav > ul > li > a, .global-nav .nav-group-toggle').evaluateAll((els) => els.map((el) => el.getBoundingClientRect().height));
+    expect(tabs).toHaveLength(7);
     for (const height of tabs) expect(height).toBeGreaterThanOrEqual(44);
   }
 });

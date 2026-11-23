@@ -1,27 +1,23 @@
-import { Fragment, type MouseEvent, type ReactNode } from 'react';
+import { Fragment, useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react';
+import { type NavBuiltEntry, type NavBuiltGroup, type NavBuiltItem, type NavGroupKey, type NavKey } from '../navLayout';
 import { nextTheme, storeTheme, THEME_LABELS, useTheme } from '../theme';
 import { ServerBadge } from './ServerBadge';
 
 /**
- * Common frame of every screen: the navy header and one row of module tabs. The rental phone screen
- * (src/rental-web/index.html) repeats the same header and tabs in plain HTML, so moving between modules
- * looks and works the same everywhere (../docs/ui-guidelines.md).
+ * Common frame of every screen: the navy header and one row of module tabs, two of them menus (2026-11-23,
+ * ../navLayout.ts). The rental phone screens (src/rental-web/index.html, supplies.html) repeat the same header and
+ * tabs in plain HTML, so moving between modules looks and works the same everywhere (../docs/ui-guidelines.md).
  */
 
-export type NavKey = 'home' | 'board' | 'tasks' | 'rental' | 'inbox' | 'line' | 'contacts' | 'books' | 'bot' | 'vault' | 'settings';
+export type { NavKey } from '../navLayout';
 
-export interface NavItem {
-  key: NavKey;
-  label: string;
+export interface NavTarget {
   href: string;
-  /**
-   * Where a narrow phone may wrap the label (six tabs at 320px leave about 50px each). The parts join to
-   * `label`; the tabs never break inside a part. The rental screen writes the same break as <wbr>.
-   */
-  labelBreaks?: string[];
   /** In-app hash route; absent for a separate page (the rental screen). */
   onSelect?: () => void;
 }
+
+export type NavEntry = NavBuiltEntry<NavTarget>;
 
 const ICONS: Record<NavKey, ReactNode> = {
   home: <path d="M3 11.5 12 4l9 7.5M5.5 9.5V20h5v-6h3v6h5V9.5" />,
@@ -42,12 +38,24 @@ const ICONS: Record<NavKey, ReactNode> = {
   settings: <path d="M4 7h9m4 0h3M4 17h3m4 0h9M15 4.5v5M9 14.5v5" />,
 };
 
-export function NavIcon({ name }: { name: NavKey }) {
+// The two menus (2026-11-23). The rental screens draw the same paths.
+const GROUP_ICONS: Record<NavGroupKey, ReactNode> = {
+  // Two speech balloons, one behind the other (連絡).
+  contact: <path d="M4 4.5h10a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H8.5L5 16v-3H4a1 1 0 0 1-1-1V5.5a1 1 0 0 1 1-1zM18 9h2a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-1v3l-3.5-3H11a1 1 0 0 1-1-1V16" />,
+  // A briefcase (運営).
+  ops: <path d="M4 8h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1zM9 8V5.5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1V8M3 13.5h18" />,
+};
+
+function Icon({ children }: { children: ReactNode }) {
   return (
     <svg className="nav-icon" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      {ICONS[name]}
+      {children}
     </svg>
   );
+}
+
+export function NavIcon({ name }: { name: NavKey }) {
+  return <Icon>{ICONS[name]}</Icon>;
 }
 
 export function Brand() {
@@ -101,33 +109,118 @@ function ThemeToggle() {
   );
 }
 
-export function GlobalNav({ items, current }: { items: NavItem[]; current: NavKey | null }) {
-  const select = (item: NavItem) => (e: MouseEvent<HTMLAnchorElement>) => {
-    if (!item.onSelect || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+function NavLink({ item, current, onPicked }: { item: NavBuiltItem<NavTarget>; current: NavKey | null; onPicked: () => void }) {
+  const select = (e: MouseEvent<HTMLAnchorElement>) => {
+    onPicked();
+    if (!item.target.onSelect || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
     e.preventDefault();
-    item.onSelect();
+    item.target.onSelect();
   };
   return (
-    <nav className="global-nav" aria-label="機能">
-      <ul>
-        {items.map((item) => (
+    <a href={item.target.href} data-testid={`nav-${item.key}`} aria-current={item.key === current ? 'page' : undefined} onClick={select}>
+      <NavIcon name={item.key} />
+      <span>
+        {item.labelBreaks
+          ? item.labelBreaks.map((part, i) => (
+              <Fragment key={i}>
+                {i > 0 && <wbr />}
+                {part}
+              </Fragment>
+            ))
+          : item.label}
+      </span>
+    </a>
+  );
+}
+
+/**
+ * A menu among the tabs (2026-11-23): a button that shows and hides a list of links (a disclosure, not an ARIA
+ * menu), so the links keep working as links (a new tab with Ctrl, the address on hover). Marked like a tab when the
+ * page shown is one of its links.
+ */
+function NavMenu({ group, current, open, onToggle, onClose, toggleRef }: {
+  group: NavBuiltGroup<NavTarget>;
+  current: NavKey | null;
+  open: boolean;
+  onToggle: () => void;
+  onClose: () => void;
+  toggleRef: (button: HTMLButtonElement | null) => void;
+}) {
+  const here = group.items.find((item) => item.key === current);
+  const id = `nav-menu-${group.group}`;
+  return (
+    <li
+      className={`nav-group${here ? ' is-current' : ''}`}
+      data-group={group.group}
+      onBlur={(e) => {
+        // Tabbing past the last link closes it. A click elsewhere moves focus nowhere (null) and lands on the scrim.
+        const next = e.relatedTarget;
+        if (open && next instanceof Node && !e.currentTarget.contains(next)) onClose();
+      }}
+    >
+      <button type="button" className="nav-group-toggle" ref={toggleRef} aria-expanded={open} aria-controls={id} data-testid={`nav-group-${group.group}`} onClick={onToggle}>
+        <Icon>{GROUP_ICONS[group.group]}</Icon>
+        <span>
+          {group.label}
+          {here && <span className="sr-only">（表示中：{here.label}）</span>}
+          <svg className="nav-chevron" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+            <path d="m6 9 6 6 6-6" />
+          </svg>
+        </span>
+      </button>
+      <ul id={id} className="nav-menu" hidden={!open}>
+        {group.items.map((item) => (
           <li key={item.key}>
-            <a href={item.href} data-testid={`nav-${item.key}`} aria-current={item.key === current ? 'page' : undefined} onClick={select(item)}>
-              <NavIcon name={item.key} />
-              <span>
-                {item.labelBreaks
-                  ? item.labelBreaks.map((part, i) => (
-                      <Fragment key={i}>
-                        {i > 0 && <wbr />}
-                        {part}
-                      </Fragment>
-                    ))
-                  : item.label}
-              </span>
-            </a>
+            <NavLink item={item} current={current} onPicked={onClose} />
           </li>
         ))}
       </ul>
+    </li>
+  );
+}
+
+export function GlobalNav({ entries, current }: { entries: NavEntry[]; current: NavKey | null }) {
+  // The open menu belongs to the page it was opened on: moving to another page closes it.
+  const [menu, setMenu] = useState<{ group: NavGroupKey; at: NavKey | null } | null>(null);
+  const open = menu && menu.at === current ? menu.group : null;
+  const toggles = useRef(new Map<NavGroupKey, HTMLButtonElement>());
+  const close = () => setMenu(null);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      setMenu(null);
+      toggles.current.get(open)?.focus();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open]);
+  return (
+    <nav className="global-nav" aria-label="機能">
+      <ul>
+        {entries.map((entry) =>
+          'group' in entry ? (
+            <NavMenu
+              key={entry.group}
+              group={entry}
+              current={current}
+              open={open === entry.group}
+              onToggle={() => setMenu(open === entry.group ? null : { group: entry.group, at: current })}
+              onClose={close}
+              toggleRef={(button) => {
+                if (button) toggles.current.set(entry.group, button);
+                else toggles.current.delete(entry.group);
+              }}
+            />
+          ) : (
+            <li key={entry.key}>
+              <NavLink item={entry} current={current} onPicked={close} />
+            </li>
+          ),
+        )}
+      </ul>
+      {/* While a menu is open, a press anywhere else closes it and does nothing more (no button under it fires). */}
+      {open && <div className="nav-scrim" data-testid="nav-scrim" aria-hidden="true" onClick={close} />}
     </nav>
   );
 }

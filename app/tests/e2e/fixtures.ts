@@ -29,6 +29,30 @@ export const test = base.extend<{ external: string[]; dialogs: string[] }>({
 
 export { expect };
 
+/**
+ * Opens a module from the tabs. Since 2026-11-23 some sit in a menu (連絡・運営, src/client/navLayout.ts): its button
+ * is pressed first when the menu is closed.
+ */
+export async function openTab(page: Page, key: string): Promise<void> {
+  const link = page.getByTestId(`nav-${key}`);
+  const toggle = page.locator('.nav-group').filter({ has: link }).locator('.nav-group-toggle');
+  if ((await toggle.count()) > 0 && (await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+  await link.click();
+}
+
+/** The module tabs' row as shown with every menu closed: a tab's name, or a menu's name with ▾. */
+export async function tabRow(page: Page): Promise<string[]> {
+  return page.locator('.global-nav > ul > li').evaluateAll((items) =>
+    items
+      .filter((li) => !(li as HTMLElement).hidden)
+      .map((li) => {
+        const label = li.querySelector(':scope > a > span, :scope > button > span');
+        const own = label ? [...label.childNodes].filter((n) => n.nodeType === Node.TEXT_NODE).map((n) => n.textContent).join('') : '';
+        return li.classList.contains('nav-group') ? `${own}▾` : own;
+      }),
+  );
+}
+
 // Reset and fault injection are demo-administrator controls, so fixtures perform
 // them as the administrator before the test switches to its intended persona.
 export async function resetSample(page: Page): Promise<void> {

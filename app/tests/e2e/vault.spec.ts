@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test';
 import type { VaultEntriesResponse, VaultMetaResponse, VaultSectionsResponse } from '../../src/shared/vault.js';
-import { expect, test } from './fixtures.js';
+import { expect, openTab, test } from './fixtures.js';
 
 // 設定 › パスワード帳 (2026-11-23). The server is a stand-in (page.route): the Discord login's answers, a password book
 // with one section and one entry, and the password typed again. Every name, ID and password is synthetic.
@@ -52,11 +52,11 @@ test('a member opens the tab after typing the password again, copies a password,
   await context.grantPermissions(['clipboard-read', 'clipboard-write']);
   await page.setViewportSize({ width: 1280, height: 900 });
   const { calls } = await open(page, { fresh: false });
+  // The book is the last link of the 運営 menu (2026-11-23), and the menu is marked while the book is shown.
   const tab = page.getByTestId('nav-vault');
-  await expect(tab).toBeVisible();
   await expect(tab).toHaveAttribute('aria-current', 'page');
-  // The tab sits just before 設定.
-  await expect(page.locator('.global-nav a').nth(-2)).toHaveAttribute('data-testid', 'nav-vault');
+  await expect(page.locator('#nav-menu-ops a').last()).toHaveAttribute('data-testid', 'nav-vault');
+  await expect(page.locator('.nav-group[data-group="ops"]')).toHaveClass(/is-current/);
   // Past the window: the password first, and no list is asked for until it is typed.
   await expect(page.getByTestId('vault-reauth')).toBeVisible();
   expect(calls).not.toContain('GET /api/vault/entries');
@@ -81,7 +81,7 @@ test('a member opens the tab after typing the password again, copies a password,
   // The settings no longer list it.
   await expect(page.getByRole('navigation', { name: '設定の項目' }).getByRole('link', { name: 'パスワード帳' })).toHaveCount(0);
   // Back: the list again, every value hidden.
-  await page.getByTestId('nav-vault').click();
+  await openTab(page, 'vault');
   await expect(page).toHaveURL(/#\/vault$/);
   await expect(page.getByTestId('vault-entry')).toHaveCount(1);
   await expect(page.getByTestId('vault-shown-password')).toHaveCount(0);
@@ -110,13 +110,14 @@ test('a member on no section has no tab, and the address explains why it is empt
 });
 
 for (const width of [375, 320]) {
-  test(`on a phone ${width}px wide the eleven tabs fit, the copy button is large and nothing scrolls sideways`, async ({ page, context }) => {
+  test(`on a phone ${width}px wide the tabs and the 運営 menu fit, the copy button is large and nothing scrolls sideways`, async ({ page, context }) => {
     await context.grantPermissions(['clipboard-read', 'clipboard-write']);
     await page.setViewportSize({ width, height: 812 });
     await open(page);
     await expect(page.getByTestId('vault-entry')).toHaveCount(1);
     expect((await page.getByTestId('vault-copy').boundingBox())!.height).toBeGreaterThanOrEqual(44);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+    await page.getByTestId('nav-group-ops').click();
     const tab = await page.getByTestId('nav-vault').boundingBox();
     expect(tab!.x + tab!.width).toBeLessThanOrEqual(width);
   });

@@ -1,6 +1,6 @@
 import { mkdirSync } from 'node:fs';
 import type { Page } from '@playwright/test';
-import { expect, test } from './fixtures.js';
+import { expect, tabRow, test } from './fixtures.js';
 import { installWorld, TODAY } from './redesign-world.js';
 
 // The screens rebuilt on 2026-10-25 (home, tasks, the mailbox), walked with synthetic data at production
@@ -29,7 +29,7 @@ test('the tab reads メール on every screen and names the page', async ({ page
   await installWorld(page);
   await page.goto('/#/all');
   const tabs = page.getByRole('navigation', { name: '機能' });
-  await expect(tabs.getByRole('link')).toHaveText(['ホーム', 'タスク', '物品貸出', 'メール', '公式LINE', '連絡先', 'Bot', '設定']);
+  await expect.poll(() => tabRow(page)).toEqual(['ホーム', 'タスク', 'メール', '連絡▾', '運営▾', 'Bot', '設定']);
   await expect(tabs.getByRole('link', { name: 'メール', exact: true })).toHaveAttribute('aria-current', 'page');
   await expect(page).toHaveTitle('メール｜医薬祭 委員会アプリ');
 });

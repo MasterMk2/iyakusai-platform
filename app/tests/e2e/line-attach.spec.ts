@@ -1,7 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import type { Page, Route } from '@playwright/test';
 import type { BroadcastOptionsResponse, BroadcastPreviewResponse, LineFileResponse, LineMediaResponse } from '../../src/shared/line.js';
-import { expect, loginAs, resetSample, test } from './fixtures.js';
+import { expect, loginAs, openTab, resetSample, test } from './fixtures.js';
 
 // Images (up to four) and files sent as links from the official LINE forms (2026-11-10). The demo server has no
 // public address, so the uploads and the confirmation are answered with synthetic data here; the server side is
@@ -53,7 +53,7 @@ test('a broadcast takes several images and a file, the period is chosen, and the
   });
   await fakeUploads(page);
   await loginAs(page, 'u-editor-c');
-  await page.getByRole('navigation', { name: '機能' }).getByRole('link', { name: '公式LINE' }).click();
+  await openTab(page, 'line');
   await page.getByTestId('line-broadcast-side').click();
   const form = page.getByTestId('line-broadcast');
   const to = form.getByRole('combobox', { name: '宛先' });
@@ -121,7 +121,7 @@ test('the reply in a conversation saves the images and the file with the draft a
   });
   await fakeUploads(page);
   await loginAs(page, 'u-editor-c');
-  await page.getByRole('navigation', { name: '機能' }).getByRole('link', { name: '公式LINE' }).click();
+  await openTab(page, 'line');
   await page.locator('button[data-line-account-id="line-oa-support"]').click();
   await page.locator('button.thread[data-conversation-id]', { has: page.locator('.subject', { hasText: /^顧客サンプルL1$/ }) }).click();
   const reply = page.getByRole('region', { name: 'LINE で返信（模擬送信）' });

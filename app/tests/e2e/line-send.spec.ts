@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import type { BroadcastOptionsResponse, BroadcastPreviewResponse, BroadcastRecipientView } from '../../src/shared/line.js';
 import { installBotFake } from './assistant-fake.js';
-import { expect, loginAs, resetSample, test } from './fixtures.js';
+import { expect, loginAs, openTab, resetSample, test } from './fixtures.js';
 
 // Sending from the official LINE with the mail form's shape (2026-11-09): 宛先 picked by typing a name (chips),
 // the fixed checks on the text the server confirmed, 編集に戻る, and the Bot's proofreading. Demo data and the mock
@@ -13,7 +13,7 @@ test.beforeEach(async ({ page }) => {
   mkdirSync('.tmp', { recursive: true });
 });
 
-const openLineTab = (page: Page) => page.getByRole('navigation', { name: '機能' }).getByRole('link', { name: '公式LINE' }).click();
+const openLineTab = (page: Page) => openTab(page, 'line');
 
 async function openSend(page: Page) {
   await openLineTab(page);
