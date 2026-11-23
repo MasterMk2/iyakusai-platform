@@ -15,7 +15,8 @@ describe('module tabs on every screen', () => {
     expect(navBlock).not.toBeNull();
     const rental = [...navBlock![1]!.matchAll(/<span>(.*?)<\/span>/g)].map((m) => m[1]!.replace(/<wbr>/g, ''));
     // パスワード帳 (2026-11-23) is in both lists, before 設定; both screens show it only to the people who can open it.
-    expect(app).toEqual(['ホーム', '掲示板', 'タスク', '物品貸出', 'メール', '公式LINE', '連絡先', '会計', 'Bot', 'パスワード帳', '設定']);
+    // Webサイト (2026-11-23) too, before パスワード帳; both screens show it only to the people who may write.
+    expect(app).toEqual(['ホーム', '掲示板', 'タスク', '物品貸出', 'メール', '公式LINE', '連絡先', '会計', 'Bot', 'Webサイト', 'パスワード帳', '設定']);
     expect(rental).toEqual(app);
   });
 
@@ -25,6 +26,14 @@ describe('module tabs on every screen', () => {
     expect(html).toContain('<span>パス<wbr>ワード帳</span>');
     expect(read('src/client/App.tsx')).toMatch(/label: 'パスワード帳', labelBreaks: \['パス', 'ワード帳'\]/);
     for (const script of ['src/rental-web/app.js', 'src/rental-web/supplies.js']) expect(read(script)).toMatch(/meta\.enabled === true && meta\.canOpen === true/);
+  });
+
+  it('the Webサイト tab is hidden on the rental screen until the server says the person may write, and wraps the same way', () => {
+    const html = read('src/rental-web/index.html');
+    expect(html).toContain('<li hidden data-site-tab><a href="/#/site" data-leave>');
+    expect(html).toContain('<span>Web<wbr>サイト</span>');
+    expect(read('src/client/App.tsx')).toMatch(/label: 'Webサイト', labelBreaks: \['Web', 'サイト'\]/);
+    for (const script of ['src/rental-web/app.js', 'src/rental-web/supplies.js']) expect(read(script)).toMatch(/meta\.enabled === true && \(meta\.canEdit === true \|\| meta\.canAdminister === true\)/);
   });
 
   it('a long label wraps only where both screens allow it (物品 | 貸出 on a 320px phone)', () => {
@@ -59,6 +68,7 @@ describe('module tabs on every screen', () => {
       'iyakusai-rental-shell-20261105-v23-books-tab',
       'iyakusai-rental-shell-20261109-v24-paused',
       'iyakusai-rental-shell-20261111-v25-board-tab',
+      'iyakusai-rental-shell-20261123-v26-vault-tab',
     ]).not.toContain(cache);
   });
 });

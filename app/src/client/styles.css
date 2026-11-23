@@ -705,6 +705,8 @@ button.quiet.minutes-fix { min-height: 28px; padding: 0 6px; font-size: 13px; }
 /* Wide screens: the header and tabs line up with the 1680px content (same as before 2026-10-25). */
 .masthead { padding-inline: max(24px, calc((100vw - 1632px) / 2)); }
 .global-nav ul { max-width: 1680px; margin-inline: auto; padding-inline: 12px; }
+/* Twelve tabs (Webサイト and パスワード帳, 2026-11-23) stay on one line down to about 1200px: a little less space around each. */
+@media (min-width: 681px) and (max-width: 1439px) { .global-nav a { padding: 0 9px; gap: 6px; } }
 
 /* ===== Workspaces (2026-10-25): dense lists, a readable detail, actions next to what they change =====
    The header and module tabs above are shared with the rental screen and are not changed here.

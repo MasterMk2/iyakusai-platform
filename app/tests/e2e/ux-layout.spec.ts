@@ -60,6 +60,9 @@ async function syntheticWorkspace(page: Page, options: { role?: 'viewer' | 'edit
     if (path === '/api/mail/send/options') return respond({ enabled: false, from: [], fromName: '', bcc: null, maxAttachmentBytes: 0, maxRecipients: 0, senderName: '合成 太郎' });
     // Committee contacts (2026-10-26): the thread asks once which senders are contacts; none here.
     if (path === '/api/contacts/by-address') return respond([]);
+    // パスワード帳 and Webサイト (2026-11-23) are off on this synthetic server: no tab for either.
+    if (path === '/api/vault/meta') return respond({ enabled: false, canOpen: false, canAdminister: false, revealMinutes: 0, freshUntil: null });
+    if (path === '/api/site-editor/meta') return respond({ enabled: false, canEdit: false, canPublish: false, canAdminister: false, editorUrl: null, siteUrl: null });
     // The decision register (2026-11-03) is off on this synthetic server (no 「決定として登録」 in the thread).
     if (path === '/api/decisions/meta') return respond({ enabled: false, canRegister: false, canAdminister: false, departments: [] });
     // Free/busy (2026-11-20) is off on this synthetic server, as a server without availability.json answers.

@@ -1,10 +1,33 @@
-/* The website (blog) editor's part of the settings: who may write and who may publish. */
+/* The Webサイト tab (2026-11-23): the blog's posts, and who may write and who may publish. The app's own parts
+   (buttons, chips, status lines); no new colours. */
+.main.site-main { width: 100%; max-width: 1020px; margin: 0 auto; }
+.site-panel { display: grid; gap: 10px; min-width: 0; }
+.site-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; }
+.site-title { margin: 0; font-size: 20px; }
+.site-head-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.site-head-actions .button { min-height: 44px; display: inline-flex; align-items: center; }
+
+.site-posts h3 { margin: 4px 0 6px; display: flex; align-items: baseline; gap: 10px; }
+.site-count { color: var(--muted); font-size: 14px; font-weight: 400; }
+.site-post-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+.site-post { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 4px 12px; padding: 6px 4px; border-bottom: 1px solid var(--line); }
+.site-post-title { display: flex; align-items: center; min-height: 44px; font-weight: 700; overflow-wrap: anywhere; }
+.site-post-date { color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.chip.site-chip-live { background: var(--green-bg); color: var(--green); border: 1px solid var(--green-line); padding: 0 7px; white-space: nowrap; }
+.chip.site-chip-draft { background: var(--neutral-bg); color: var(--ink); border: 1px solid var(--field); padding: 0 7px; white-space: nowrap; }
+@media (max-width: 560px) {
+  /* A phone: the title on its own line, the date and the state under it. */
+  .site-post { grid-template-columns: auto 1fr; }
+  .site-post-title { grid-column: 1 / -1; min-height: 36px; }
+  .site-post .chip { justify-self: start; }
+}
+
 .site-access {
   margin-top: 20px;
   padding-top: 12px;
   border-top: 1px solid var(--line);
 }
-.site-access h4 {
+.site-access h3 {
   margin: 0 0 4px;
 }
 .site-access-group {
