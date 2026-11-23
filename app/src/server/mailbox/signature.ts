@@ -95,6 +95,13 @@ export class SignatureStore {
     };
   }
 
+  /** The member whose own address (設定 › 署名) this is; null for none, or for an address two members gave. */
+  ownerOf(address: string): string | null {
+    const wanted = address.trim().toLowerCase();
+    const owners = Object.entries(this.state.people).filter(([, p]) => p.personalEmail.trim().toLowerCase() === wanted);
+    return owners.length === 1 ? owners[0]![0] : null;
+  }
+
   view(user: User, organization: string): SignatureView {
     const own = this.state.people[user.id];
     return {

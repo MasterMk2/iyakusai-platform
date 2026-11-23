@@ -197,9 +197,9 @@ export class MailboxService {
     return { items, total, page: query.page, pageSize: query.pageSize };
   }
 
-  /** 送信箱 (2026-11-23): mail sent from the committee mailboxes (sent.ts). */
-  listSent(user: User, query: SentQuery): MailSentResponse {
-    return listSentMail({ store: this.store, addresses: this.addresses, nameOf: (id) => this.name(id), hidden: (u, row) => this.hidden(u, row), now: new Date(this.clock()) }, user, query);
+  /** 送信箱 (2026-11-23): mail the committee sent (sent.ts); `ownerOf` names the member of an own address (設定 › 署名). */
+  listSent(user: User, query: SentQuery, ownerOf: (address: string) => string | null): MailSentResponse {
+    return listSentMail({ store: this.store, addresses: this.addresses, nameOf: (id) => this.name(id), ownerOf, hidden: (u, row) => this.hidden(u, row), now: new Date(this.clock()) }, user, query);
   }
 
   private triageView(row: MessageRow): TriageView {
