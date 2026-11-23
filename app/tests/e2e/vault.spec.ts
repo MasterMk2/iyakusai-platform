@@ -92,7 +92,7 @@ test('a member opens the tab after typing the password again, copies a password,
   await expect(page.getByTestId('vault-entry').getByRole('button', { name: '変更', exact: true })).toHaveCount(0);
 
   await page.getByTestId('vault-copy').click();
-  await expect(page.getByRole('status')).toContainText('30 秒後にクリップボードを空にします');
+  await expect(page.getByRole('status').filter({ hasText: 'コピーしました' })).toContainText('30 秒後にクリップボードを空にします');
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(PASSWORD);
   await page.getByRole('button', { name: '「合成の管理画面」のパスワードを表示' }).click();
   await expect(page.getByTestId('vault-shown-password')).toHaveText(PASSWORD);
@@ -142,7 +142,7 @@ test('an editor registers a site with its use, who can open it, its address, use
   await page.getByTestId('vault-form-email').fill('synthetic-billing@example.invalid');
   await page.getByTestId('vault-form-password').fill('Synthetic-Billing-0001');
   await page.getByTestId('vault-form-save').click();
-  await expect(page.getByRole('status')).toContainText('「合成の請求サービス」を追加しました');
+  await expect(page.getByRole('status').filter({ hasText: '追加しました' })).toContainText('「合成の請求サービス」を追加しました');
   expect(posted).toEqual([
     expect.objectContaining({
       sectionId: SECTION.id,

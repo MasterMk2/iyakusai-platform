@@ -316,6 +316,8 @@ export async function installWorld(page: Page, options: WorldOptions = {}): Prom
       next.missingRequirements = (['purpose', 'deliverable', 'completionCriteria'] as const).filter((f) => next.requirements[f] === '');
       tasks[i] = next; return respond({ task: next, replayed: false });
     }
+    // The password book's tab asks on every load (2026-11-23): a world without it.
+    if (path === '/api/vault/meta') return respond({ enabled: false, canOpen: false, canAdminister: false, revealMinutes: 10, freshUntil: null });
     calls.push(`UNHANDLED ${method} ${path}`);
     return respond({ error: 'not_found', message: 'preview: not handled' }, 404);
   };

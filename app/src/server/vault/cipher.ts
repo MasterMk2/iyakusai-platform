@@ -51,7 +51,10 @@ export class VaultCipher {
   }
 
   seal(sectionId: string, entryId: string, secret: VaultSecret): Sealed {
-    const plain = Buffer.from(JSON.stringify(secretSchema.parse(secret)), 'utf8');
+    // 用途 and 登録メールアドレス are left out while empty: the first version (5 fields, strict) still opens such an entry
+    // after a rollback. One that has either does not open there (it stays in the file and opens again here).
+    const { purpose, email, ...rest } = secretSchema.parse(secret);
+    const plain = Buffer.from(JSON.stringify({ ...rest, ...(purpose ? { purpose } : {}), ...(email ? { email } : {}) }), 'utf8');
     const iv = randomBytes(12);
     const cipher = createCipheriv('aes-256-gcm', this.#key, iv, { authTagLength: 16 });
     cipher.setAAD(VaultCipher.#aad(sectionId, entryId));
