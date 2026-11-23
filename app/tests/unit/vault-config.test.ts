@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from 'node:crypto';
 import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -56,7 +57,7 @@ describe('vault.json', () => {
 });
 
 describe('cipher', () => {
-  const secret = { name: '合成', url: 'https://example.invalid', username: 'synthetic', password: 'Synthetic-Pass', notes: '' };
+  const secret = { name: '合成', purpose: '合成の用途', url: 'https://example.invalid', username: 'synthetic', email: 'synthetic@example.invalid', password: 'Synthetic-Pass', notes: '' };
 
   it('opens what it sealed, only for the same section and entry, and only with the same key', () => {
     const cipher = new VaultCipher(Buffer.from(KEY_HEX, 'hex'));
@@ -76,6 +77,37 @@ describe('cipher', () => {
     expect(() => cipher.open('vs_0000000000000001', 've_0000000000000001', tampered)).toThrow(VaultUnreadable);
   });
 
+  it('opens an entry sealed before 用途 and 登録メールアドレス with both empty', () => {
+    // Sealed the way the first version did (2026-11-23, PR #78): the same key derivation and additional data, five fields.
+    const master = Buffer.from(KEY_HEX, 'hex');
+    const key = Buffer.from(hkdfSync('sha256', master, Buffer.from('iyakusai-vault'), Buffer.from('vault-entries/v1'), 32));
+    const iv = randomBytes(12);
+    const c = createCipheriv('aes-256-gcm', key, iv, { authTagLength: 16 });
+    c.setAAD(Buffer.from('iyakusai-vault|v1|vs_0000000000000001|ve_0000000000000001', 'utf8'));
+    const old = { name: '合成', url: '', username: 'synthetic', password: 'Synthetic-Old-Pass', notes: '' };
+    const data = Buffer.concat([c.update(JSON.stringify(old), 'utf8'), c.final()]);
+    const cipher = new VaultCipher(master);
+    const sealed = { keyId: cipher.keyId, iv: iv.toString('base64'), tag: c.getAuthTag().toString('base64'), data: data.toString('base64') };
+    expect(cipher.open('vs_0000000000000001', 've_0000000000000001', sealed)).toEqual({ ...old, purpose: '', email: '' });
+  });
+
+  it('leaves the two new fields out while empty, so the first version still opens such an entry after a rollback', () => {
+    const master = Buffer.from(KEY_HEX, 'hex');
+    const cipher = new VaultCipher(master);
+    const key = Buffer.from(hkdfSync('sha256', master, Buffer.from('iyakusai-vault'), Buffer.from('vault-entries/v1'), 32));
+    const plain = (s: { iv: string; tag: string; data: string }) => {
+      const d = createDecipheriv('aes-256-gcm', key, Buffer.from(s.iv, 'base64'), { authTagLength: 16 });
+      d.setAAD(Buffer.from('iyakusai-vault|v1|vs_0000000000000001|ve_0000000000000001', 'utf8'));
+      d.setAuthTag(Buffer.from(s.tag, 'base64'));
+      return JSON.parse(Buffer.concat([d.update(Buffer.from(s.data, 'base64')), d.final()]).toString('utf8')) as Record<string, string>;
+    };
+    const empty = cipher.seal('vs_0000000000000001', 've_0000000000000001', { ...secret, purpose: '', email: '' });
+    expect(Object.keys(plain(empty)).sort()).toEqual(['name', 'notes', 'password', 'url', 'username']);
+    expect(cipher.open('vs_0000000000000001', 've_0000000000000001', empty)).toEqual({ ...secret, purpose: '', email: '' });
+    const filled = cipher.seal('vs_0000000000000001', 've_0000000000000001', secret);
+    expect(plain(filled)).toMatchObject({ purpose: '合成の用途', email: 'synthetic@example.invalid' });
+  });
+
   it('gives a key id that does not reveal the key', () => {
     const cipher = new VaultCipher(Buffer.from(KEY_HEX, 'hex'));
     expect(cipher.keyId).toMatch(/^[0-9a-f]{16}$/);
@@ -93,7 +125,7 @@ describe('the backup', () => {
     const at = '2026-11-23T01:00:00.000Z';
     const section = store.createSection('vs_0000000000000001', '合成の区分', '', 'u1', at);
     if (typeof section === 'string') throw new Error(section);
-    store.insertEntry('ve_0000000000000001', section.id, cipher.seal(section.id, 've_0000000000000001', { name: '合成', url: '', username: '', password: 'Synthetic-Backup-Pass', notes: '' }), null, 'u1', at);
+    store.insertEntry('ve_0000000000000001', section.id, cipher.seal(section.id, 've_0000000000000001', { name: '合成', purpose: '', url: '', username: '', email: '', password: 'Synthetic-Backup-Pass', notes: '' }), null, 'u1', at);
     store.close();
 
     execFileSync(process.execPath, ['--disable-warning=ExperimentalWarning', '--import', 'tsx', path.resolve('src/server/ops/backup.ts')], {

@@ -128,6 +128,8 @@ async function syntheticWorkspace(page: Page, options: { role?: 'viewer' | 'edit
       return respond({ task: tasks[i], replayed: false });
     }
     if (path === `/api/tasks/${FIRST_TASK}`) return respond({ task: tasks[0], provenance: [{ kind: 'mail', label: receipt.subject, href: `#/all?thread=${FIRST_THREAD}` }] });
+    // The password book's tab asks on every load (2026-11-23): a server without it.
+    if (path === '/api/vault/meta') return respond({ enabled: false, canOpen: false, canAdminister: false, revealMinutes: 10, freshUntil: null });
     unexpected.push(`${request.method()} ${path}`);
     return respond({ error: 'not_found' }, 404);
   });

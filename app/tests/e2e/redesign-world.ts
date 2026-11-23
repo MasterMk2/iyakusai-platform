@@ -316,6 +316,10 @@ export async function installWorld(page: Page, options: WorldOptions = {}): Prom
       next.missingRequirements = (['purpose', 'deliverable', 'completionCriteria'] as const).filter((f) => next.requirements[f] === '');
       tasks[i] = next; return respond({ task: next, replayed: false });
     }
+    // The password book's tab asks on every load (2026-11-23): a world without it.
+    if (path === '/api/vault/meta') return respond({ enabled: false, canOpen: false, canAdminister: false, revealMinutes: 10, freshUntil: null });
+    // So does the Web site's tab (#84): a world without the site editor.
+    if (path === '/api/site-editor/meta') return respond({ error: 'not_found', message: 'not on this world' }, 404);
     calls.push(`UNHANDLED ${method} ${path}`);
     return respond({ error: 'not_found', message: 'preview: not handled' }, 404);
   };
