@@ -1,5 +1,5 @@
 import { LIMITS, STATUS_LABELS, type AssigneeCandidate, type AttachmentView, type HandlingStatus, type LabelFacet, type MailboxSummary, type NoteView, type ReceiptImagesView, type ReceiptView, type ThreadDetailResponse, type ThreadListResponse, type ThreadStatusResponse, type TriageView } from '../../shared/api.js';
-import { departmentsOfLabel, TEMPORARY_STAFF_DEPARTMENT, type MailAccessResponse, type MailApprovalMark, type MailApprovalMarkSkip, type MailApprovalMarksResponse } from '../../shared/mailbox.js';
+import { departmentsOfLabel, TEMPORARY_STAFF_DEPARTMENT, type MailAccessResponse, type MailApprovalMark, type MailApprovalMarkSkip, type MailApprovalMarksResponse, type MailSentResponse } from '../../shared/mailbox.js';
 import { sanitizeMailHtml } from '../domain/sanitize.js';
 import { normalizeLabels } from '../domain/triage.js';
 import { DomainError, notFound, type User } from '../domain/types.js';
@@ -9,6 +9,7 @@ import { AUTO_ACTOR, AUTO_ACTOR_NAME, dueEntries, loadDue, messageDueView, NO_DU
 import type { MailboxDefinition } from './config.js';
 import { contentIdOf, eachLimited, imageSources, MAIL_IMAGE_MAX_BYTES, MAIL_IMAGES_TOTAL_BYTES, MAIL_REMOTE_IMAGES_MAX, remoteImageUrl, sniffMailImage, type RemoteImageFetch } from './images.js';
 import { SIGN_IN_MAIL_SUBJECT, SIGN_IN_MAIL_TEXT } from './restricted.js';
+import { listSentMail, type SentQuery } from './sent.js';
 import { approvalRequired, approvalRequiredMailboxesOf, departmentReviewGrants, departmentReviewMailboxes, reviewedMailboxes, reviewGrants, reviewMailboxesOf, setApprovalRequired, setApprovalRequiredMany, setDepartmentReviewGrant, setReviewGrant } from './approval-store.js';
 import { normalizeForSearch, type AttachmentRow, type ListFilter, type MailboxStore, type MessageRow } from './store.js';
 
@@ -194,6 +195,11 @@ export class MailboxService {
       };
     });
     return { items, total, page: query.page, pageSize: query.pageSize };
+  }
+
+  /** 送信箱 (2026-11-23): mail sent from the committee mailboxes (sent.ts). */
+  listSent(user: User, query: SentQuery): MailSentResponse {
+    return listSentMail({ store: this.store, addresses: this.addresses, nameOf: (id) => this.name(id), hidden: (u, row) => this.hidden(u, row), now: new Date(this.clock()) }, user, query);
   }
 
   private triageView(row: MessageRow): TriageView {

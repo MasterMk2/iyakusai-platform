@@ -15,6 +15,8 @@ export interface MailStatusResponse {
   unhandledTotal: number | null;
   /** Mail waiting for an approval (2026-11-11); null while the mailbox cannot be opened, absent without sending or on an older server. */
   approvals?: MailApprovalCounts | null;
+  /** The server lists sent mail (GET /api/mail/sent, 2026-11-23); absent on an older server. */
+  sentBox?: true;
 }
 
 /** Error code of a mail request that needs the password again. */
@@ -319,4 +321,57 @@ export function splitRecipients(text: string): string[] {
   }
   if (current.trim()) out.push(current.trim());
   return out;
+}
+
+// ---- 送信箱 (2026-11-23): mail sent from the committee mailboxes, newest first
+
+/**
+ * sent: the mail server took it (or the account's copy shows it went out). sending: being handed over now.
+ * unknown: the connection ended while it was handed over, or a send stopped half way; it may have gone out
+ * (never send it again without asking the other side). failed: the mail server refused it; nothing went out.
+ */
+export const MAIL_SENT_STATES = ['sent', 'sending', 'unknown', 'failed'] as const;
+export type MailSentState = (typeof MAIL_SENT_STATES)[number];
+
+export const MAIL_SENT_STATE_LABELS: Record<MailSentState, string> = {
+  sent: '送信済み',
+  sending: '送信中',
+  unknown: '送信できたか不明',
+  failed: '送れなかった',
+};
+
+export interface MailSentItem {
+  /** The stored message (rc_…), or the send (og_…) when no copy of the message is kept. */
+  id: string;
+  state: MailSentState;
+  /** When it was sent (or the send was started, for one not kept). */
+  at: string;
+  /** The From mailbox. */
+  mailbox: { id: string; name: string };
+  /** Sent from this app (the member who wrote it is known) or from the account's Gmail directly. */
+  via: 'app' | 'gmail';
+  /** The member who wrote it; null for mail sent from Gmail. */
+  senderName: string | null;
+  /** The thread of the message; null for a send whose message is not kept. */
+  threadId: string | null;
+  /** Null for a send whose message is not kept (its subject and text are never stored). */
+  subject: string | null;
+  /** The To recipients as names (or addresses where there is no name); empty for a send whose message is not kept. */
+  to: string[];
+  /** All recipients: To and CC, and BCC for mail sent from this app. */
+  recipients: number;
+  /** Null for a send whose message is not kept (its attachments are not recorded). */
+  attachments: number | null;
+  /** A send whose message is not kept, written as a reply: the thread it answers, while it can be read. */
+  replyTo: { threadId: string; subject: string } | null;
+  /** Why the mail server refused it (failed only), in words. */
+  reason: string | null;
+}
+
+/** GET /api/mail/sent: `mine=1` the signed-in person's, `state=problem` the ones that may not have gone out (unknown, failed). */
+export interface MailSentResponse {
+  items: MailSentItem[];
+  total: number;
+  page: number;
+  pageSize: number;
 }

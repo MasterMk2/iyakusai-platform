@@ -83,6 +83,11 @@ export class CommitteeAddresses {
     return this.domains.has(normalized.slice(normalized.lastIndexOf('@') + 1));
   }
 
+  /** The committee domains and the alias domains mapped to them, in lower case (an address on one may be a mailbox's). */
+  domainsWithAliases(): string[] {
+    return [...this.domains, ...Object.entries(this.aliases).flatMap(([alias, target]) => (this.domains.has(target) ? [alias.toLowerCase()] : []))];
+  }
+
   /** A List-Id header value such as `"協賛" <sponsorship.iyakusai.com>`. */
   ofListId(value: string): MailboxDefinition | undefined {
     const inner = /<([^<>\s]+)>/.exec(value)?.[1] ?? value.trim();

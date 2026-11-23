@@ -4,7 +4,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { HANDLING_STATUSES, LIMITS } from '../../shared/api.js';
 import type { InboxResponse } from '../../shared/line.js';
-import { MAIL_ATTACHMENTS_MAX, MAIL_BODY_MAX, MAIL_SUBJECT_MAX, REAUTH_REQUIRED, type MailApprovalMarksResponse, type MailSendOptions, type MailStatusResponse } from '../../shared/mailbox.js';
+import { MAIL_ATTACHMENTS_MAX, MAIL_BODY_MAX, MAIL_SUBJECT_MAX, REAUTH_REQUIRED, type MailApprovalMarksResponse, type MailSendOptions, type MailSentResponse, type MailStatusResponse } from '../../shared/mailbox.js';
 import { DUE_DATE_PATTERN } from '../../shared/mailDue.js';
 import { fiscalYearOf, tokyoDate } from '../../shared/books.js';
 import { registerBankRoutes } from '../bank/routes.js';
@@ -132,6 +132,8 @@ const filters = {
 };
 const dueDay = z.string().regex(DUE_DATE_PATTERN);
 const threadQuery = z.strictObject({ ...filters, ...page });
+// 送信箱 (2026-11-23): the From mailbox, a search, the signed-in person's own, and the ones that may not have gone out.
+const sentQuery = z.strictObject({ mailboxId: shortId.optional(), q: z.string().max(LIMITS.queryMaxLength).optional(), mine: z.enum(['1']).optional(), state: z.enum(['problem']).optional(), ...page });
 const inboxQuery = z.strictObject({ ...filters, ...page, source: z.enum(['all', 'email', 'line']).default('all'), lineAccountId: shortId.optional() });
 // `source` narrows the labels to one tab's kind (2026-11-03: メール and 公式LINE are separate tabs).
 const labelQuery = z.strictObject({ source: z.enum(['all', 'email', 'line']).default('all'), mailboxId: shortId.optional(), lineAccountId: shortId.optional() });
@@ -474,7 +476,7 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
     const reauthRequired = canOpen && idle(session, now());
     const open = canOpen && !reauthRequired;
     // The approval counts exist only with sending (absent otherwise, as on a server before 2026-11-11).
-    return { enabled: true, canOpen, reauthRequired, idleHours: rt.config.idleHours, unhandledTotal: open ? service.unhandledTotal() : null, ...(approvals ? { approvals: open ? approvals.counts(deps.requireUser(request)) : null } : {}) };
+    return { enabled: true, canOpen, reauthRequired, idleHours: rt.config.idleHours, unhandledTotal: open ? service.unhandledTotal() : null, ...(approvals ? { approvals: open ? approvals.counts(deps.requireUser(request)) : null } : {}), sentBox: true };
   });
 
   // Mailbox names and counts (home screen and side bar): needs the idle limit, but is not mail use.
@@ -493,6 +495,12 @@ export function registerMailboxRoutes(app: FastifyInstance, rt: MailboxRuntime, 
   app.get('/api/threads', async (request) => {
     const user = reader(request, true);
     return service.listThreads(user, deps.parse(threadQuery, request.query));
+  });
+
+  // 送信箱 (2026-11-23): mail sent from the committee mailboxes, read like the thread list.
+  app.get('/api/mail/sent', async (request): Promise<MailSentResponse> => {
+    const user = reader(request, true);
+    return service.listSent(user, deps.parse(sentQuery, request.query));
   });
 
   app.get('/api/inbox', async (request): Promise<InboxResponse> => {
