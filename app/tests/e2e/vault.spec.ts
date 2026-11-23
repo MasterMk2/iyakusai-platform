@@ -9,7 +9,7 @@ const PASSWORD = 'Synthetic-Pass-0001';
 const SECTION = { id: 'vs_0000000000000001', name: '合成の区分', note: '', myRole: 'view' as const, canManage: false, entryCount: 1, lastPrintedAt: null, changesSincePrint: 1, version: 2 };
 const ENTRY = { id: 've_0000000000000001', sectionId: SECTION.id, name: '合成の管理画面', url: 'https://console.example.invalid', username: 'synthetic-admin', hasPassword: true, hasNotes: false, updatedAt: '2026-11-23T01:00:00.000Z', updatedByName: '合成 委員長', version: 1 };
 
-async function open(page: Page, o: { canOpen?: boolean; fresh?: boolean } = {}) {
+async function open(page: Page, o: { canOpen?: boolean; fresh?: boolean; hash?: string } = {}) {
   let fresh = o.fresh ?? true;
   const calls: string[] = [];
   await page.route('**/api/**', async (route) => {
@@ -44,15 +44,19 @@ async function open(page: Page, o: { canOpen?: boolean; fresh?: boolean } = {}) 
         return respond({ error: 'not_found' }, 404);
     }
   });
-  await page.goto('/#/settings/vault');
+  await page.goto(o.hash ?? '/#/vault');
   return { calls };
 }
 
-test('a member opens the book after typing the password again, copies a password, and leaves no value behind', async ({ page, context }) => {
+test('a member opens the tab after typing the password again, copies a password, and leaves no value behind', async ({ page, context }) => {
   await context.grantPermissions(['clipboard-read', 'clipboard-write']);
   await page.setViewportSize({ width: 1280, height: 900 });
   const { calls } = await open(page, { fresh: false });
-  await expect(page.getByRole('navigation', { name: '設定の項目' }).getByRole('link', { name: 'パスワード帳' })).toBeVisible();
+  const tab = page.getByTestId('nav-vault');
+  await expect(tab).toBeVisible();
+  await expect(tab).toHaveAttribute('aria-current', 'page');
+  // The tab sits just before 設定.
+  await expect(page.locator('.global-nav a').nth(-2)).toHaveAttribute('data-testid', 'nav-vault');
   // Past the window: the password first, and no list is asked for until it is typed.
   await expect(page.getByTestId('vault-reauth')).toBeVisible();
   expect(calls).not.toContain('GET /api/vault/entries');
@@ -70,12 +74,15 @@ test('a member opens the book after typing the password again, copies a password
   await page.getByRole('button', { name: '「合成の管理画面」のパスワードを表示' }).click();
   await expect(page.getByTestId('vault-shown-password')).toHaveText(PASSWORD);
 
-  // Another part of the settings: nothing of the book stays on the page.
-  await page.getByRole('navigation', { name: '設定の項目' }).getByRole('link', { name: '画面の色' }).click();
+  // Another tab: nothing of the book stays on the page.
+  await page.getByTestId('nav-settings').click();
   await expect(page.getByTestId('vault-panel')).toHaveCount(0);
   expect(await page.evaluate((secret) => document.body.innerHTML.includes(secret), PASSWORD)).toBe(false);
+  // The settings no longer list it.
+  await expect(page.getByRole('navigation', { name: '設定の項目' }).getByRole('link', { name: 'パスワード帳' })).toHaveCount(0);
   // Back: the list again, every value hidden.
-  await page.getByRole('navigation', { name: '設定の項目' }).getByRole('link', { name: 'パスワード帳' }).click();
+  await page.getByTestId('nav-vault').click();
+  await expect(page).toHaveURL(/#\/vault$/);
   await expect(page.getByTestId('vault-entry')).toHaveCount(1);
   await expect(page.getByTestId('vault-shown-password')).toHaveCount(0);
 
@@ -85,20 +92,32 @@ test('a member opens the book after typing the password again, copies a password
   await expect(page.getByTestId('vault-locked')).toBeVisible();
 });
 
-test('a member on no section, or a server without the book, does not see it in the list', async ({ page }) => {
+test('its first address under the settings opens the tab', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
-  await open(page, { canOpen: false });
-  await expect(page.getByRole('heading', { name: '設定', exact: true, level: 2 })).toBeAttached();
-  await expect(page.getByRole('navigation', { name: '設定の項目' }).getByRole('link', { name: 'アカウント' })).toBeVisible();
-  await expect(page.getByRole('navigation', { name: '設定の項目' }).getByRole('link', { name: 'パスワード帳' })).toHaveCount(0);
-  await expect(page.getByTestId('vault-panel')).toHaveCount(0);
+  await open(page, { hash: '/#/settings/vault' });
+  await expect(page).toHaveURL(/#\/vault$/);
+  await expect(page.getByTestId('nav-vault')).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByTestId('vault-entry')).toHaveCount(1);
 });
 
-test('on a phone the copy button is large and nothing scrolls sideways', async ({ page, context }) => {
-  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
-  await page.setViewportSize({ width: 375, height: 812 });
-  await open(page);
-  await expect(page.getByTestId('vault-entry')).toHaveCount(1);
-  expect((await page.getByTestId('vault-copy').boundingBox())!.height).toBeGreaterThanOrEqual(44);
-  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
+test('a member on no section has no tab, and the address explains why it is empty', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await open(page, { canOpen: false });
+  await expect(page.getByTestId('nav-settings')).toBeVisible();
+  await expect(page.getByTestId('nav-vault')).toHaveCount(0);
+  await expect(page.getByTestId('vault-panel')).toHaveCount(0);
+  await expect(page.getByText('あなたが見られる区分がありません')).toBeVisible();
 });
+
+for (const width of [375, 320]) {
+  test(`on a phone ${width}px wide the eleven tabs fit, the copy button is large and nothing scrolls sideways`, async ({ page, context }) => {
+    await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+    await page.setViewportSize({ width, height: 812 });
+    await open(page);
+    await expect(page.getByTestId('vault-entry')).toHaveCount(1);
+    expect((await page.getByTestId('vault-copy').boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+    const tab = await page.getByTestId('nav-vault').boundingBox();
+    expect(tab!.x + tab!.width).toBeLessThanOrEqual(width);
+  });
+}

@@ -22,7 +22,7 @@ const APP_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../.
 // 画面の中のリンク（#/ で始まるもの）と応答の中の ID からも行き先を足す。
 const BOOKS_SECTIONS = ['claims', 'ledger', 'reports', 'payments', 'yayoi', 'settings'];
 const BOT_SECTIONS = ['ask', 'doc', 'mail', 'image', 'remind', 'candidates', 'minutes'];
-const SETTINGS_SECTIONS = ['account', 'card', 'theme', 'signature', 'availability', 'managers', 'mail', 'line', 'accounting', 'rental', 'features', 'dayof', 'login', 'bank', 'vault', 'rollover', 'directory'];
+const SETTINGS_SECTIONS = ['account', 'card', 'theme', 'signature', 'availability', 'managers', 'mail', 'line', 'accounting', 'rental', 'features', 'dayof', 'login', 'bank', 'rollover', 'directory'];
 const SEED_ROUTES = [
   '#/home',
   '#/board',
@@ -41,6 +41,7 @@ const SEED_ROUTES = [
   '#/contacts?import=1',
   '#/decisions',
   '#/decisions?new=1',
+  '#/vault',
   '#/books',
   ...BOOKS_SECTIONS.map((s) => `#/books/${s}`),
   ...BOT_SECTIONS.map((s) => `#/bot/${s}`),
