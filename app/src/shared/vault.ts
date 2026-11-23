@@ -197,5 +197,5 @@ export interface VaultEventsResponse {
   events: VaultEventItem[];
 }
 
-// The password book's address inside the app (settings › パスワード帳).
-export const VAULT_HREF = '#/settings/vault';
+// The password book's address inside the app: its own tab (2026-11-23; #/settings/vault, its first address, opens it too).
+export const VAULT_HREF = '#/vault';
