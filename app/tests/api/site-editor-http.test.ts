@@ -308,6 +308,33 @@ describe('the website editor', () => {
     expect((await call(EDITOR, 'POST', '/site-editor/api/media', '{}')).json).toMatchObject({ reason: 'not-image' });
   });
 
+  it('passes deleting a post and restoring it on with the writing right, and lists the deleted posts', async () => {
+    for (const [method, url] of [
+      ['POST', '/site-editor/api/pages/20261123-a1b2/delete'],
+      ['POST', '/site-editor/api/pages/20261123-a1b2/restore'],
+      ['GET', '/site-editor/api/deleted-pages'],
+    ] as const) {
+      expect((await call(EDITOR, method, url, method === 'POST' ? '{}' : undefined)).status, url).toBe(200);
+    }
+    expect(seen.map((s) => `${s.method} ${s.url.replace('http://wge.invalid:8080', '')}`)).toEqual(['POST /api/pages/20261123-a1b2/delete', 'POST /api/pages/20261123-a1b2/restore', 'GET /api/deleted-pages']);
+    expect(signedRight(seen[0]!, '/api/pages/20261123-a1b2/delete')).toBe(true);
+    expect(seen[0]!.headers['x-svc-actor']).toBe(EDITOR);
+    // Nobody else, and no other method or shape.
+    expect((await call(OUTSIDER, 'POST', '/site-editor/api/pages/20261123-a1b2/delete', '{}')).status).toBe(403);
+    for (const [method, url] of [
+      ['GET', '/site-editor/api/pages/20261123-a1b2/delete'],
+      ['POST', '/site-editor/api/deleted-pages'],
+      ['POST', '/site-editor/api/pages/Bad!/delete'],
+      ['POST', '/site-editor/api/pages/20261123-a1b2/purge'],
+    ] as const) {
+      expect((await call(EDITOR, method, url, method === 'POST' ? '{}' : undefined)).status, `${method} ${url}`).toBe(404);
+    }
+    expect(seen).toHaveLength(3);
+    // The editor's server's refusal of a published post passes as it is.
+    answer = [409, 'application/json', '{"wge":1,"ok":false,"reason":"published"}'];
+    expect((await call(EDITOR, 'POST', '/site-editor/api/pages/20261123-a1b2/delete', '{}')).json).toEqual({ wge: 1, ok: false, reason: 'published' });
+  });
+
   it('never caches what it passes on', async () => {
     const res = await app.inject({ method: 'GET', url: '/site-editor/editor/editor.css', headers: { host: TEST_HOST, cookie: `${SESSION_COOKIE}=${EDITOR}` } });
     expect(res.headers['cache-control']).toBe('no-store');
