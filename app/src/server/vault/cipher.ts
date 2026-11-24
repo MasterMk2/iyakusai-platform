@@ -18,10 +18,13 @@ export interface Sealed {
   data: string;
 }
 
+// 用途 and 登録メールアドレス (2026-11-23) default to empty: entries sealed before them open as they were.
 const secretSchema = z.strictObject({
   name: z.string().max(VAULT_LIMITS.entryName),
+  purpose: z.string().max(VAULT_LIMITS.purpose).default(''),
   url: z.string().max(VAULT_LIMITS.url),
   username: z.string().max(VAULT_LIMITS.username),
+  email: z.string().max(VAULT_LIMITS.email).default(''),
   password: z.string().max(VAULT_LIMITS.password),
   notes: z.string().max(VAULT_LIMITS.notes),
 });
@@ -48,7 +51,10 @@ export class VaultCipher {
   }
 
   seal(sectionId: string, entryId: string, secret: VaultSecret): Sealed {
-    const plain = Buffer.from(JSON.stringify(secretSchema.parse(secret)), 'utf8');
+    // 用途 and 登録メールアドレス are left out while empty: the first version (5 fields, strict) still opens such an entry
+    // after a rollback. One that has either does not open there (it stays in the file and opens again here).
+    const { purpose, email, ...rest } = secretSchema.parse(secret);
+    const plain = Buffer.from(JSON.stringify({ ...rest, ...(purpose ? { purpose } : {}), ...(email ? { email } : {}) }), 'utf8');
     const iv = randomBytes(12);
     const cipher = createCipheriv('aes-256-gcm', this.#key, iv, { authTagLength: 16 });
     cipher.setAAD(VaultCipher.#aad(sectionId, entryId));

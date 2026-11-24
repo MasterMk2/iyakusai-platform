@@ -3,7 +3,9 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { compareDepartments } from '../../shared/departments.js';
 import {
+  VAULT_EMAIL,
   VAULT_ENTRY_ID,
+  VAULT_FIELD_LABELS,
   VAULT_LIMITS,
   VAULT_REAUTH_REQUIRED,
   VAULT_ROLES,
@@ -87,8 +89,13 @@ const memberBody = z.strictObject({
 const plainShape = {
   sectionId: z.string().regex(VAULT_SECTION_ID),
   name: line(VAULT_LIMITS.entryName),
+  // 用途 and 登録メールアドレス (2026-11-23): a form from before them still saves (they stay empty).
+  purpose: line(VAULT_LIMITS.purpose).default(''),
   url: line(VAULT_LIMITS.url),
   username: line(VAULT_LIMITS.username),
+  email: line(VAULT_LIMITS.email)
+    .refine((s) => s.trim() === '' || VAULT_EMAIL.test(s.trim()), { message: 'メールアドレスの形にしてください（空欄でも構いません）。' })
+    .default(''),
 };
 const createBody = z.strictObject({ ...plainShape, password: line(VAULT_LIMITS.password), notes: body(VAULT_LIMITS.notes), clientToken: z.string().regex(VAULT_TOKEN) });
 // null leaves the password or the note as it is (the edit form does not have to reveal them first).
@@ -192,8 +199,10 @@ export function registerVaultRoutes(app: FastifyInstance, runtime: VaultRuntime 
     id: row.id,
     sectionId: row.sectionId,
     name: secret.name,
+    purpose: secret.purpose,
     url: secret.url,
     username: secret.username,
+    email: secret.email,
     hasPassword: secret.password !== '',
     hasNotes: secret.notes !== '',
     updatedAt: row.updatedAt,
@@ -220,10 +229,10 @@ export function registerVaultRoutes(app: FastifyInstance, runtime: VaultRuntime 
     if (vaultRoleRank(role) < vaultRoleRank(need)) throw new DomainError('forbidden', 'この区分の項目を変えるには「編集する」が要ります。');
     return { row, section: store.section(row.sectionId)! };
   };
-  const normalizedSecret = (raw: { name: string; url: string; username: string }, password: string, notes: string): VaultSecret => {
+  const normalizedSecret = (raw: { name: string; purpose: string; url: string; username: string; email: string }, password: string, notes: string): VaultSecret => {
     const name = raw.name.trim();
-    if (!name) invalid('名前を入力してください。', 'name');
-    return { name, url: raw.url.trim(), username: raw.username.trim(), password, notes: notes.replace(/\r\n/g, '\n').trimEnd() };
+    if (!name) invalid('サイト名を入力してください。', 'name');
+    return { name, purpose: raw.purpose.trim(), url: raw.url.trim(), username: raw.username.trim(), email: raw.email.trim(), password, notes: notes.replace(/\r\n/g, '\n').trimEnd() };
   };
 
   // ---- sections
@@ -356,7 +365,7 @@ export function registerVaultRoutes(app: FastifyInstance, runtime: VaultRuntime 
         case 'member_removed':
           return `${who()}（${role(d.from)}）`;
         case 'entry_updated': {
-          const fields = Array.isArray(d.changed) ? (d.changed as string[]).map((k) => ({ name: '名前', url: 'URL', username: 'ID', password: 'パスワード', notes: 'メモ' })[k as keyof VaultSecret] ?? k) : [];
+          const fields = Array.isArray(d.changed) ? (d.changed as string[]).map((k) => VAULT_FIELD_LABELS[k as keyof VaultSecret] ?? k) : [];
           const move = d.movedTo ? `（別の区分へ移した）` : d.movedFrom ? `（別の区分から移した）` : '';
           return `${fields.join('・')}${move}`;
         }

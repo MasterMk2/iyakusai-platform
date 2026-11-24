@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { MinutesDraft } from '../../src/shared/minutes.js';
-import { LEASE_MS, MAX_ATTEMPTS, MinutesStore, newMeetingId } from '../../src/server/minutes/store.js';
+import { LEASE_MS, MAX_ATTEMPTS, MinutesStore, newMeetingId, SUGGESTIONS_STOPPED } from '../../src/server/minutes/store.js';
 import { checkedDraft, comparable, draftSchema, verifyEvidence } from '../../src/server/minutes/validate.js';
 
 // The minutes ledger and the checks of what the worker hands back. Synthetic meetings only.
@@ -263,5 +263,74 @@ describe("the AI's guesses, a part at a time beside the draft", () => {
     expect(store.suggestion(id)).toBeNull();
     // A draft with nothing to listen to again queues nothing.
     expect(store.suggestion(toDraft([]))).toBeNull();
+  });
+});
+
+// Confirmed minutes are not listened to again (2026-11-24): guesses left waiting would never be taken (the worker takes
+// only drafts) and held up every release of the app.
+describe("the AI's guesses stop when the minutes are confirmed", () => {
+  const segs = Array.from({ length: 4 }, (_, i) => ({ start: i * 10, end: i * 10 + 5, text: `合成の発言その${i + 1}です。` }));
+
+  function toDraft(targets: number[]): string {
+    const id = newMeetingId();
+    store.create(id, meeting, 'u1', iso(T0));
+    const t = store.claim(['transcribe'], T0, iso(T0))!;
+    store.completeTranscript(id, t.leaseToken, { segments: segs, durationSec: 60, model: 'large-v3' }, iso(T0));
+    const s = store.claim(['summarize'], T0, iso(T0))!;
+    expect(store.completeDraft(id, s.leaseToken, emptyDraft, '本文', iso(T0), targets)).toBe(true);
+    return id;
+  }
+  const confirm = (id: string, note = '') => store.confirm(id, store.get(id)!.version, note, 'u1', iso(T0 + 1000));
+
+  it('stops the waiting guesses on confirming, and goes on from where they stopped when asked during a correction', () => {
+    const id = toDraft([0, 1, 2, 3]);
+    const p = store.claimSuggestion(T0, iso(T0), 2)!;
+    expect(store.completeSuggestions(id, p.leaseToken, [{ index: 0, heard: segs[0]!.text, text: '合成の案です。' }], iso(T0))).toBe(true);
+    expect(store.suggestion(id)).toMatchObject({ status: 'wait', done: 2 });
+
+    expect(confirm(id)).toMatchObject({ stage: 'confirmed' });
+    expect(store.suggestion(id)).toMatchObject({ status: 'failed', error: SUGGESTIONS_STOPPED, done: 2, leaseToken: null });
+    // The guess made before stays; nothing is waiting any more.
+    expect(store.suggestion(id)!.items[0]).toMatchObject({ text: '合成の案です。' });
+    expect(store.db.prepare("SELECT COUNT(*) AS n FROM meeting_suggestions WHERE status IN ('wait','run')").get()).toEqual({ n: 0 });
+    expect(store.claimSuggestion(T0, iso(T0), 2)).toBeNull();
+
+    // A correction: asked again, the guessing goes on with the segments not yet guessed for.
+    store.reopen(id, store.get(id)!.version, 'u1', iso(T0 + 2000));
+    expect(store.requestSuggestions(id, [], 'u2', iso(T0 + 2000))).toMatchObject({ id });
+    expect(store.suggestion(id)).toMatchObject({ status: 'wait', done: 2, targets: [0, 1, 2, 3], error: null });
+    expect(store.claimSuggestion(T0 + 3000, iso(T0 + 3000), 2)).toMatchObject({ targets: [2, 3], done: 2 });
+  });
+
+  it('drops a part under way: the worker no longer holds it when it answers', () => {
+    const id = toDraft([0, 1]);
+    const p = store.claimSuggestion(T0, iso(T0), 2)!;
+    expect(confirm(id)).toMatchObject({ stage: 'confirmed' });
+    expect(store.holdsSuggestion(id, p.leaseToken)).toBe(false);
+    expect(store.renewSuggestionLease(id, p.leaseToken, T0 + LEASE_MS.suggest)).toBe(false);
+    expect(store.completeSuggestions(id, p.leaseToken, [{ index: 0, heard: segs[0]!.text, text: '遅れた案' }], iso(T0))).toBe(false);
+    expect(store.suggestion(id)).toMatchObject({ status: 'failed', error: SUGGESTIONS_STOPPED, items: {} });
+  });
+
+  it('stops them too when a correction is dropped (back to the confirmed minutes)', () => {
+    const id = toDraft([0]);
+    confirm(id);
+    store.reopen(id, store.get(id)!.version, 'u1', iso(T0 + 2000));
+    store.requestSuggestions(id, [], 'u2', iso(T0 + 2000));
+    expect(store.suggestion(id)).toMatchObject({ status: 'wait' });
+    expect(store.discard(id, store.get(id)!.version, 'u1', iso(T0 + 3000))).toMatchObject({ stage: 'confirmed' });
+    expect(store.suggestion(id)).toMatchObject({ status: 'failed', error: SUGGESTIONS_STOPPED });
+  });
+
+  it('clears on opening the guesses an older app left waiting on confirmed minutes, and leaves those of drafts', () => {
+    const left = toDraft([0, 1]);
+    const draft = toDraft([2, 3]);
+    // As an app before 2026-11-24 confirmed: the stage only.
+    store.db.prepare("UPDATE meetings SET stage='confirmed', confirmed_by='u1', confirmed_at=? WHERE id=?").run(iso(T0), left);
+    store.close();
+    store = new MinutesStore(dir);
+    expect(store.suggestion(left)).toMatchObject({ status: 'failed', error: SUGGESTIONS_STOPPED });
+    expect(store.suggestion(draft)).toMatchObject({ status: 'wait' });
+    expect(store.claimSuggestion(T0, iso(T0), 2)).toMatchObject({ row: { id: draft } });
   });
 });

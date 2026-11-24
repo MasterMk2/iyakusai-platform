@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test';
-import type { VaultEntriesResponse, VaultMetaResponse, VaultSectionsResponse } from '../../src/shared/vault.js';
+import type { VaultEntriesResponse, VaultMembersResponse, VaultMetaResponse, VaultSectionsResponse } from '../../src/shared/vault.js';
 import { expect, openTab, test } from './fixtures.js';
 
 // 設定 › パスワード帳 (2026-11-23). The server is a stand-in (page.route): the Discord login's answers, a password book
@@ -7,11 +7,21 @@ import { expect, openTab, test } from './fixtures.js';
 
 const PASSWORD = 'Synthetic-Pass-0001';
 const SECTION = { id: 'vs_0000000000000001', name: '合成の区分', note: '', myRole: 'view' as const, canManage: false, entryCount: 1, lastPrintedAt: null, changesSincePrint: 1, version: 2 };
-const ENTRY = { id: 've_0000000000000001', sectionId: SECTION.id, name: '合成の管理画面', url: 'https://console.example.invalid', username: 'synthetic-admin', hasPassword: true, hasNotes: false, updatedAt: '2026-11-23T01:00:00.000Z', updatedByName: '合成 委員長', version: 1 };
+const ENTRY = {
+  id: 've_0000000000000001',
+  sectionId: SECTION.id,
+  name: '合成の管理画面',
+  purpose: '合成のサーバーの設定',
+  url: 'https://console.example.invalid',
+  username: 'synthetic-admin',
+  email: 'synthetic-admin@example.invalid',
+  hasPassword: true, hasNotes: false, updatedAt: '2026-11-23T01:00:00.000Z', updatedByName: '合成 委員長', version: 1 };
 
-async function open(page: Page, o: { canOpen?: boolean; fresh?: boolean; hash?: string } = {}) {
+async function open(page: Page, o: { canOpen?: boolean; fresh?: boolean; hash?: string; role?: 'view' | 'edit' } = {}) {
   let fresh = o.fresh ?? true;
   const calls: string[] = [];
+  const posted: unknown[] = [];
+  const section = { ...SECTION, myRole: o.role ?? SECTION.myRole };
   await page.route('**/api/**', async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -32,11 +42,24 @@ async function open(page: Page, o: { canOpen?: boolean; fresh?: boolean; hash?: 
       case 'GET /api/vault/meta':
         return respond({ enabled: true, canOpen: o.canOpen ?? true, canAdminister: false, revealMinutes: 10, freshUntil: fresh ? '2026-11-23T01:10:00.000Z' : null } satisfies VaultMetaResponse);
       case 'GET /api/vault/sections':
-        return respond({ sections: [SECTION], canAdminister: false } satisfies VaultSectionsResponse);
+        return respond({ sections: [section], canAdminister: false } satisfies VaultSectionsResponse);
       case 'GET /api/vault/entries':
         return fresh ? respond({ entries: [ENTRY], unreadable: 0 } satisfies VaultEntriesResponse) : reauth();
       case `POST /api/vault/entries/${ENTRY.id}/reveal`:
         return fresh ? respond({ field: 'password', value: PASSWORD }) : reauth();
+      case `GET /api/vault/sections/${SECTION.id}/members`:
+        return respond({
+          section,
+          members: [],
+          openers: [
+            { id: 'iy-000001', name: '合成 委員長', role: 'manage', via: ['個人の指定'] },
+            { id: 'iy-000002', name: '合成 太郎', role: 'edit', via: ['総務部'] },
+          ],
+          choices: { departments: [], people: [] },
+        } satisfies VaultMembersResponse);
+      case 'POST /api/vault/entries':
+        posted.push(request.postDataJSON());
+        return respond({ entry: { ...ENTRY, id: 've_0000000000000002', ...(request.postDataJSON() as object), hasPassword: true, hasNotes: false, version: 1 } }, 201);
       case 'POST /api/auth/reauth':
         fresh = true;
         return respond({ ok: true });
@@ -45,7 +68,7 @@ async function open(page: Page, o: { canOpen?: boolean; fresh?: boolean; hash?: 
     }
   });
   await page.goto(o.hash ?? '/#/vault');
-  return { calls };
+  return { calls, posted };
 }
 
 test('a member opens the tab after typing the password again, copies a password, and leaves no value behind', async ({ page, context }) => {
@@ -69,7 +92,7 @@ test('a member opens the tab after typing the password again, copies a password,
   await expect(page.getByTestId('vault-entry').getByRole('button', { name: '変更', exact: true })).toHaveCount(0);
 
   await page.getByTestId('vault-copy').click();
-  await expect(page.getByRole('status')).toContainText('30 秒後にクリップボードを空にします');
+  await expect(page.getByRole('status').filter({ hasText: 'コピーしました' })).toContainText('30 秒後にクリップボードを空にします');
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(PASSWORD);
   await page.getByRole('button', { name: '「合成の管理画面」のパスワードを表示' }).click();
   await expect(page.getByTestId('vault-shown-password')).toHaveText(PASSWORD);
@@ -90,6 +113,47 @@ test('a member opens the tab after typing the password again, copies a password,
   await page.getByTestId('vault-lock').click();
   await expect(page.getByTestId('vault-entry')).toHaveCount(0);
   await expect(page.getByTestId('vault-locked')).toBeVisible();
+});
+
+test('an editor registers a site with its use, who can open it, its address, user name, e-mail and password', async ({ page, context }) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const { posted } = await open(page, { role: 'edit' });
+  // The list shows the use and the registered address, and copies the address.
+  const row = page.getByTestId('vault-entry');
+  await expect(row).toContainText('合成のサーバーの設定');
+  await row.getByRole('button', { name: '「合成の管理画面」の登録メールアドレスをコピー' }).click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('synthetic-admin@example.invalid');
+  await page.getByTestId('vault-search').fill('サーバーの設定');
+  await expect(row).toHaveCount(1);
+  await page.getByTestId('vault-search').fill('');
+
+  await page.getByTestId('vault-add').click();
+  // Who can open it: the section decides, and the form names them.
+  await expect(page.getByTestId('vault-form-openers')).toContainText('いま開ける人（2 人）');
+  await expect(page.getByTestId('vault-form-openers')).toContainText('合成 委員長（管理する）');
+  await page.getByTestId('vault-form-name').fill('合成の請求サービス');
+  await page.getByTestId('vault-form-purpose').fill('合成の請求書の送付');
+  await page.getByLabel('URL（任意）').fill('https://billing.example.invalid');
+  await page.getByTestId('vault-form-username').fill('synthetic-billing');
+  await page.getByTestId('vault-form-email').fill('not an address');
+  await expect(page.getByText('メールアドレスの形（○○@○○）にしてください')).toBeVisible();
+  await expect(page.getByTestId('vault-form-save')).toBeDisabled();
+  await page.getByTestId('vault-form-email').fill('synthetic-billing@example.invalid');
+  await page.getByTestId('vault-form-password').fill('Synthetic-Billing-0001');
+  await page.getByTestId('vault-form-save').click();
+  await expect(page.getByRole('status').filter({ hasText: '追加しました' })).toContainText('「合成の請求サービス」を追加しました');
+  expect(posted).toEqual([
+    expect.objectContaining({
+      sectionId: SECTION.id,
+      name: '合成の請求サービス',
+      purpose: '合成の請求書の送付',
+      url: 'https://billing.example.invalid',
+      username: 'synthetic-billing',
+      email: 'synthetic-billing@example.invalid',
+      password: 'Synthetic-Billing-0001',
+    }),
+  ]);
 });
 
 test('its first address under the settings opens the tab', async ({ page }) => {
