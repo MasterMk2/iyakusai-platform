@@ -1,4 +1,4 @@
-import { useCallback, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, fmtDate } from '../../api';
 import { useLoader } from '../../useLoader';
 import { LoadStatus } from '../LoadStatus';
@@ -15,8 +15,9 @@ import {
   type VaultSectionSummary,
 } from '../../../shared/vault';
 
-// The selected section: the state of its paper copy and its print, then (on a button) who opens it and its record.
-// Renaming and removing a section are an access administrator's, kept under その他 apart from the daily buttons.
+// The selected group (a section in the code): the state of its paper copy and its print, then (on a button) who may
+// see it and its record. Renaming and removing a group are an access administrator's, kept under その他 apart from the
+// daily buttons. The print's confirmation is held by the book, which also opens it after a password is registered.
 
 export function VaultSectionTools(props: {
   section: VaultSectionSummary;
@@ -25,14 +26,17 @@ export function VaultSectionTools(props: {
   canAdminister: boolean;
   tool: 'members' | 'events' | null;
   onTool: (tool: 'members' | 'events' | null) => void;
+  /** The print's confirmation is showing. */
+  confirmingPrint: boolean;
+  onConfirmPrint: (show: boolean) => void;
   onPrint: () => void;
   onChanged: () => void;
   onRemoved: () => void;
   onFail: (err: unknown) => void;
 }) {
   const { section: s } = props;
-  const [confirmPrint, setConfirmPrint] = useState(false);
   const [more, setMore] = useState(false);
+  const canPrint = props.open && !!s.myRole && s.entryCount > 0;
   const paper =
     s.entryCount === 0
       ? null
@@ -46,15 +50,15 @@ export function VaultSectionTools(props: {
       <div className="vault-section-head">
         <h4>
           {s.name}
-          <span className="pay-badge">{s.myRole ? VAULT_ROLE_LABELS[s.myRole] : 'メンバーではありません'}</span>
+          <span className="pay-badge">{s.myRole ? VAULT_ROLE_LABELS[s.myRole] : '見られる人に入っていません'}</span>
         </h4>
         {s.note && <p className="hint">{s.note}</p>}
         {paper && <p className={`hint ${s.lastPrintedAt === null || s.changesSincePrint > 0 ? 'vault-stale' : ''}`}>{paper}</p>}
-        {!s.myRole && <p className="hint">権限管理者として、名前・見られる人・記録だけを見ています。値を見るには、自分を見られる人に加えてください（記録に残ります）。</p>}
+        {!s.myRole && <p className="hint">権限管理者として、名前・見られる人・記録だけを見ています。中身を見るには、自分を見られる人に加えてください（記録に残ります）。</p>}
       </div>
       <div className="admin-actions">
-        {props.open && s.myRole && s.entryCount > 0 && (
-          <button type="button" className="secondary" onClick={() => setConfirmPrint(true)} aria-expanded={confirmPrint} data-testid="vault-print">
+        {canPrint && (
+          <button type="button" className="secondary" onClick={() => props.onConfirmPrint(true)} aria-expanded={props.confirmingPrint} data-testid="vault-print">
             紙に印刷
           </button>
         )}
@@ -72,31 +76,43 @@ export function VaultSectionTools(props: {
           </button>
         )}
       </div>
-      {props.open && confirmPrint && (
-        <div className="status warning vault-print-confirm" role="group" aria-label="印刷の確認">
-          <p>
-            この区分のパスワードとメモを {s.entryCount} 件すべて紙に出します（印刷したことは記録に残ります）。印刷の画面では「PDF に保存」を選ばず、プリンターで印刷してください。刷った紙は封筒に入れて封をし、決めてある金庫へ。
-          </p>
-          <div className="admin-actions">
-            <button
-              type="button"
-              onClick={() => {
-                setConfirmPrint(false);
-                props.onPrint();
-              }}
-              data-testid="vault-print-go"
-            >
-              印刷する
-            </button>
-            <button type="button" className="secondary" onClick={() => setConfirmPrint(false)}>
-              やめる
-            </button>
-          </div>
-        </div>
+      {canPrint && props.confirmingPrint && (
+        <PrintConfirm
+          count={s.entryCount}
+          onGo={() => {
+            props.onConfirmPrint(false);
+            props.onPrint();
+          }}
+          onCancel={() => props.onConfirmPrint(false)}
+        />
       )}
       {more && props.canAdminister && <SectionAdmin section={s} onChanged={props.onChanged} onRemoved={props.onRemoved} onFail={props.onFail} />}
       {props.tool === 'members' && <Members section={s} onChanged={props.onChanged} onFail={props.onFail} />}
       {props.open && props.tool === 'events' && s.canManage && <Events section={s} />}
+    </div>
+  );
+}
+
+/** Opened from the group's own button or from the line after a change further down: it brings itself into view. */
+function PrintConfirm({ count, onGo, onCancel }: { count: number; onGo: () => void; onCancel: () => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    ref.current?.scrollIntoView({ block: 'nearest', behavior: reduce ? 'auto' : 'smooth' });
+  }, []);
+  return (
+    <div ref={ref} className="status warning vault-print-confirm" role="group" aria-label="印刷の確認" data-testid="vault-print-confirm">
+      <p>
+        このグループのパスワードとメモを {count} 件すべて紙に出します（印刷したことは記録に残ります）。印刷の画面では「PDF に保存」を選ばず、プリンターで印刷してください。刷った紙は封筒に入れて封をし、決めてある金庫へ。
+      </p>
+      <div className="admin-actions">
+        <button type="button" onClick={onGo} data-testid="vault-print-go">
+          印刷する
+        </button>
+        <button type="button" className="secondary" onClick={onCancel}>
+          やめる
+        </button>
+      </div>
     </div>
   );
 }
@@ -132,7 +148,7 @@ function SectionAdmin({ section, onChanged, onRemoved, onFail }: { section: Vaul
   return (
     <form className="account-form vault-form" onSubmit={save}>
       <label>
-        区分の名前
+        グループの名前
         <input value={name} onChange={(e) => setName(e.target.value)} maxLength={VAULT_LIMITS.sectionName} required />
       </label>
       <label>
@@ -146,10 +162,10 @@ function SectionAdmin({ section, onChanged, onRemoved, onFail }: { section: Vaul
       </div>
       <div className="vault-danger">
         {section.entryCount > 0 ? (
-          <p className="hint">項目が残っている区分は消せません（{section.entryCount} 件）。</p>
+          <p className="hint">パスワードが残っているグループは消せません（{section.entryCount} 件）。</p>
         ) : confirm ? (
           <span className="confirm">
-            区分と見られる人の指定を消します。
+            グループと見られる人の指定を消します。
             <button type="button" className="danger" onClick={() => void remove()} disabled={busy}>
               消す
             </button>
@@ -159,7 +175,7 @@ function SectionAdmin({ section, onChanged, onRemoved, onFail }: { section: Vaul
           </span>
         ) : (
           <button type="button" className="secondary" onClick={() => setConfirm(true)}>
-            この区分を消す
+            このグループを消す
           </button>
         )}
       </div>
@@ -207,14 +223,18 @@ function Members({ section, onChanged, onFail }: { section: VaultSectionSummary;
       <LoadStatus loader={members} what="見られる人" compact />
       {data && (
         <>
-          <p className="hint">部局で付けると、その部局のロールを持つ人が全員開けます（Discord でロールを付けられる人が、開ける人を増やせます）。部局の名前が変わると、その指定は外れます。</p>
+          <p className="hint">部局で付けると、その部局のロールを持つ人が全員見られます（Discord でロールを付けられる人が、見られる人を増やせます）。部局の名前が変わると、その指定は外れます。大事なグループは人で付けるほうが安全です。</p>
           <table className="vault-table">
             <thead>
               <tr>
-                <th>相手</th>
+                <th>部局・人</th>
                 <th>役割</th>
                 <th>付けた人</th>
-                {canManage && <th>変更</th>}
+                {canManage && (
+                  <th>
+                    <span className="sr-only">外す</span>
+                  </th>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -295,7 +315,7 @@ function Members({ section, onChanged, onFail }: { section: VaultSectionSummary;
               </button>
             </form>
           )}
-          <h5>いま開ける人（{data.openers.length} 人）</h5>
+          <h5>見られる人の名前（{data.openers.length} 人）</h5>
           {data.openers.length === 0 ? (
             <p className="hint">いません。</p>
           ) : (
@@ -329,7 +349,7 @@ function Events({ section }: { section: VaultSectionSummary }) {
               <th>日時</th>
               <th>人</th>
               <th>したこと</th>
-              <th>項目</th>
+              <th>サイト名</th>
               <th>内容</th>
             </tr>
           </thead>

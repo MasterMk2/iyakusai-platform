@@ -23,12 +23,15 @@ import { VaultSectionTools } from './VaultSectionTools';
 import { VaultPrintSheet } from './VaultPrintSheet';
 import './vault.css';
 
-// パスワード帳 (2026-11-23, its own tab). One screen: the sections as filters, a search, and the entries with their copy
+// パスワード帳 (2026-11-23, its own tab). One screen: the groups as filters, a search, and the passwords with their copy
 // buttons, the most frequent task. Values (passwords, notes) are fetched one at a time on a button, kept in this
 // component's state only (never the address, the title, storage or a loader's cache), and dropped when the screen
 // locks: after as long without use as a typed password is good for (the server's revealMinutes: 60 minutes on the
 // committee's server since 2026-11-23, the chair's choice), when the tab is hidden, and when the screen is left.
 // A copied value is cleared from the clipboard 30 seconds later.
+//
+// Words (2026-11-24, the chair's choice): a section is a グループ on the screen, an entry a パスワード, and the people
+// who may open a group are always 見られる人. The API and the code keep section/entry.
 
 const CLIPBOARD_CLEAR_MS = 30_000;
 const ALL = 'all';
@@ -37,6 +40,8 @@ type Revealed = Record<string, Partial<Record<VaultRevealField, string>>>;
 type Editing = { mode: 'new' } | { mode: 'edit'; entry: VaultEntryItem } | null;
 type Tool = 'members' | 'events' | null;
 type CopyField = 'username' | 'email';
+/** A line under the toolbar; after a change, it offers to print the group's paper copy again. */
+type Notice = { text: string; error: boolean; printSection?: string };
 const COPY_LABELS: Record<CopyField, string> = { username: 'ユーザー名', email: '登録メールアドレス' };
 /** The list's narrower label for the same field (the form and the paper copy say it in full). */
 const LIST_LABELS: Record<CopyField, string> = { username: 'ユーザー名', email: '登録メール' };
@@ -103,7 +108,7 @@ export function VaultPanel({ active, onAvailable }: { active: boolean; onAvailab
   );
   const meta = useLoader(loadMeta);
   const m = meta.data;
-  // A server without the password book (404), an error, or a person on no section: no part at all, never an error.
+  // A server without the password book (404), an error, or a person on no group: no part at all, never an error.
   const absent = meta.error !== null || (!!m && (!m.enabled || !m.canOpen));
   const known = !meta.loading || m !== null;
   useEffect(() => {
@@ -130,6 +135,8 @@ function VaultBook({ meta, onMetaChanged }: { meta: VaultMetaResponse; onMetaCha
   const sections = useLoader(loadSections);
   const list = useMemo(() => sections.data?.sections ?? [], [sections.data]);
   const reloadSections = useCallback(() => setSectionsRefresh((n) => n + 1), []);
+  // No group yet (an administrator's first visit): the two first steps instead of an empty list.
+  const firstRun = sections.data !== null && list.length === 0;
 
   const [phase, setPhase] = useState<Phase>(meta.freshUntil === null ? 'password' : 'open');
   const [closedWhy, setClosedWhy] = useState('');
@@ -138,7 +145,10 @@ function VaultBook({ meta, onMetaChanged }: { meta: VaultMetaResponse; onMetaCha
   const [selected, setSelected] = useState<string>(ALL);
   const [tool, setTool] = useState<Tool>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [printing, setPrinting] = useState<VaultPrintResponse | null>(null);
+  // The group whose print is being confirmed (its own button, or the one offered after a change).
+  const [printAsk, setPrintAsk] = useState<string | null>(null);
   const [freshUntil, setFreshUntil] = useState<string | null>(meta.freshUntil);
   const [seenFresh, setSeenFresh] = useState<string | null>(meta.freshUntil);
   if (seenFresh !== meta.freshUntil) {
@@ -147,15 +157,17 @@ function VaultBook({ meta, onMetaChanged }: { meta: VaultMetaResponse; onMetaCha
   }
 
   const byId = useMemo(() => new Map(list.map((s) => [s.id, s])), [list]);
-  // A section that went away (removed, or the person was taken off it) falls back to all.
+  // A group that went away (removed, or the person was taken off it) falls back to all.
   const current = selected !== ALL && sections.data && !byId.has(selected) ? ALL : selected;
   const section = current === ALL ? null : (byId.get(current) ?? null);
 
   const askPassword = useCallback(() => {
     setPhase('password');
     setPrinting(null);
+    setPrintAsk(null);
     setFreshUntil(null);
     setMessage(null);
+    setNotice(null);
   }, []);
   const fail = useCallback(
     (err: unknown) => {
@@ -168,6 +180,7 @@ function VaultBook({ meta, onMetaChanged }: { meta: VaultMetaResponse; onMetaCha
     setPhase('closed');
     setClosedWhy(why);
     setPrinting(null);
+    setPrintAsk(null);
     setTool((t) => (t === 'events' ? null : t));
   }, []);
   const reopen = () => {
@@ -175,6 +188,11 @@ function VaultBook({ meta, onMetaChanged }: { meta: VaultMetaResponse; onMetaCha
     setOpenKey((n) => n + 1);
     setMessage(null);
   };
+  /** The password was typed (on the lock screen, or inside a form whose window had run out). */
+  const reauthed = useCallback(() => {
+    onMetaChanged();
+    setFreshUntil(new Date(Date.now() + meta.revealMinutes * 60_000).toISOString());
+  }, [onMetaChanged, meta.revealMinutes]);
   const donePrinting = useCallback(() => setPrinting(null), []);
   const print = async (s: VaultSectionSummary) => {
     setMessage(null);
@@ -185,6 +203,22 @@ function VaultBook({ meta, onMetaChanged }: { meta: VaultMetaResponse; onMetaCha
       fail(err);
     }
   };
+  const askPrint = useCallback((sectionId: string) => {
+    setSelected(sectionId);
+    setTool(null);
+    setPrintAsk(sectionId);
+  }, []);
+  const created = (id: string, name: string) => {
+    reloadSections();
+    onMetaChanged();
+    setSelected(id);
+    setTool(null);
+    setNotice(`グループ「${name}」を作りました。次は「パスワードを登録」から登録します。ほかの人にも見せるときは、「見られる人」から部局か人を付けます。`);
+  };
+  const entriesChanged = useCallback(() => {
+    reloadSections();
+    setNotice(null);
+  }, [reloadSections]);
 
   const freshLabel = freshUntil ? new Date(freshUntil).toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit' }) : null;
 
@@ -196,7 +230,7 @@ function VaultBook({ meta, onMetaChanged }: { meta: VaultMetaResponse; onMetaCha
           <div className="vault-head-actions">
             {freshLabel && (
               <span className="hint vault-fresh" data-testid="vault-fresh">
-                {freshLabel} まで開けます
+                {freshLabel} まで開いています（過ぎたらパスワードをもう一度）
               </span>
             )}
             <button type="button" className="secondary" onClick={() => close('閉じました。')} data-testid="vault-lock">
@@ -211,33 +245,33 @@ function VaultBook({ meta, onMetaChanged }: { meta: VaultMetaResponse; onMetaCha
         <VaultReauth
           minutes={meta.revealMinutes}
           onDone={() => {
-            onMetaChanged();
-            setFreshUntil(new Date(Date.now() + meta.revealMinutes * 60_000).toISOString());
+            reauthed();
             reopen();
           }}
         />
       ) : (
         <>
-          <SectionBar
-            sections={list}
-            selected={current}
-            onSelect={(id) => {
-              setSelected(id);
-              setTool(null);
-            }}
-          >
-            {sections.data?.canAdminister && (
-              <NewSection
-                onCreated={(id) => {
-                  reloadSections();
-                  onMetaChanged();
-                  setSelected(id);
-                }}
-                onFail={fail}
-              />
-            )}
-          </SectionBar>
-          <LoadStatus loader={sections} what="区分" compact />
+          {firstRun ? (
+            phase === 'open' &&
+            (sections.data?.canAdminister ? (
+              <FirstSteps onCreated={created} onFail={fail} />
+            ) : (
+              <p className="hint">見られるグループがありません。グループを管理する人か権限管理者に依頼してください。</p>
+            ))
+          ) : (
+            <SectionBar
+              sections={list}
+              selected={current}
+              onSelect={(id) => {
+                setSelected(id);
+                setTool(null);
+                setNotice(null);
+              }}
+            >
+              {sections.data?.canAdminister && <NewSection onCreated={created} onFail={fail} />}
+            </SectionBar>
+          )}
+          <LoadStatus loader={sections} what="グループ" compact />
           {section && (
             <VaultSectionTools
               key={section.id}
@@ -246,6 +280,8 @@ function VaultBook({ meta, onMetaChanged }: { meta: VaultMetaResponse; onMetaCha
               canAdminister={meta.canAdminister}
               tool={tool}
               onTool={setTool}
+              confirmingPrint={printAsk === section.id}
+              onConfirmPrint={(show) => setPrintAsk(show ? section.id : null)}
               onPrint={() => void print(section)}
               onChanged={() => {
                 reloadSections();
@@ -258,6 +294,11 @@ function VaultBook({ meta, onMetaChanged }: { meta: VaultMetaResponse; onMetaCha
               }}
               onFail={fail}
             />
+          )}
+          {notice && (
+            <p className="status ok" role="status" data-testid="vault-notice">
+              {notice}
+            </p>
           )}
           {message && (
             <p className="status error" role="alert">
@@ -272,17 +313,21 @@ function VaultBook({ meta, onMetaChanged }: { meta: VaultMetaResponse; onMetaCha
               </button>
             </div>
           ) : (
-            <OpenBook
-              key={openKey}
-              idleMinutes={meta.revealMinutes}
-              selected={current}
-              sections={list}
-              byId={byId}
-              onClearFilter={() => setSelected(ALL)}
-              onFail={fail}
-              onClose={close}
-              onChanged={reloadSections}
-            />
+            !firstRun && (
+              <OpenBook
+                key={openKey}
+                idleMinutes={meta.revealMinutes}
+                selected={current}
+                sections={list}
+                byId={byId}
+                onClearFilter={() => setSelected(ALL)}
+                onFail={fail}
+                onClose={close}
+                onChanged={entriesChanged}
+                onAskPrint={askPrint}
+                onReauthed={reauthed}
+              />
+            )
           )}
         </>
       )}
@@ -301,6 +346,8 @@ function OpenBook({
   onFail,
   onClose,
   onChanged,
+  onAskPrint,
+  onReauthed,
 }: {
   idleMinutes: number;
   selected: string;
@@ -310,6 +357,8 @@ function OpenBook({
   onFail: (err: unknown) => void;
   onClose: (why: string) => void;
   onChanged: () => void;
+  onAskPrint: (sectionId: string) => void;
+  onReauthed: () => void;
 }) {
   const [refresh, setRefresh] = useState(0);
   const load = useCallback(
@@ -329,9 +378,17 @@ function OpenBook({
   const [revealed, setRevealed] = useState<Revealed>({});
   const [query, setQuery] = useState('');
   const [editing, setEditing] = useState<Editing>(null);
-  const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
+  const [message, setMessage] = useState<Notice | null>(null);
+  // Bumped when the tab is hidden while a form is open: the form puts its new password back to dots.
+  const [maskTick, setMaskTick] = useState(0);
+  const editingRef = useRef<Editing>(null);
+  useEffect(() => {
+    editingRef.current = editing;
+  }, [editing]);
 
-  // Hidden tab, or as long without use as a typed password is good for: close (which drops everything here).
+  // Hidden tab, or as long without use as a typed password is good for: close (which drops everything here). A form
+  // being filled in stays when the tab is hidden (people go to the service's own page to copy its address or ID):
+  // only the values shown in the list go, and the new password goes back to dots.
   const rootRef = useRef<HTMLDivElement>(null);
   const lastUse = useRef(0);
   useEffect(() => {
@@ -340,7 +397,13 @@ function OpenBook({
       lastUse.current = Date.now();
     };
     const hidden = () => {
-      if (document.visibilityState === 'hidden') onClose('画面を離れたため、表示していた内容を消しました。');
+      if (document.visibilityState !== 'hidden') return;
+      if (editingRef.current) {
+        setRevealed({});
+        setMaskTick((n) => n + 1);
+        return;
+      }
+      onClose('画面を離れたため、表示していた内容を消しました。');
     };
     const root = rootRef.current;
     root?.addEventListener('pointerdown', touch);
@@ -409,28 +472,40 @@ function OpenBook({
       return terms.every((t) => text.includes(t));
     });
   }, [entries, selected, query, byId]);
+  // Nothing registered yet: no search, and registering is the one thing to do (the button is the strong one).
+  const empty = entries !== null && entries.entries.length === 0;
 
   return (
     <div ref={rootRef} className="vault-open">
       <div className="vault-toolbar">
-        <label className="vault-search">
-          <span className="sr-only">サイト名・用途・ユーザー名・URL で探す</span>
-          <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="サイト名・用途・ユーザー名・URL で探す" data-testid="vault-search" />
-        </label>
+        {!empty && (
+          <label className="vault-search">
+            <span className="sr-only">サイト名・用途・ユーザー名・URL で探す</span>
+            <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="サイト名・用途・ユーザー名・URL で探す" data-testid="vault-search" />
+          </label>
+        )}
         {editable.length > 0 && (
-          <button type="button" className="secondary" onClick={() => setEditing({ mode: 'new' })} disabled={editing?.mode === 'new'} data-testid="vault-add">
-            項目を追加
+          <button type="button" className={empty ? undefined : 'secondary'} onClick={() => setEditing({ mode: 'new' })} disabled={editing?.mode === 'new'} data-testid="vault-add">
+            パスワードを登録
           </button>
         )}
       </div>
       {message && (
         <p className={`status ${message.error ? 'error' : 'ok'}`} role={message.error ? 'alert' : 'status'}>
           {message.text}
+          {message.printSection && (
+            <>
+              {' '}
+              <button type="button" className="link-button" onClick={() => onAskPrint(message.printSection!)} data-testid="vault-reprint">
+                紙の控えを刷り直す
+              </button>
+            </>
+          )}
         </p>
       )}
       {entries && entries.unreadable > 0 && (
         <p className="status error" role="alert">
-          開けない項目が {entries.unreadable} 件あります（鍵が替わったか、保存ファイルが変わっています）。権限管理者に知らせてください。
+          開けないパスワードが {entries.unreadable} 件あります（鍵が替わったか、保存ファイルが変わっています）。権限管理者に知らせてください。
         </p>
       )}
       {editing && (
@@ -439,19 +514,22 @@ function OpenBook({
           editing={editing}
           sections={editable}
           defaultSection={section && vaultRoleRank(section.myRole) >= vaultRoleRank('edit') ? section.id : (editable[0]?.id ?? '')}
+          minutes={idleMinutes}
+          maskTick={maskTick}
           onRevealNotes={(entry) => reveal(entry, 'notes', 'edit')}
-          onDone={(text) => {
+          onDone={(text, sectionId) => {
             setEditing(null);
-            setMessage({ text, error: false });
+            setMessage({ text, error: false, printSection: sectionId });
             setRevealed({});
             setRefresh((n) => n + 1);
             onChanged();
           }}
           onCancel={() => setEditing(null)}
           onFail={failHere}
+          onReauthed={onReauthed}
         />
       )}
-      {!reauthNeeded && <LoadStatus loader={loader} what="パスワード帳の項目" compact />}
+      {!reauthNeeded && <LoadStatus loader={loader} what="パスワード" compact />}
       {entries && (
         <EntryList
           entries={shown}
@@ -519,7 +597,7 @@ function SectionBar({ sections, selected, onSelect, children }: { sections: Vaul
   const total = sections.reduce((n, s) => n + (s.myRole ? s.entryCount : 0), 0);
   return (
     <div className="vault-sections">
-      <div className="filter-chips" role="group" aria-label="区分">
+      <div className="filter-chips" role="group" aria-label="グループ">
         <button type="button" className="filter-chip" aria-pressed={selected === ALL} onClick={() => onSelect(ALL)}>
           すべて <span className="option-count">{total}</span>
         </button>
@@ -533,22 +611,44 @@ function SectionBar({ sections, selected, onSelect, children }: { sections: Vaul
       </div>
       {sections.some(isStale) && (
         <p className="hint vault-legend">
-          <span className="vault-stale-dot" aria-hidden="true" /> 紙の控えが古い区分（未印刷か、印刷のあとに変更あり）
+          <span className="vault-stale-dot" aria-hidden="true" /> 紙の控えが古いグループ（未印刷か、印刷のあとに変更あり）
         </p>
       )}
     </div>
   );
 }
 
-function NewSection({ onCreated, onFail }: { onCreated: (id: string) => void; onFail: (err: unknown) => void }) {
-  const [open, setOpen] = useState(false);
+/** An administrator's first visit: make a group, then register in it. */
+function FirstSteps({ onCreated, onFail }: { onCreated: (id: string, name: string) => void; onFail: (err: unknown) => void }) {
+  return (
+    <div className="vault-first" data-testid="vault-first">
+      <h4>はじめに</h4>
+      <ol className="vault-steps">
+        <li>
+          <p>
+            <strong>グループを作る</strong>：パスワードはグループに入れます。見られる人はグループごとに決めます（例：システム、会計）。
+          </p>
+          <NewSection startOpen onCreated={onCreated} onFail={onFail} />
+        </li>
+        <li className="vault-step-later">
+          <p>
+            <strong>パスワードを登録</strong>：グループを作ると登録できます。
+          </p>
+        </li>
+      </ol>
+    </div>
+  );
+}
+
+function NewSection({ startOpen = false, onCreated, onFail }: { startOpen?: boolean; onCreated: (id: string, name: string) => void; onFail: (err: unknown) => void }) {
+  const [open, setOpen] = useState(startOpen);
   const [name, setName] = useState('');
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   if (!open) {
     return (
       <button type="button" className="link-button vault-new-section" onClick={() => setOpen(true)} data-testid="vault-new-section">
-        ＋ 区分を作る
+        ＋ グループを作る
       </button>
     );
   }
@@ -557,10 +657,10 @@ function NewSection({ onCreated, onFail }: { onCreated: (id: string) => void; on
     setBusy(true);
     try {
       const res = await api<{ section: VaultSectionSummary }>('POST', '/api/vault/sections', { name, note });
-      setOpen(false);
+      setOpen(startOpen);
       setName('');
       setNote('');
-      onCreated(res.section.id);
+      onCreated(res.section.id, res.section.name);
     } catch (err) {
       onFail(err);
     } finally {
@@ -568,23 +668,25 @@ function NewSection({ onCreated, onFail }: { onCreated: (id: string) => void; on
     }
   };
   return (
-    <form className="account-form vault-form vault-section-form" onSubmit={submit}>
+    <form className="account-form vault-form vault-section-form" onSubmit={submit} data-testid="vault-section-form">
       <label>
-        区分の名前
-        <input value={name} onChange={(e) => setName(e.target.value)} maxLength={VAULT_LIMITS.sectionName} required />
+        グループの名前
+        <input value={name} onChange={(e) => setName(e.target.value)} maxLength={VAULT_LIMITS.sectionName} placeholder="例：システム" required data-testid="vault-section-name" />
       </label>
       <label>
         説明（任意）
         <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={VAULT_LIMITS.sectionNote} />
       </label>
-      <p className="hint">作った人がこの区分の最初の「管理する」になります。部局や人を付けたあと、自分を外すこともできます。</p>
+      <p className="hint">作った人がこのグループの最初の「管理する」になります。部局や人を付けたあと、自分を外すこともできます。</p>
       <div className="admin-actions">
-        <button type="submit" disabled={busy || name.trim() === ''}>
+        <button type="submit" disabled={busy || name.trim() === ''} data-testid="vault-section-create">
           {busy ? '作っています…' : '作る'}
         </button>
-        <button type="button" className="secondary" onClick={() => setOpen(false)}>
-          やめる
-        </button>
+        {!startOpen && (
+          <button type="button" className="secondary" onClick={() => setOpen(false)}>
+            やめる
+          </button>
+        )}
       </div>
     </form>
   );
@@ -605,12 +707,12 @@ function EntryList(props: {
   canAdd: boolean;
 }) {
   if (props.total === 0) {
-    return <p className="hint">まだ項目がありません。{props.canAdd ? '「項目を追加」から登録します。' : '「編集する」を持つ人が登録すると、ここに出ます。'}</p>;
+    return <p className="hint">まだパスワードがありません。{props.canAdd ? '「パスワードを登録」から登録します。' : '「編集する」を持つ人が登録すると、ここに出ます。'}</p>;
   }
   if (props.entries.length === 0) {
     return (
       <p className="hint">
-        当てはまる項目がありません。
+        当てはまるものがありません。
         {props.filtered && (
           <button type="button" className="link-button" onClick={props.onClear}>
             条件を外す
@@ -620,7 +722,7 @@ function EntryList(props: {
     );
   }
   return (
-    <ul className="vault-list" aria-label="項目">
+    <ul className="vault-list" aria-label="パスワード">
       {props.entries.map((e) => {
         const section = props.sections.get(e.sectionId);
         const canEdit = vaultRoleRank(section?.myRole) >= vaultRoleRank('edit');
@@ -653,8 +755,8 @@ function EntryList(props: {
                   </button>
                 )}
                 {canEdit && (
-                  <button type="button" className="secondary" onClick={() => props.onEdit(e)} aria-label={`「${e.name}」を変更`}>
-                    変更
+                  <button type="button" className="secondary" onClick={() => props.onEdit(e)} aria-label={`「${e.name}」を編集`}>
+                    編集
                   </button>
                 )}
               </div>
@@ -719,7 +821,7 @@ function EntryList(props: {
   );
 }
 
-/** Who opens the section an entry goes in, by name: the section decides it (there is no list per entry). */
+/** Who may see the group a password goes in, by name: the group decides it (there is no list per password). */
 function SectionOpeners({ sectionId }: { sectionId: string }) {
   const load = useCallback((signal: AbortSignal) => api<VaultMembersResponse>('GET', `/api/vault/sections/${sectionId}/members`, undefined, signal), [sectionId]);
   const loader = useLoader(load);
@@ -727,16 +829,16 @@ function SectionOpeners({ sectionId }: { sectionId: string }) {
   return (
     <div className="vault-form-openers" data-testid="vault-form-openers">
       {openers === null ? (
-        <LoadStatus loader={loader} what="この区分を開ける人" compact />
+        <LoadStatus loader={loader} what="このグループの見られる人" compact />
       ) : openers.length === 0 ? (
-        <p>この区分を開ける人はまだいません。</p>
+        <p>このグループの見られる人はまだいません。</p>
       ) : (
         <p>
-          <strong>いま開ける人（{openers.length} 人）</strong>
+          <strong>見られる人（{openers.length} 人）</strong>
           {openers.map((o) => `${o.name}（${VAULT_ROLE_LABELS[o.role]}）`).join('、')}
         </p>
       )}
-      <p className="hint">変えるときは、区分の「見られる人」から（「管理する」を持つ人か権限管理者）。</p>
+      <p className="hint">見られる人はグループで決まります。変えるときは、グループの「見られる人」から（「管理する」を持つ人か権限管理者）。</p>
     </div>
   );
 }
@@ -745,18 +847,26 @@ function EntryForm({
   editing,
   sections,
   defaultSection,
+  minutes,
+  maskTick,
   onRevealNotes,
   onDone,
   onCancel,
   onFail,
+  onReauthed,
 }: {
   editing: NonNullable<Editing>;
   sections: VaultSectionSummary[];
   defaultSection: string;
+  /** How long a typed password is good for (said when it has run out while the form was being filled in). */
+  minutes: number;
+  /** Changes when the tab was hidden: the new password goes back to dots. */
+  maskTick: number;
   onRevealNotes: (entry: VaultEntryItem) => Promise<string | null>;
-  onDone: (text: string) => void;
+  onDone: (text: string, sectionId: string) => void;
   onCancel: () => void;
   onFail: (err: unknown) => void;
+  onReauthed: () => void;
 }) {
   const entry = editing.mode === 'edit' ? editing.entry : null;
   const [sectionId, setSectionId] = useState(entry?.sectionId ?? defaultSection);
@@ -769,12 +879,22 @@ function EntryForm({
   const [changePassword, setChangePassword] = useState(entry === null);
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [seenMask, setSeenMask] = useState(maskTick);
+  if (seenMask !== maskTick) {
+    setSeenMask(maskTick);
+    setShowPassword(false);
+  }
   const emailWrong = email.trim() !== '' && !VAULT_EMAIL.test(email.trim());
   const [notes, setNotes] = useState<string | null>(entry === null ? '' : null);
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // The typed password ran out while the form was filled in: it is asked for here, and the save goes on with the form
+  // as it is (the lock screen would have dropped the form).
+  const [reauth, setReauth] = useState(false);
+  const [reauthPassword, setReauthPassword] = useState('');
+  const [reauthError, setReauthError] = useState<string | null>(null);
   const token = useRef(newToken());
-  // The form opens above the list: bring it into view (a 変更 pressed far down the list would leave it off screen).
+  // The form opens above the list: bring it into view (an 編集 pressed far down the list would leave it off screen).
   const formRef = useRef<HTMLFormElement>(null);
   useEffect(() => {
     const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
@@ -785,15 +905,30 @@ function EntryForm({
     e.preventDefault();
     setBusy(true);
     try {
+      if (reauth) {
+        try {
+          await api('POST', '/api/auth/reauth', { password: reauthPassword });
+        } catch (err) {
+          setReauthError(toFailure(err).message);
+          return;
+        }
+        setReauth(false);
+        setReauthPassword('');
+        setReauthError(null);
+        onReauthed();
+      }
       if (entry) {
         await api<VaultEntryResponse>('PUT', `/api/vault/entries/${entry.id}`, { sectionId, name, purpose, url, username, email, password: changePassword ? password : null, notes, expectedVersion: entry.version });
-        onDone(`「${name.trim()}」を保存しました。`);
+        onDone(`「${name.trim()}」を保存しました。紙の控えが古くなりました。`, sectionId);
       } else {
         await api<VaultEntryResponse>('POST', '/api/vault/entries', { sectionId, name, purpose, url, username, email, password, notes: notes ?? '', clientToken: token.current });
-        onDone(`「${name.trim()}」を追加しました。紙の控えを刷り直してください。`);
+        onDone(`「${name.trim()}」を登録しました。紙の控えが古くなりました。`, sectionId);
       }
     } catch (err) {
-      onFail(err);
+      if (isReauth(err)) {
+        setReauth(true);
+        setReauthError(null);
+      } else onFail(err);
     } finally {
       setBusy(false);
     }
@@ -803,7 +938,7 @@ function EntryForm({
     setBusy(true);
     try {
       await api('DELETE', `/api/vault/entries/${entry.id}?expectedVersion=${entry.version}`);
-      onDone(`「${entry.name}」を消しました。紙の控えを刷り直してください。`);
+      onDone(`「${entry.name}」を消しました。紙の控えが古くなりました。`, entry.sectionId);
     } catch (err) {
       onFail(err);
     } finally {
@@ -815,124 +950,161 @@ function EntryForm({
     const value = await onRevealNotes(entry);
     if (value !== null) setNotes(value);
   };
+  const oneGroup = sections.length === 1 && sections[0]!.id === sectionId;
+  const saveLabel = entry ? '保存' : '登録';
 
   return (
-    <form ref={formRef} className="account-form vault-form" onSubmit={submit} aria-label={entry ? `「${entry.name}」を変更` : '項目を追加'} data-testid="vault-form">
-      <h4>{entry ? `「${entry.name}」を変更` : '項目を追加'}</h4>
-      <fieldset className="vault-fieldset">
-        <legend>どのサイトか・誰が見られるか</legend>
-        <label>
-          サイト名
-          <input value={name} onChange={(e) => setName(e.target.value)} maxLength={VAULT_LIMITS.entryName} required data-testid="vault-form-name" />
-        </label>
-        <label>
-          用途（任意）
-          <input value={purpose} onChange={(e) => setPurpose(e.target.value)} maxLength={VAULT_LIMITS.purpose} placeholder="例：協賛企業への請求書の送付" data-testid="vault-form-purpose" />
-        </label>
-        <label>
-          アクセスできる人（区分）
-          <select value={sectionId} onChange={(e) => setSectionId(e.target.value)} required data-testid="vault-form-section">
-            {sections.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        {sectionId && <SectionOpeners key={sectionId} sectionId={sectionId} />}
-      </fieldset>
-      <fieldset className="vault-fieldset">
-        <legend>ログイン情報</legend>
-        <label>
-          URL（任意）
-          <input value={url} onChange={(e) => setUrl(e.target.value)} maxLength={VAULT_LIMITS.url} inputMode="url" placeholder="https://" />
-        </label>
-        <label>
-          ユーザー名（任意）
-          <input value={username} onChange={(e) => setUsername(e.target.value)} maxLength={VAULT_LIMITS.username} autoComplete="off" autoCapitalize="off" spellCheck={false} data-testid="vault-form-username" />
-        </label>
-        <label>
-          登録メールアドレス（任意）
-          <input
-            type="text"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            maxLength={VAULT_LIMITS.email}
-            inputMode="email"
-            autoComplete="off"
-            autoCapitalize="off"
-            spellCheck={false}
-            aria-invalid={emailWrong || undefined}
-            aria-describedby={emailWrong ? 'vault-form-email-error' : undefined}
-            data-testid="vault-form-email"
-          />
-          {emailWrong && (
-            <span className="field-error" id="vault-form-email-error">
-              メールアドレスの形（○○@○○）にしてください。無ければ空欄のままで構いません。
-            </span>
-          )}
-        </label>
-        {changePassword ? (
-          <div className="vault-password-field">
-            <label htmlFor="vault-form-password">パスワード{entry ? '（新しい値）' : ''}</label>
-            <div className="vault-password-row">
-              {/* A text field shown as dots (not type=password): the browser must not offer to save a committee account's
-                  password into a member's own browser and its sync. */}
-              <input
-                id="vault-form-password"
-                type="text"
-                className={showPassword ? undefined : 'vault-masked'}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                maxLength={VAULT_LIMITS.password}
-                autoComplete="off"
-                autoCapitalize="off"
-                autoCorrect="off"
-                spellCheck={false}
-                data-1p-ignore="true"
-                data-lpignore="true"
-                data-testid="vault-form-password"
-              />
-              <button type="button" className="secondary" aria-pressed={showPassword} onClick={() => setShowPassword((v) => !v)}>
-                {showPassword ? '隠す' : '見る'}
-              </button>
-              <button
-                type="button"
-                className="secondary"
-                onClick={() => {
-                  setPassword(randomPassword());
-                  setShowPassword(true);
-                }}
-              >
-                ランダムに作る
-              </button>
-            </div>
-          </div>
-        ) : (
-          <p className="vault-keep">
-            パスワードはそのまま残します。{' '}
-            <button type="button" className="link-button" onClick={() => setChangePassword(true)}>
-              パスワードを変える
-            </button>
-          </p>
+    <form ref={formRef} className="account-form vault-form" onSubmit={submit} aria-label={entry ? `「${entry.name}」を編集` : 'パスワードを登録'} data-testid="vault-form">
+      <h4>{entry ? `「${entry.name}」を編集` : 'パスワードを登録'}</h4>
+      <label>
+        サイト名
+        <input value={name} onChange={(e) => setName(e.target.value)} maxLength={VAULT_LIMITS.entryName} required data-testid="vault-form-name" />
+      </label>
+      <label>
+        URL（任意）
+        <input value={url} onChange={(e) => setUrl(e.target.value)} maxLength={VAULT_LIMITS.url} inputMode="url" placeholder="https://" />
+      </label>
+      <label>
+        ユーザー名（任意）
+        <input value={username} onChange={(e) => setUsername(e.target.value)} maxLength={VAULT_LIMITS.username} autoComplete="off" autoCapitalize="off" spellCheck={false} data-testid="vault-form-username" />
+      </label>
+      <label>
+        登録メールアドレス（任意）
+        <input
+          type="text"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          maxLength={VAULT_LIMITS.email}
+          inputMode="email"
+          autoComplete="off"
+          autoCapitalize="off"
+          spellCheck={false}
+          aria-invalid={emailWrong || undefined}
+          aria-describedby={emailWrong ? 'vault-form-email-error' : undefined}
+          data-testid="vault-form-email"
+        />
+        {emailWrong && (
+          <span className="field-error" id="vault-form-email-error">
+            メールアドレスの形（○○@○○）にしてください。無ければ空欄のままで構いません。
+          </span>
         )}
-        {notes === null ? (
-          <p className="vault-keep">
-            {entry?.hasNotes ? 'メモはそのまま残します。' : 'メモはありません。'}{' '}
-            <button type="button" className="link-button" onClick={() => (entry?.hasNotes ? void editNotes() : setNotes(''))}>
-              {entry?.hasNotes ? 'メモを書き換える' : 'メモを書く'}
+      </label>
+      {changePassword ? (
+        <div className="vault-password-field">
+          <label htmlFor="vault-form-password">パスワード{entry ? '（新しい値）' : ''}</label>
+          <div className="vault-password-row">
+            {/* A text field shown as dots (not type=password): the browser must not offer to save a committee account's
+                password into a member's own browser and its sync. */}
+            <input
+              id="vault-form-password"
+              type="text"
+              className={showPassword ? undefined : 'vault-masked'}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              maxLength={VAULT_LIMITS.password}
+              autoComplete="off"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+              data-1p-ignore="true"
+              data-lpignore="true"
+              data-testid="vault-form-password"
+            />
+            <button type="button" className="secondary" aria-pressed={showPassword} onClick={() => setShowPassword((v) => !v)}>
+              {showPassword ? '隠す' : '見る'}
             </button>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => {
+                setPassword(randomPassword());
+                setShowPassword(true);
+              }}
+            >
+              ランダムに作る
+            </button>
+          </div>
+        </div>
+      ) : (
+        <p className="vault-keep">
+          パスワードはそのまま残します。{' '}
+          <button type="button" className="link-button" onClick={() => setChangePassword(true)}>
+            パスワードを変える
+          </button>
+        </p>
+      )}
+      {notes === null ? (
+        <p className="vault-keep">
+          {entry?.hasNotes ? 'メモはそのまま残します。' : 'メモはありません。'}{' '}
+          <button type="button" className="link-button" onClick={() => (entry?.hasNotes ? void editNotes() : setNotes(''))}>
+            {entry?.hasNotes ? 'メモを書き換える' : 'メモを書く'}
+          </button>
+        </p>
+      ) : (
+        <label>
+          メモ（予備コード・連絡先など。任意）
+          <textarea value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={VAULT_LIMITS.notes} rows={3} />
+        </label>
+      )}
+      <label>
+        用途（任意）
+        <input value={purpose} onChange={(e) => setPurpose(e.target.value)} maxLength={VAULT_LIMITS.purpose} placeholder="例：協賛企業への請求書の送付" data-testid="vault-form-purpose" />
+      </label>
+      <div className="vault-form-group">
+        {oneGroup ? (
+          <p className="vault-form-group-one" data-testid="vault-form-section-one">
+            入れるグループ <strong>{sections[0]!.name}</strong>
           </p>
         ) : (
           <label>
-            メモ（予備コード・連絡先など。任意）
-            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={VAULT_LIMITS.notes} rows={3} />
+            入れるグループ
+            <select value={sectionId} onChange={(e) => setSectionId(e.target.value)} required data-testid="vault-form-section">
+              {sections.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
           </label>
         )}
-      </fieldset>
+        {sectionId && <SectionOpeners key={sectionId} sectionId={sectionId} />}
+      </div>
+      {reauth && (
+        <div className="status warning vault-form-reauth" role="group" aria-label="ログインのパスワード" data-testid="vault-form-reauth">
+          <p>
+            パスワードを入れてから {minutes} 分が過ぎました。ログインのパスワードを入れると、入力した内容のまま{saveLabel}します。
+          </p>
+          <label>
+            ログインのパスワード
+            {/* Dots without type=password, as above: this form also holds a committee account's user name. */}
+            <input
+              type="text"
+              className="vault-masked"
+              value={reauthPassword}
+              onChange={(e) => setReauthPassword(e.target.value)}
+              autoComplete="off"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+              data-1p-ignore="true"
+              data-lpignore="true"
+              aria-invalid={reauthError ? true : undefined}
+              aria-describedby={reauthError ? 'vault-form-reauth-error' : undefined}
+              required
+              autoFocus
+              data-testid="vault-form-reauth-password"
+            />
+          </label>
+          {reauthError && (
+            <span className="field-error" id="vault-form-reauth-error">
+              {reauthError}
+            </span>
+          )}
+        </div>
+      )}
       <div className="admin-actions">
-        <button type="submit" disabled={busy || name.trim() === '' || sectionId === '' || emailWrong} data-testid="vault-form-save">
-          {busy ? '保存しています…' : entry ? '保存' : '追加'}
+        <button type="submit" disabled={busy || name.trim() === '' || sectionId === '' || emailWrong || (reauth && reauthPassword === '')} data-testid="vault-form-save">
+          {busy ? (entry ? '保存しています…' : '登録しています…') : saveLabel}
         </button>
         <button type="button" className="secondary" onClick={onCancel} disabled={busy}>
           やめる
@@ -952,10 +1124,10 @@ function EntryForm({
             </span>
           ) : (
             <button type="button" className="secondary" onClick={() => setConfirmDelete(true)}>
-              この項目を消す
+              「{entry.name}」を消す
             </button>
           )}
-          <p className="hint">最終更新 {fmtDate(entry.updatedAt)}（{entry.updatedByName}）・{VAULT_ROLE_LABELS.edit}の権限で変更できます。</p>
+          <p className="hint">最終更新 {fmtDate(entry.updatedAt)}（{entry.updatedByName}）・{VAULT_ROLE_LABELS.edit}の権限で編集できます。</p>
         </div>
       )}
     </form>

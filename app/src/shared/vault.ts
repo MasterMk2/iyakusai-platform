@@ -1,6 +1,7 @@
 // パスワード帳 (2026-11-23): the committee's own accounts and passwords, kept by the server (encrypted at rest with a
 // key in the configuration folder) and opened by signed-in members who typed their password a short while ago.
-// Sections (区分) are opened by departments and by named members; each holds entries. The screens never receive a
+// Sections (グループ on the screen since 2026-11-24; 区分 before) are opened by departments and by named members; each
+// holds entries (パスワード on the screen). The screens never receive a
 // password or a note in a list: one value at a time, on purpose, and the server records each one it hands out.
 
 export const VAULT_ROLES = ['view', 'edit', 'manage'] as const;
@@ -9,7 +10,7 @@ export type VaultRole = (typeof VAULT_ROLES)[number];
 export const VAULT_ROLE_LABELS: Record<VaultRole, string> = { view: '見る', edit: '編集する', manage: '管理する' };
 export const VAULT_ROLE_HINTS: Record<VaultRole, string> = {
   view: 'パスワードの表示・コピー・印刷',
-  edit: '見る＋項目の追加・変更・削除',
+  edit: '見る＋パスワードの登録・編集・削除',
   manage: '編集する＋見られる人の付け外し',
 };
 
@@ -186,14 +187,14 @@ export type VaultAction =
   | 'printed';
 
 export const VAULT_ACTION_LABELS: Record<VaultAction, string> = {
-  section_created: '区分を作った',
-  section_updated: '区分の名前・説明を変えた',
-  section_deleted: '区分を消した',
+  section_created: 'グループを作った',
+  section_updated: 'グループの名前・説明を変えた',
+  section_deleted: 'グループを消した',
   member_set: '見られる人を付けた・変えた',
   member_removed: '見られる人を外した',
-  entry_created: '項目を追加した',
-  entry_updated: '項目を変えた',
-  entry_deleted: '項目を消した',
+  entry_created: 'パスワードを登録した',
+  entry_updated: '登録を編集した',
+  entry_deleted: '登録を消した',
   revealed: '値を表示した',
   copied: '値をコピーした',
   printed: '印刷した',
