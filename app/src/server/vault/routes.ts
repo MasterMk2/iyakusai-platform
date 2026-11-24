@@ -106,8 +106,8 @@ const eventsQuery = z.strictObject({ limit: z.coerce.number().int().min(1).max(V
 
 const REFUSED: Record<VaultRefusal, string> = {
   conflict: 'ほかの人が先に変更しました。最新の内容を読み込み直してから、もう一度操作してください。',
-  duplicate_name: '同じ名前の区分がすでにあります。別の名前にしてください。',
-  not_empty: '項目が残っている区分は消せません。先に項目を消すか、別の区分へ移してください。',
+  duplicate_name: '同じ名前のグループがすでにあります。別の名前にしてください。',
+  not_empty: 'パスワードが残っているグループは消せません。先にパスワードを消すか、別のグループへ移してください。',
   last_manager: '「管理する」を持つ人（個人の指定）が 1 人もいなくなるため、変更できません。先にほかの人に「管理する」を付けてください。',
   too_many: '上限に達しているため、これ以上は追加できません。',
 };
@@ -163,13 +163,13 @@ export function registerVaultRoutes(app: FastifyInstance, runtime: VaultRuntime 
   const user = (request: FastifyRequest): VaultViewer => {
     const v = member(request);
     if (!isAdmin(v) && ![...store.allMembers().values()].some((g) => VaultStore.roleIn(g, v.user.id, v.departments) !== null)) {
-      throw new DomainError('forbidden', 'パスワード帳の区分を見られるように指定されていません。区分を管理する人か権限管理者に依頼してください。');
+      throw new DomainError('forbidden', 'パスワード帳のグループの見られる人に入っていません。グループを管理する人か権限管理者に依頼してください。');
     }
     return v;
   };
   const administrator = (request: FastifyRequest): VaultViewer => {
     const v = member(request);
-    if (!isAdmin(v)) throw new DomainError('forbidden', '区分を作る・名前を変える・消すことができるのは権限管理者だけです。');
+    if (!isAdmin(v)) throw new DomainError('forbidden', 'グループを作る・名前を変える・消すことができるのは権限管理者だけです。');
     return v;
   };
   /** The section, for a person who is on it with at least `need`, or an administrator when `admins` is set; else 404. */
@@ -179,7 +179,7 @@ export function registerVaultRoutes(app: FastifyInstance, runtime: VaultRuntime 
     const role = roleOf(v, sectionId);
     if (vaultRoleRank(role) >= vaultRoleRank(need)) return { section, role };
     if (admins && isAdmin(v)) return { section, role };
-    if (role !== null || isAdmin(v)) throw new DomainError('forbidden', need === 'manage' ? 'この区分の見られる人を変えるには「管理する」が要ります。' : need === 'edit' ? 'この区分の項目を変えるには「編集する」が要ります。' : 'この区分を見る権限がありません。');
+    if (role !== null || isAdmin(v)) throw new DomainError('forbidden', need === 'manage' ? 'このグループの見られる人を変えるには「管理する」が要ります。' : need === 'edit' ? 'このグループのパスワードを変えるには「編集する」が要ります。' : 'このグループを見る権限がありません。');
     throw notFound();
   };
   const settled = <T>(outcome: T | VaultRefusal | null): T => {
@@ -210,7 +210,7 @@ export function registerVaultRoutes(app: FastifyInstance, runtime: VaultRuntime 
     version: row.version,
   });
   const unreadable = (): never => {
-    throw new HttpError(500, { error: 'vault_unreadable', message: 'この項目は開けません（鍵が替わったか、保存ファイルが変わっています）。権限管理者に知らせてください。' });
+    throw new HttpError(500, { error: 'vault_unreadable', message: 'このパスワードは開けません（鍵が替わったか、保存ファイルが変わっています）。権限管理者に知らせてください。' });
   };
   const opened = (row: EntryRow): VaultSecret => {
     try {
@@ -226,7 +226,7 @@ export function registerVaultRoutes(app: FastifyInstance, runtime: VaultRuntime 
     if (!row) throw notFound();
     const role = roleOf(v, row.sectionId);
     if (role === null) throw notFound();
-    if (vaultRoleRank(role) < vaultRoleRank(need)) throw new DomainError('forbidden', 'この区分の項目を変えるには「編集する」が要ります。');
+    if (vaultRoleRank(role) < vaultRoleRank(need)) throw new DomainError('forbidden', 'このグループのパスワードを変えるには「編集する」が要ります。');
     return { row, section: store.section(row.sectionId)! };
   };
   const normalizedSecret = (raw: { name: string; purpose: string; url: string; username: string; email: string }, password: string, notes: string): VaultSecret => {
@@ -248,7 +248,7 @@ export function registerVaultRoutes(app: FastifyInstance, runtime: VaultRuntime 
     const b = deps.parse(sectionBody, request.body);
     fresh(v);
     const name = b.name.trim();
-    if (!name) invalid('区分の名前を入力してください。', 'name');
+    if (!name) invalid('グループの名前を入力してください。', 'name');
     const section = settled(store.createSection(newSectionId(), name, b.note.trim(), v.user.id, deps.clock()));
     return reply.code(201).send({ section: summary(v, section) });
   });
@@ -259,7 +259,7 @@ export function registerVaultRoutes(app: FastifyInstance, runtime: VaultRuntime 
     const b = deps.parse(sectionUpdateBody, request.body);
     fresh(v);
     const name = b.name.trim();
-    if (!name) invalid('区分の名前を入力してください。', 'name');
+    if (!name) invalid('グループの名前を入力してください。', 'name');
     if (!store.section(sectionId)) throw notFound();
     return { section: summary(v, settled(store.updateSection(sectionId, b.expectedVersion, name, b.note.trim(), v.user.id, deps.clock()))) };
   });
@@ -339,17 +339,17 @@ export function registerVaultRoutes(app: FastifyInstance, runtime: VaultRuntime 
     const names = new Map<string, string | null>();
     const entryName = (entryId: string | null): string | null => {
       if (entryId === null) return null;
-      if (!showNames) return '（項目）';
+      if (!showNames) return '（名前は非表示）';
       if (!names.has(entryId)) {
         const row = store.entry(entryId);
-        let name: string | null = '（消した項目）';
+        let name: string | null = '（消した登録）';
         // An entry moved to another section is named there, for that section's members only.
-        if (row && row.sectionId !== sectionId) name = '（別の区分へ移した項目）';
+        if (row && row.sectionId !== sectionId) name = '（別のグループへ移した登録）';
         else if (row) {
           try {
             name = open(row).name;
           } catch {
-            name = '（開けない項目）';
+            name = '（開けない登録）';
           }
         }
         names.set(entryId, name);
@@ -366,7 +366,7 @@ export function registerVaultRoutes(app: FastifyInstance, runtime: VaultRuntime 
           return `${who()}（${role(d.from)}）`;
         case 'entry_updated': {
           const fields = Array.isArray(d.changed) ? (d.changed as string[]).map((k) => VAULT_FIELD_LABELS[k as keyof VaultSecret] ?? k) : [];
-          const move = d.movedTo ? `（別の区分へ移した）` : d.movedFrom ? `（別の区分から移した）` : '';
+          const move = d.movedTo ? `（別のグループへ移した）` : d.movedFrom ? `（別のグループから移した）` : '';
           return `${fields.join('・')}${move}`;
         }
         case 'revealed':

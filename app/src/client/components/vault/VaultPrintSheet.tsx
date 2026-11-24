@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { fmtDate } from '../../api';
 import type { VaultPrintResponse } from '../../../shared/vault';
 
-// The paper copy of one section. It is laid out in the page itself (no new window, no PDF on the server), shown only
+// The paper copy of one group (a section in the code). It is laid out in the page itself (no new window, no PDF on the server), shown only
 // to the printer (vault.css hides it on screen and hides the app while printing), and removed as soon as the print
 // dialog closes, or after a minute if the browser never says it did.
 
@@ -36,7 +36,7 @@ export function VaultPrintSheet({ data, onDone }: { data: VaultPrintResponse; on
       </p>
       <div className="vault-print-envelope">
         <p>
-          <strong>封筒の表に書くこと：</strong>区分「{data.section.name}」・版 {data.edition}・印刷日 {fmtDate(data.printedAt).slice(0, 10)}・封をした人の署名
+          <strong>封筒の表に書くこと：</strong>グループ「{data.section.name}」・版 {data.edition}・印刷日 {fmtDate(data.printedAt).slice(0, 10)}・封をした人の署名
         </p>
         <p>封に日付と署名を書いて、決めてある金庫へ。開けたら、開けた人・日時・理由を記録して封をし直す。</p>
         <p>これより新しい版の紙を入れたら、この紙は細断する。</p>

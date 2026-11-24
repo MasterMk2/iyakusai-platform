@@ -179,7 +179,7 @@ describe('access', () => {
     // The record says what happened, not to which entry.
     const record = await call(ADMIN, 'GET', `/api/vault/sections/${s.id}/events`);
     expect(record.status).toBe(200);
-    expect(record.json.events.find((e: { action: string }) => e.action === 'entry_created')).toMatchObject({ entryName: '（項目）' });
+    expect(record.json.events.find((e: { action: string }) => e.action === 'entry_created')).toMatchObject({ entryName: '（名前は非表示）' });
     expect(JSON.stringify(record.json)).not.toContain('合成の管理画面');
     // Putting themselves back is a recorded change.
     expect((await grant(ADMIN, s.id, 'user', ADMIN, 'view')).status).toBe(200);
@@ -299,7 +299,7 @@ describe('entries', () => {
     // A manager of A only does not read, in A's record, the name the entry has in B.
     await grant(ADMIN, a.id, 'user', SOMU, 'manage');
     const record = (await call(SOMU, 'GET', `/api/vault/sections/${a.id}/events`)).json.events;
-    expect(record.filter((e: { entryName: string | null }) => e.entryName !== null).map((e: { entryName: string }) => e.entryName)).toEqual(['（別の区分へ移した項目）', '（別の区分へ移した項目）']);
+    expect(record.filter((e: { entryName: string | null }) => e.entryName !== null).map((e: { entryName: string }) => e.entryName)).toEqual(['（別のグループへ移した登録）', '（別のグループへ移した登録）']);
   });
 
   it('a section with entries cannot be removed; an empty one can', async () => {

@@ -11,7 +11,7 @@ export function VaultView() {
       {available === false && (
         <section className="vault-panel">
           <h3>パスワード帳</h3>
-          <p className="hint">このサーバーではパスワード帳を使っていないか、あなたが見られる区分がありません。見られるようにするには、区分を管理する人か権限管理者に依頼してください。</p>
+          <p className="hint">このサーバーではパスワード帳を使っていないか、あなたが見られるグループがありません。見られるようにするには、グループを管理する人か権限管理者に依頼してください。</p>
         </section>
       )}
     </main>
