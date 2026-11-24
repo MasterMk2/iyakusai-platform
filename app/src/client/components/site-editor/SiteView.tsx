@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { siteEditorPostHref, sortSitePages, SITE_EDITOR_PREFIX, type SiteEditorAccess, type SiteEditorAccessResponse, type SiteEditorMetaResponse, type SiteEditorPagesResponse } from '../../../shared/site-editor';
+import {
+  siteEditorPostHref,
+  sortSitePages,
+  SITE_EDITOR_PREFIX,
+  type SiteEditorAccess,
+  type SiteEditorAccessResponse,
+  type SiteEditorDeletedPagesResponse,
+  type SiteEditorMetaResponse,
+  type SiteEditorPagesResponse,
+  type SiteEditorResult,
+} from '../../../shared/site-editor';
 import { api, toFailure } from '../../api';
 import { useLoader } from '../../useLoader';
 import './site-editor.css';
@@ -64,7 +74,24 @@ export function SiteView() {
   );
 }
 
-/** The posts, newest first. Read again when the person comes back from the editor's browser tab. */
+/** A change sent to the editor's server through this app, as the editor sends it (the server refuses one without X-WGE-Request). */
+async function changeOnEditor(path: string): Promise<SiteEditorResult> {
+  try {
+    const res = await fetch(`${SITE_EDITOR_PREFIX}${path}`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-WGE-Request': '1' }, body: '{}' });
+    const json = (await res.json().catch(() => null)) as SiteEditorResult | null;
+    return json && typeof json.ok === 'boolean' ? json : { ok: false };
+  } catch (err) {
+    return { ok: false, message: toFailure(err).message };
+  }
+}
+
+const dayOf = (ms: number) => new Date(ms).toLocaleDateString('ja-JP', { timeZone: 'Asia/Tokyo', year: 'numeric', month: '2-digit', day: '2-digit' });
+
+/**
+ * The posts, newest first. Read again when the person comes back from the editor's browser tab. A draft can be deleted
+ * (2026-11-24): the editor's server keeps it, so deleting asks nothing first and offers 元に戻す instead; a published
+ * post is taken back in the editor first, so deleting never changes the site.
+ */
 function PostList() {
   const [refresh, setRefresh] = useState(0);
   const load = useCallback(
@@ -75,6 +102,16 @@ function PostList() {
     [refresh],
   );
   const pages = useLoader(load);
+  const loadDeleted = useCallback(
+    (signal: AbortSignal) => {
+      void refresh;
+      return api<SiteEditorDeletedPagesResponse>('GET', `${SITE_EDITOR_PREFIX}/api/deleted-pages`, undefined, signal);
+    },
+    [refresh],
+  );
+  const deleted = useLoader(loadDeleted);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ text: string; ok: boolean; undo?: { id: string; title: string } } | null>(null);
   useEffect(() => {
     const again = () => {
       if (document.visibilityState === 'visible') setRefresh((n) => n + 1);
@@ -84,12 +121,41 @@ function PostList() {
   }, []);
   const list = useMemo(() => sortSitePages(pages.data?.pages ?? []), [pages.data]);
   const published = list.filter((p) => p.published).length;
+  const gone = deleted.data?.pages ?? [];
+
+  async function change(id: string, action: 'delete' | 'restore', title: string) {
+    setBusy(id);
+    setNotice(null);
+    const res = await changeOnEditor(`/api/pages/${encodeURIComponent(id)}/${action}`);
+    setBusy(null);
+    setRefresh((n) => n + 1);
+    if (res.ok) {
+      setNotice(action === 'delete' ? { text: `「${title}」を削除しました。`, ok: true, undo: { id, title } } : { text: `「${title}」を元に戻しました。下書きとして一覧にあります。`, ok: true });
+      return;
+    }
+    const why: Record<string, string> = {
+      published: 'この記事は公開中のため削除できません。エディタで公開を取り消してから削除してください。',
+      deleted: 'この記事はすでに削除されています。',
+      'not-deleted': 'この記事はすでに一覧に戻っています。',
+    };
+    setNotice({ text: (res.reason && why[res.reason]) ?? res.message ?? (action === 'delete' ? '削除できませんでした。もう一度押してください。' : '元に戻せませんでした。もう一度押してください。'), ok: false });
+  }
 
   return (
     <section className="site-posts" aria-labelledby="site-posts-title">
       <h3 id="site-posts-title">
         記事<span className="site-count">{pages.data ? `${list.length} 件・公開中 ${published} 件` : ''}</span>
       </h3>
+      {notice && (
+        <p className={`status ${notice.ok ? 'info' : 'error'}`} role="status" data-testid="site-notice">
+          {notice.text}
+          {notice.undo && (
+            <button type="button" className="secondary" disabled={busy !== null} onClick={() => void change(notice.undo!.id, 'restore', notice.undo!.title)} data-testid="site-undo">
+              元に戻す
+            </button>
+          )}
+        </p>
+      )}
       {pages.error && (
         <p className="status error" role="alert">
           記事の一覧を読み込めませんでした。{pages.error.message}
@@ -109,11 +175,41 @@ function PostList() {
               </a>
               <span className="site-post-date">{p.date ? p.date.replaceAll('-', '/') : '日付なし'}</span>
               <span className={`chip ${p.published ? 'site-chip-live' : 'site-chip-draft'}`}>{p.published ? '公開中' : '下書き'}</span>
+              {!p.published && (
+                <button type="button" className="secondary site-post-delete" disabled={busy !== null} aria-label={`「${p.title?.trim() || '題名なし'}」を削除`} onClick={() => void change(p.id, 'delete', p.title?.trim() || '題名なし')} data-testid="site-post-delete">
+                  {busy === p.id ? '削除しています…' : '削除'}
+                </button>
+              )}
             </li>
           ))}
         </ul>
       )}
-      {list.length > 0 && <p className="hint">題名を押すと、その記事がエディタ（別のタブ）で開きます。</p>}
+      {list.length > 0 && <p className="hint">題名を押すと、その記事がエディタ（別のタブ）で開きます。下書きは「削除」で一覧から外せます。公開中の記事は、エディタで公開を取り消してから削除します。</p>}
+      {deleted.error && (
+        <p className="status error">
+          削除した記事を読み込めませんでした。{deleted.error.message}
+          <button type="button" className="secondary" onClick={deleted.retry}>
+            もう一度読み込む
+          </button>
+        </p>
+      )}
+      {gone.length > 0 && (
+        <details className="site-trash" data-testid="site-trash">
+          <summary>削除した記事（{gone.length} 件）</summary>
+          <p className="hint">元に戻すと、下書きとして一覧に戻ります。</p>
+          <ul className="site-post-list">
+            {gone.map((p) => (
+              <li key={p.id} className="site-post site-trash-post" data-testid="site-trash-post">
+                <span className="site-post-title">{p.title.trim() || '（題名なし）'}</span>
+                <span className="site-post-date">{dayOf(p.deletedAt)} に削除</span>
+                <button type="button" className="secondary" disabled={busy !== null} aria-label={`「${p.title.trim() || '題名なし'}」を元に戻す`} onClick={() => void change(p.id, 'restore', p.title.trim() || '題名なし')} data-testid="site-trash-restore">
+                  {busy === p.id ? '戻しています…' : '元に戻す'}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
     </section>
   );
 }

@@ -65,6 +65,27 @@ export interface SiteEditorPagesResponse {
   pages: SiteEditorPage[];
 }
 
+/** A deleted post (GET /site-editor/api/deleted-pages, 2026-11-24): kept by the editor's server until it is restored. */
+export interface SiteEditorDeletedPage {
+  id: string;
+  title: string;
+  date: string | null;
+  /** When it was deleted, in milliseconds. */
+  deletedAt: number;
+}
+
+export interface SiteEditorDeletedPagesResponse {
+  ok: boolean;
+  pages: SiteEditorDeletedPage[];
+}
+
+/** The editor's server's own answer to a change (WebGenEngine's server.md §2): `ok`, else a reason and maybe words. */
+export interface SiteEditorResult {
+  ok: boolean;
+  reason?: string;
+  message?: string;
+}
+
 /** The editor opened on one post. */
 export function siteEditorPostHref(id: string): string {
   return `${SITE_EDITOR_PREFIX}/editor/index.html#p=${encodeURIComponent(id)}`;

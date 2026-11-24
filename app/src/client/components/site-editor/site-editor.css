@@ -10,14 +10,20 @@
 .site-posts h3 { margin: 4px 0 6px; display: flex; align-items: baseline; gap: 10px; }
 .site-count { color: var(--muted); font-size: 14px; font-weight: 400; }
 .site-post-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
-.site-post { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 4px 12px; padding: 6px 4px; border-bottom: 1px solid var(--line); }
+.site-post { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: center; gap: 4px 12px; padding: 6px 4px; border-bottom: 1px solid var(--line); }
+/* 削除・元に戻す: always the last column, so the buttons line up whether a row has a state chip or not. */
+.site-post > button { grid-column: -2 / -1; justify-self: end; min-height: 36px; }
+.site-post-delete { color: var(--red); }
+.site-posts > .status button { margin-left: 8px; }
+.site-trash { margin-top: 8px; }
+.site-trash summary { cursor: pointer; font-weight: 700; padding: 6px 0; }
 .site-post-title { display: flex; align-items: center; min-height: 44px; font-weight: 700; overflow-wrap: anywhere; }
 .site-post-date { color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .chip.site-chip-live { background: var(--green-bg); color: var(--green); border: 1px solid var(--green-line); padding: 0 7px; white-space: nowrap; }
 .chip.site-chip-draft { background: var(--neutral-bg); color: var(--ink); border: 1px solid var(--field); padding: 0 7px; white-space: nowrap; }
 @media (max-width: 560px) {
   /* A phone: the title on its own line, the date and the state under it. */
-  .site-post { grid-template-columns: auto 1fr; }
+  .site-post { grid-template-columns: auto auto 1fr; }
   .site-post-title { grid-column: 1 / -1; min-height: 36px; }
   .site-post .chip { justify-self: start; }
 }

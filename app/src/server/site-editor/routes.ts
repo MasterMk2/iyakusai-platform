@@ -11,6 +11,8 @@ import type { SiteEditorConfig } from './config.js';
 // "upstream"), which answers only the requests this app signs (svc-auth/v1, the person's account ID as the actor). Here:
 // - only the editor's own paths go through, each by its method and an exact pattern (no query, escape or dot segment);
 // - the editor and its saves need the writing right, publishing and taking a publish back the publishing right;
+//   deleting a post and restoring it need the writing right (2026-11-24): the editor's server deletes only a post that
+//   is not published, and keeps it until it is restored (WebGenEngine's blog.md), so the site never changes by it;
 // - the upstream gets the body's bytes and two headers (the JSON type and the editor's X-WGE-Request), never a cookie;
 // - the answer is its status, an allowed type and the body: no redirect is followed, with a time and a size limit.
 // The published site is not served by this app: it has an origin of its own, so what members write there never shares
@@ -54,8 +56,8 @@ const ROUTES: { method: 'GET' | 'POST'; pattern: RegExp; kind: Kind; publish: bo
   { method: 'GET', pattern: new RegExp(`^${P}/(?:editor|source)/${FILE}$`), kind: 'file', publish: false },
   // The pictures of the pages, for the editor's preview (WebGenEngine's blog.md): images only, never SVG.
   { method: 'GET', pattern: new RegExp(`^${P}/media/[0-9a-f]{16}\\.(?:jpg|png|gif|webp)$`), kind: 'file', publish: false },
-  { method: 'GET', pattern: new RegExp(`^${P}/api/(?:ping|pages)$`), kind: 'api', publish: false },
-  { method: 'POST', pattern: new RegExp(`^${P}/api/pages/${PAGE_ID}/(?:load|draft|meta)$`), kind: 'api', publish: false },
+  { method: 'GET', pattern: new RegExp(`^${P}/api/(?:ping|pages|deleted-pages)$`), kind: 'api', publish: false },
+  { method: 'POST', pattern: new RegExp(`^${P}/api/pages/${PAGE_ID}/(?:load|draft|meta|delete|restore)$`), kind: 'api', publish: false },
   { method: 'POST', pattern: new RegExp(`^${P}/api/media$`), kind: 'api', publish: false },
   { method: 'GET', pattern: new RegExp(`^${P}/api/pages/${PAGE_ID}/versions(?:/\\d{1,9})?$`), kind: 'api', publish: false },
   { method: 'POST', pattern: new RegExp(`^${P}/api/pages/${PAGE_ID}/(?:publish|undo-publish)$`), kind: 'api', publish: true },
