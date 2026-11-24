@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test';
 import type { SiteEditorAccessResponse, SiteEditorMetaResponse, SiteEditorPagesResponse } from '../../src/shared/site-editor.js';
-import { expect, test } from './fixtures.js';
+import { expect, openTab, test } from './fixtures.js';
 
 // The Webサイト tab (2026-11-23; before, a part of the settings). The server is a stand-in (page.route): the Discord
 // login's answers, the editor's meta, its list of posts and, for an access administrator, who may write and publish.
@@ -65,11 +65,11 @@ async function open(page: Page, o: { canEdit?: boolean; admin?: boolean; enabled
 test('a writer opens the tab, sees the posts newest first with their state, and each opens in the editor', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   const { calls } = await open(page);
+  // The last link of the 連絡 menu (2026-11-23), which is marked while the site is shown.
   const tab = page.getByTestId('nav-site');
-  await expect(tab).toBeVisible();
   await expect(tab).toHaveAttribute('aria-current', 'page');
-  // Just before パスワード帳 (absent here) and 設定.
-  await expect(page.locator('.global-nav a').nth(-2)).toHaveAttribute('data-testid', 'nav-site');
+  await expect(page.locator('#nav-menu-contact a').last()).toHaveAttribute('data-testid', 'nav-site');
+  await expect(page.locator('.nav-group[data-group="contact"]')).toHaveClass(/is-current/);
   const rows = page.getByTestId('site-post');
   await expect(rows).toHaveCount(3);
   await expect(rows.nth(0)).toContainText('合成の新しい記事');
@@ -95,7 +95,7 @@ test('a writer opens the tab, sees the posts newest first with their state, and 
   // The settings no longer list it.
   await page.getByTestId('nav-settings').click();
   await expect(page.getByRole('navigation', { name: '設定の項目' }).getByRole('link', { name: 'Webサイト' })).toHaveCount(0);
-  await page.getByTestId('nav-site').click();
+  await openTab(page, 'site');
   await expect(page).toHaveURL(/#\/site$/);
   await expect(rows).toHaveCount(3);
 });
@@ -145,11 +145,12 @@ test('a member who may not write has no tab, and the address explains why it is 
 });
 
 for (const width of [375, 320]) {
-  test(`on a phone ${width}px wide the tab fits, a long title wraps, and nothing scrolls sideways`, async ({ page }) => {
+  test(`on a phone ${width}px wide the link fits in the 連絡 menu, a long title wraps, and nothing scrolls sideways`, async ({ page }) => {
     await page.setViewportSize({ width, height: 812 });
     await open(page);
     await expect(page.getByTestId('site-post')).toHaveCount(3);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+    await page.getByTestId('nav-group-contact').click();
     const tab = await page.getByTestId('nav-site').boundingBox();
     expect(tab!.x + tab!.width).toBeLessThanOrEqual(width);
     expect((await page.getByTestId('site-new').boundingBox())!.height).toBeGreaterThanOrEqual(44);

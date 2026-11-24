@@ -114,9 +114,9 @@ services:
 | `availability-key.json` | 上のサービスアカウントの JSON 鍵（名前は例。会計のマスターシートと同じ鍵でもよい。権限 600） |
 | `bank.json` | 銀行の連携（GMOあおぞらネット銀行 API。`mailbox.json` と同じフォルダ。任意）。あれば設定の画面から銀行とつなげる。下の「銀行の連携」 |
 | `bank-client-secret`・`bank-token.key` | 上のクライアントシークレット（銀行の画面の値を 1 行）と、トークンを暗号化する鍵（32 バイト以上の乱数）。名前は例。どちらも権限 600 |
-| `vault.json` | パスワード帳（`mailbox.json` と同じフォルダ。任意）。あれば上のタブ「パスワード帳」が、区分のメンバーと権限管理者に出る。下の「パスワード帳」 |
+| `vault.json` | パスワード帳（`mailbox.json` と同じフォルダ。任意）。あれば上の段の「運営」メニューに「パスワード帳」が、区分のメンバーと権限管理者に出る。下の「パスワード帳」 |
 | `vault.key` | 上の項目を暗号化する鍵（32 バイト以上の乱数。名前は例。権限 600。銀行のトークンの鍵とは別の値） |
-| `site-editor.json` | Webサイトの編集（`mailbox.json` と同じフォルダ。任意）。あれば上のタブ「Webサイト」が、書ける委員と権限管理者に出る。説明は [site-editor.md](site-editor.md) |
+| `site-editor.json` | Webサイトの編集（`mailbox.json` と同じフォルダ。任意）。あれば上の段の「連絡」メニューに「Webサイト」が、書ける委員と権限管理者に出る。説明は [site-editor.md](site-editor.md) |
 | `site-editor.key` | 上の編集サーバー（WebGenEngine）と共有する署名の鍵（32 バイト以上の乱数。名前は例。権限 600。ほかの鍵とは別の値） |
 | `*.key` | 経路ごとの鍵。32 バイト以上の乱数 |
 | `bot-host-ca.crt` | Bot ホストの CA 証明書 |

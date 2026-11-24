@@ -109,7 +109,8 @@ async function activateSession(result) {
   for (const op of state.queue) if (op.status === 'uploading') { op.status = 'pending'; await dbPut('operations', op); }
   $('login-panel').hidden = true; $('workspace').hidden = false; $('logout').hidden = true; $('staff-name').textContent = state.staff.name || state.staff.id;
   if (result.temporary_staff === true) {
-    document.querySelectorAll('.global-nav a').forEach(a => { if (a.getAttribute('href') !== '/rental') a.closest('li').hidden = true; });
+    // A temporary staff member has only this screen: its tab alone, taken out of the 運営 menu (2026-11-23).
+    const tabs = document.querySelector('.global-nav > ul'); const only = document.createElement('li'); only.append(tabs.querySelector('a[href="/rental"]')); tabs.replaceChildren(only);
     document.querySelector('.brand').href = '/rental';
     $('logout').hidden = false;
     $('logout').onclick = async () => {

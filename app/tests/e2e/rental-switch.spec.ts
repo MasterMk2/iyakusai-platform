@@ -34,6 +34,7 @@ async function open(page: Page, hash: string) {
   return { puts };
 }
 
+// In the 運営 menu (2026-11-23), closed until its button is pressed: counted, not looked at.
 const tab = (page: Page) => page.getByTestId('nav-rental');
 
 test('stopping asks once with what is out, takes the tab away, and starting again brings it back', async ({ page }) => {
@@ -42,7 +43,7 @@ test('stopping asks once with what is out, takes the tab away, and starting agai
   const panel = page.getByTestId('features');
   await expect(panel).toBeVisible();
   await expect(page.getByTestId('feature-rental-state')).toHaveText('使用中');
-  await expect(tab(page)).toBeVisible();
+  await expect(tab(page)).toHaveCount(1);
 
   await panel.getByRole('button', { name: '物品貸出を止める' }).click();
   const warning = panel.getByRole('alert');
@@ -59,7 +60,7 @@ test('stopping asks once with what is out, takes the tab away, and starting agai
 
   await panel.getByRole('button', { name: '物品貸出を再開する' }).click();
   await expect(page.getByTestId('feature-rental-state')).toHaveText('使用中');
-  await expect(tab(page)).toBeVisible();
+  await expect(tab(page)).toHaveCount(1);
   expect(puts).toEqual([{ enabled: false }, { enabled: true }]);
   await panel.getByText('最近の切り替え（2 件）').click();
   await expect(panel.locator('.rental-access-history li').first()).toContainText('物品貸出：再開');

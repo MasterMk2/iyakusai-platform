@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test';
-import { expect, loginAs, resetSample, test } from './fixtures.js';
+import { expect, loginAs, openTab, resetSample, test } from './fixtures.js';
 
 // Labels of an official LINE conversation set from its list row (2026-11-10): the exhibit categories, the
 // names already used and the organizations ledger are offered, each click saves at once, and the labels are
@@ -13,7 +13,7 @@ const row = (page: Page, title: string) =>
   page.locator('li.thread-row', { has: page.locator('button.thread[data-conversation-id] .subject', { hasText: new RegExp(`^${title}$`) }) });
 
 async function openLineTab(page: Page) {
-  await page.getByRole('navigation', { name: '機能' }).getByRole('link', { name: '公式LINE' }).click();
+  await openTab(page, 'line');
   await expect(page.getByTestId('thread-count')).toHaveText(/^全 7 件中/);
 }
 
@@ -108,7 +108,7 @@ test('a label changed by someone else first is not overwritten from the row', as
 
 test('a reader without the right to change the handling sees the labels but no button', async ({ page }) => {
   await loginAs(page, 'u-viewer-b');
-  await page.getByRole('navigation', { name: '機能' }).getByRole('link', { name: '公式LINE' }).click();
+  await openTab(page, 'line');
   const readOnly = row(page, '顧客サンプルL1');
   await expect(readOnly).toBeVisible();
   await expect(readOnly.getByRole('group', { name: '「顧客サンプルL1」の対応状況' })).toHaveCount(0);

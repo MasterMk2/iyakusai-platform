@@ -377,6 +377,11 @@ describe('phone screen', () => {
     const worker = await call('/rental-sw.js', { user: null });
     expect(worker.headers['service-worker-allowed']).toBe('/');
     expect((await call('/rental/vendor/jsQR.js', { user: null })).status).toBe(200);
+    // The tabs' two menus (連絡・運営, 2026-11-23) open with their own small script.
+    expect(String((await call('/rental', { user: null })).raw)).toContain('<script src="/rental/nav.js" defer></script>');
+    const nav = await call('/rental/nav.js', { user: null });
+    expect(nav.status).toBe(200);
+    expect(String(nav.headers['content-type'])).toMatch(/javascript/);
     // The QR fallback (phones and PCs without BarcodeDetector) loads from the path served above.
     const script = readFileSync(path.join(ROOT, 'src', 'rental-web', 'app.js'), 'utf8');
     expect(script).toContain("script.src = '/rental/vendor/jsQR.js'");

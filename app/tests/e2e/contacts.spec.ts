@@ -3,7 +3,7 @@ import type { Page } from '@playwright/test';
 import type { ReceiptView } from '../../src/shared/api.js';
 import { contactTitle, normalizeContactSearch, validateContact, type ContactInput, type ContactView } from '../../src/shared/contacts.js';
 import type { MailSendOptions } from '../../src/shared/mailbox.js';
-import { expect, test } from './fixtures.js';
+import { expect, openTab, tabRow, test } from './fixtures.js';
 
 // Committee contacts (2026-10-26) on the production UI with a synthetic contacts API in the browser; the HTTP
 // tests (tests/contacts/http.test.ts) cover the server, the rules and the grants. Synthetic names only.
@@ -128,7 +128,8 @@ test('from home: search, open a contact, call and write mail to it', async ({ pa
   // The search is handed over in memory: it is not in the address bar (nor in the history).
   await expect(page).toHaveURL(/#\/contacts$/);
   await expect(page.getByLabel('連絡先を探す')).toHaveValue('ゴウセイ');
-  await expect(page.getByRole('link', { name: '連絡先', exact: true })).toHaveAttribute('aria-current', 'page');
+  // In the 連絡 menu (2026-11-23), closed after the page opened.
+  await expect(page.getByTestId('nav-contacts')).toHaveAttribute('aria-current', 'page');
   await expect(page.getByTestId('contact-row')).toHaveCount(1);
   await expect(page.getByTestId('contact-count')).toHaveText('1 件');
   await page.screenshot({ path: '.tmp/contacts-list-mobile.png', fullPage: true });
@@ -151,21 +152,22 @@ test('from home: search, open a contact, call and write mail to it', async ({ pa
   await expect(page.getByRole('region', { name: '新しいメール' }).getByLabel('宛先', { exact: true })).toHaveValue('');
 });
 
-test('contacts have their own tab on every width, and the rows per page can be chosen and are remembered', async ({ page }) => {
+test('contacts sit in the 連絡 menu on every width, and the rows per page can be chosen and are remembered', async ({ page }) => {
   for (const width of [320, 1280]) {
     await page.setViewportSize({ width, height: 800 });
     await app(page);
     await page.goto('/#/home');
     const tabs = page.getByRole('navigation', { name: '機能' });
-    await expect(tabs.getByRole('link')).toHaveText(['ホーム', 'タスク', '物品貸出', 'メール', '公式LINE', '連絡先', 'Bot', '設定']);
-    await tabs.getByRole('link', { name: '連絡先', exact: true }).click();
+    await expect.poll(() => tabRow(page)).toEqual(['ホーム', 'タスク', 'メール', '連絡▾', '運営▾', 'Bot', '設定']);
+    await openTab(page, 'contacts');
     await expect(page).toHaveURL(/#\/contacts$/);
     await expect(page).toHaveTitle('連絡先｜医薬祭 委員会アプリ');
-    await expect(tabs.getByRole('link', { name: '連絡先', exact: true })).toHaveAttribute('aria-current', 'page');
+    await expect(page.getByTestId('nav-contacts')).toHaveAttribute('aria-current', 'page');
+    await expect(page.locator('.nav-group[data-group="contact"]')).toHaveClass(/is-current/);
     await noSideScroll(page);
-    // Every label but 物品 | 貸出 and 公式 | LINE (their set break points) stays on one line, even with eight tabs at 320px.
-    const lines = await tabs.locator('a span').evaluateAll((els) => els.map((el) => [el.textContent, Math.round(el.getBoundingClientRect().height / parseFloat(getComputedStyle(el).lineHeight))] as const));
-    for (const [label, count] of lines) if (label !== '物品貸出' && label !== '公式LINE') expect(count, `${label} at ${width}px`).toBe(1);
+    // Every label of the row stays on one line, even at 320px (seven tabs since 2026-11-23).
+    const lines = await tabs.locator('.global-nav > ul > li > a > span, .nav-group-toggle > span').evaluateAll((els) => els.map((el) => [el.textContent, Math.round(el.getBoundingClientRect().height / parseFloat(getComputedStyle(el).lineHeight))] as const));
+    for (const [label, count] of lines) expect(count, `${label} at ${width}px`).toBe(1);
     if (width === 320) await page.screenshot({ path: '.tmp/contacts-tab-320.png' });
     await page.unrouteAll({ behavior: 'ignoreErrors' });
   }
@@ -191,7 +193,7 @@ test('contacts have their own tab on every width, and the rows per page can be c
   await page.getByTestId('contact-page-size').selectOption('1000');
   await expect.poll(() => sizes.at(-1)).toBe('1000');
 
-  // The rental phone screen repeats the same seven tabs in its own HTML and CSS (this test server does not serve
+  // The rental phone screen repeats the same tabs and menus in its own HTML and CSS (this test server does not serve
   // that screen, so its files are loaded as they are, without its script).
   const rental = await page.context().newPage();
   await rental.setViewportSize({ width: 320, height: 800 });
@@ -200,10 +202,10 @@ test('contacts have their own tab on every width, and the rows per page can be c
     .replace('<script src="/rental/app.js" defer></script>', '');
   await rental.setContent(rentalHtml);
   const rentalTabs = rental.getByRole('navigation', { name: '機能' });
-  await expect(rentalTabs.getByRole('link')).toHaveText(['ホーム', 'タスク', '物品貸出', 'メール', '公式LINE', '連絡先', 'Bot', '設定']);
-  await expect(rentalTabs.getByRole('link', { name: '連絡先' })).toHaveAttribute('href', '/#/contacts');
-  const rentalLines = await rentalTabs.locator('a span').evaluateAll((els) => els.map((el) => [el.textContent, Math.round(el.getBoundingClientRect().height / parseFloat(getComputedStyle(el).lineHeight))] as const));
-  for (const [label, count] of rentalLines) if (label !== '物品貸出' && label !== '公式LINE') expect(count, `rental ${label}`).toBe(1);
+  expect(await tabRow(rental)).toEqual(['ホーム', 'タスク', 'メール', '連絡▾', '運営▾', 'Bot', '設定']);
+  await expect(rental.locator('#nav-menu-contact a[href="/#/contacts"]')).toHaveCount(1);
+  const rentalLines = await rentalTabs.locator('.global-nav > ul > li > a > span, .nav-group-toggle > span').evaluateAll((els) => els.map((el) => [el.textContent, Math.round(el.getBoundingClientRect().height / parseFloat(getComputedStyle(el).lineHeight))] as const));
+  for (const [label, count] of rentalLines) expect(count, `rental ${label}`).toBe(1);
   await rental.screenshot({ path: '.tmp/contacts-rental-tabs-320.png' });
   await rental.close();
 });

@@ -1,4 +1,4 @@
-import { expect, injectFaults, loginAs, openThread, resetSample, test, threadButton, threadIdOf } from './fixtures.js';
+import { expect, injectFaults, loginAs, openThread, resetSample, tabRow, test, threadButton, threadIdOf } from './fixtures.js';
 
 test.beforeEach(async ({ page }) => {
   await resetSample(page);
@@ -329,10 +329,10 @@ test('assignment does not grant access', async ({ page }) => {
 
 test('common tabs and the home screen; on a phone the list and the opened thread take turns', async ({ page }) => {
   await loginAs(page, 'u-editor-a');
-  // Same tabs in the same order on every screen; the current one is marked. Every module tab is always shown
-  // (the tasks and rental screens say why they cannot be used here); the rental tab is a separate page.
+  // Same tabs in the same order on every screen; the current one is marked. The tabs used every day are shown,
+  // the rest sit in two menus (連絡・運営, 2026-11-23); the rental tab is a separate page.
   const tabs = page.getByRole('navigation', { name: '機能' });
-  await expect(tabs.getByRole('link')).toHaveText(['ホーム', 'タスク', '物品貸出', 'メール', '公式LINE', '連絡先', 'Bot', '設定']);
+  await expect.poll(() => tabRow(page)).toEqual(['ホーム', 'タスク', 'メール', '連絡▾', '運営▾', 'Bot', '設定']);
   await expect(tabs.getByRole('link', { name: 'メール', exact: true })).toHaveAttribute('aria-current', 'page');
   await tabs.getByRole('link', { name: 'ホーム' }).click();
   await expect(page).toHaveTitle('ホーム｜医薬祭 委員会アプリ');

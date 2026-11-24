@@ -8,7 +8,8 @@ import { api, ApiFailure } from './api';
 import { AccountBar } from './components/AccountBar';
 import { AccountLogin } from './components/AccountLogin';
 import { AdminPanel } from './components/AdminPanel';
-import { GlobalNav, Masthead, type NavItem, type NavKey } from './components/AppShell';
+import { GlobalNav, Masthead, type NavEntry, type NavKey, type NavTarget } from './components/AppShell';
+import { buildNav } from './navLayout';
 import { DemoBar } from './components/DemoBar';
 import { DiscordBar } from './components/DiscordBar';
 import { DiscordLogin } from './components/DiscordLogin';
@@ -545,33 +546,29 @@ export function App() {
     );
   }
 
-  // Same tabs, same order on every screen (the rental screen repeats them in src/rental-web/index.html).
-  const navItems: NavItem[] = [
-    { key: 'home', label: 'ホーム', href: '#/home', onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'home' }) },
-    // 掲示板 (2026-11-11): the committee's notices, next to home (what is new on it shows there).
-    { key: 'board', label: '掲示板', href: BOARD_HREF, onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'board' }) },
-    { key: 'tasks', label: 'タスク', href: '#/tasks', onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'tasks' }) },
-    ...(rentalPaused ? [] : [{ key: 'rental', label: '物品貸出', labelBreaks: ['物品', '貸出'], href: '/rental' } as NavItem]),
-    // The tab is "メール", not "メールボックス": mail is sent from here too. The mailboxes inside it are each a "受信箱".
-    { key: 'inbox', label: 'メール', href: '#/all', onSelect: () => navigate(EMPTY_ROUTE) },
-    // The official LINE has its own tab (2026-11-03): its people, counts and sending differ from mail's.
-    { key: 'line', label: '公式LINE', labelBreaks: ['公式', 'LINE'], href: '#/line', onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'line' }) },
-    // Contacts have their own tab, next to メール.
-    { key: 'contacts', label: '連絡先', href: '#/contacts', onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'contacts' }) },
-    // 会計 (2026-11-05): every member's reimbursement claims, and the books for the accounting section.
-    { key: 'books', label: '会計', href: '#/books', onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'books' }) },
-    { key: 'bot', label: 'Bot', href: '#/bot', onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'bot', botSection: 'ask' }) },
-    // Webサイト (2026-11-23): only for the people who may write and the access administrators (see siteTab).
-    ...(siteTab ? [{ key: 'site', label: 'Webサイト', labelBreaks: ['Web', 'サイト'], href: SITE_HREF, onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'site' }) } as NavItem] : []),
-    // パスワード帳 (2026-11-23): only for the people who can open it (see vaultTab).
-    ...(vaultTab ? [{ key: 'vault', label: 'パスワード帳', labelBreaks: ['パス', 'ワード帳'], href: VAULT_HREF, onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'vault' }) } as NavItem] : []),
-    { key: 'settings', label: '設定', href: '#/settings', onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'settings' }) },
-  ];
+  // Same tabs, same order on every screen: the order, names and menus are in navLayout.ts (the rental screens repeat
+  // them in src/rental-web/index.html and supplies.html). Here is only where each one goes.
+  const navEntries: NavEntry[] = buildNav<NavTarget>({
+    home: { href: '#/home', onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'home' }) },
+    tasks: { href: '#/tasks', onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'tasks' }) },
+    inbox: { href: '#/all', onSelect: () => navigate(EMPTY_ROUTE) },
+    line: { href: '#/line', onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'line' }) },
+    contacts: { href: '#/contacts', onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'contacts' }) },
+    board: { href: BOARD_HREF, onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'board' }) },
+    books: { href: '#/books', onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'books' }) },
+    rental: rentalPaused ? null : { href: '/rental' },
+    // Only for the people who can open it (see vaultTab).
+    vault: vaultTab ? { href: VAULT_HREF, onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'vault' }) } : null,
+    // Only for the people who may write and the access administrators (see siteTab).
+    site: siteTab ? { href: SITE_HREF, onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'site' }) } : null,
+    bot: { href: '#/bot', onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'bot', botSection: 'ask' }) },
+    settings: { href: '#/settings', onSelect: () => navigate({ ...EMPTY_ROUTE, view: 'settings' }) },
+  });
   // The decision register has no tab of its own (the tabs stay as they are): it is reached from home, so home stays marked.
   const currentNav: NavKey = route.view === 'home' || route.view === 'decisions' ? 'home' : route.view === 'board' ? 'board' : route.view === 'tasks' ? 'tasks' : route.view === 'bot' ? 'bot' : route.view === 'contacts' ? 'contacts' : route.view === 'books' ? 'books' : route.view === 'line' ? 'line' : route.view === 'mail' ? 'inbox' : route.view === 'vault' ? 'vault' : route.view === 'site' ? 'site' : 'settings';
   // Contacts exist with the committee mailbox (Discord login), for every committee member.
   const contactsEnabled = !!committeeMail;
-  const topNav = <GlobalNav items={navItems} current={currentNav} />;
+  const topNav = <GlobalNav entries={navEntries} current={currentNav} />;
 
   if (route.view === 'home') {
     return (

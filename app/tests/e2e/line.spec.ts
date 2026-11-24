@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test';
-import { expect, loginAs, resetSample, test } from './fixtures.js';
+import { expect, loginAs, openTab, resetSample, test } from './fixtures.js';
 
 // Synthetic LINE inbox in demo mode: mock data and the mock push connector only.
 // The shared fixture also asserts that no external network request is attempted.
@@ -12,7 +12,7 @@ const lineItem = (page: Page, title: string) =>
   page.locator('button.thread[data-conversation-id]', { has: page.locator('.subject', { hasText: new RegExp(`^${title}$`) }) });
 
 // The official LINE has its own tab (2026-11-03), apart from the mail tab.
-const openLineTab = (page: Page) => page.getByRole('navigation', { name: '機能' }).getByRole('link', { name: '公式LINE' }).click();
+const openLineTab = (page: Page) => openTab(page, 'line');
 
 async function openLine(page: Page, accountId: string, title: string) {
   await openLineTab(page);

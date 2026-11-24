@@ -1,8 +1,8 @@
 'use strict';
 // Rental phone screen inside the common app. Scope '/', so an item page opened from a QR label or FeliCa
 // card (/i/<code>) loads without a connection; every other page of the common app is left to the network.
-const CACHE = 'iyakusai-rental-shell-20261123-v27-site-tab';
-const ASSETS = ['/rental', '/rental/app.js', '/rental/styles.css', '/rental/manifest.webmanifest', '/rental/icon.svg', '/rental/vendor/jsQR.js'];
+const CACHE = 'iyakusai-rental-shell-20261124-v28-nav-menus';
+const ASSETS = ['/rental', '/rental/app.js', '/rental/nav.js', '/rental/styles.css', '/rental/manifest.webmanifest', '/rental/icon.svg', '/rental/vendor/jsQR.js'];
 const isRentalPage = (path) => path === '/rental' || path === '/rental/' || /^\/i\/IY-[A-Z0-9-]+$/.test(path);
 self.addEventListener('install', (event) => event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(ASSETS)).then(() => self.skipWaiting())));
 self.addEventListener('activate', (event) => event.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((key) => key.startsWith('iyakusai-rental-shell-') && key !== CACHE).map((key) => caches.delete(key)))).then(() => self.clients.claim())));
