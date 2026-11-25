@@ -161,15 +161,68 @@ test('a post published meanwhile is not deleted, and the message says why', asyn
   // Someone published it after the list was read: the editor's server refuses, and the site stays as it is.
   await page.route('**/site-editor/api/pages/20261120-c3d4/delete', (route) => route.fulfill({ status: 409, json: { wge: 1, ok: false, reason: 'published' } }));
   await page.getByTestId('site-post-delete').click();
-  await expect(page.getByTestId('site-notice')).toContainText('公開中のため削除できません。エディタで公開を取り消してから削除してください。');
+  await expect(page.getByTestId('site-notice')).toContainText('公開中のため削除できません。公開できる人か権限管理者に、非公開に戻してもらってから削除してください。');
   await expect(page.getByTestId('site-undo')).toHaveCount(0);
+});
+
+test('a person who may publish makes a published post a draft after a question in its row', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const sent: unknown[] = [];
+  await open(page, { admin: true });
+  await page.route('**/site-editor/api/pages/20261101-a1b2/versions', (route) =>
+    route.fulfill({ json: { wge: 1, ok: true, versions: [{ id: 3, kind: 'publish', at: 2, revision: 1, live: true }, { id: 1, kind: 'publish', at: 1, revision: 0, live: false }] } }),
+  );
+  await page.route('**/site-editor/api/pages/20261101-a1b2/undo-publish', async (route) => {
+    sent.push(route.request().postDataJSON());
+    await route.fulfill({ json: { wge: 1, ok: true, draft: { revision: 1 }, published: null } });
+  });
+  const rows = page.getByTestId('site-post');
+  await expect(rows).toHaveCount(3);
+  // Only the published posts have it; the draft has 削除 instead.
+  await expect(page.getByTestId('site-post-unpublish')).toHaveCount(2);
+  const button = page.getByRole('button', { name: '「合成の古い記事」を非公開に戻す' });
+
+  // The question comes in the row; やめる sends nothing.
+  await button.click();
+  const confirm = page.getByTestId('site-unpublish-confirm');
+  await expect(confirm).toContainText('「合成の古い記事」を非公開に戻しますか？');
+  await expect(rows.filter({ hasText: '合成の古い記事' }).getByTestId('site-unpublish-confirm')).toHaveCount(1);
+  await page.getByTestId('site-unpublish-no').click();
+  await expect(confirm).toHaveCount(0);
+  expect(sent).toHaveLength(0);
+
+  // Yes: the live version is taken off with "unpublish", not back to the version before.
+  await button.click();
+  await page.getByTestId('site-unpublish-yes').click();
+  await expect(page.getByTestId('site-notice')).toContainText('「合成の古い記事」を非公開に戻しました。');
+  await expect(confirm).toHaveCount(0);
+  // The id 3 comes from the versions read just before: the live one, not the first publish.
+  expect(sent).toEqual([{ versionId: 3, unpublish: true }]);
+});
+
+test('an editor server that ignores "unpublish" is reported, not taken for a draft', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await open(page, { admin: true });
+  await page.route('**/site-editor/api/pages/20261101-a1b2/versions', (route) => route.fulfill({ json: { wge: 1, ok: true, versions: [{ id: 3, kind: 'publish', at: 2, revision: 1, live: true }] } }));
+  await page.route('**/site-editor/api/pages/20261101-a1b2/undo-publish', (route) => route.fulfill({ json: { wge: 1, ok: true, published: { id: 1 } } }));
+  await page.getByRole('button', { name: '「合成の古い記事」を非公開に戻す' }).click();
+  await page.getByTestId('site-unpublish-yes').click();
+  await expect(page.getByTestId('site-notice')).toContainText('まだ公開中です');
+});
+
+test('a writer who may not publish sees no 非公開に戻す, and the hint says who can', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await open(page);
+  await expect(page.getByTestId('site-post')).toHaveCount(3);
+  await expect(page.getByTestId('site-post-unpublish')).toHaveCount(0);
+  await expect(page.getByText('公開中の記事を非公開に戻せるのは、公開できる人と権限管理者です。')).toBeVisible();
 });
 
 test('an access administrator chooses who may write and publish under the posts', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await open(page, { admin: true });
   await expect(page.getByTestId('site-post')).toHaveCount(3);
-  await expect(page.getByText('あなたは書くことと公開（公開の取り消しも）ができます。')).toBeVisible();
+  await expect(page.getByText('あなたは書くことと公開（非公開に戻すことも）ができます。')).toBeVisible();
   const access = page.getByTestId('site-access');
   await expect(access).toBeVisible();
   await expect(access.getByRole('heading', { name: '書ける人・公開できる人' })).toBeVisible();
