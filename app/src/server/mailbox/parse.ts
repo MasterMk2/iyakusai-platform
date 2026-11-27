@@ -1,4 +1,4 @@
-import PostalMime, { type Address as MimeAddress } from 'postal-mime';
+import PostalMime, { addressParser, type Address as MimeAddress } from 'postal-mime';
 import type { Address } from '../../shared/api.js';
 import { htmlToText } from '../domain/sanitize.js';
 
@@ -33,6 +33,10 @@ export interface ParsedMail {
   html: string | null;
   inReplyTo: string | null;
   references: string[];
+  /** Reply-To: where the sender asks answers to go (a Google Group that rewrote From puts the author here). */
+  replyTo?: Address[];
+  /** X-Original-From: the author of mail a Google Group passed on with its own address in From. */
+  originalFrom?: Address | null;
   /** List-Id headers (mail delivered through a Google Group). */
   listIds: string[];
   /** Delivered-To and X-Original-To headers. */
@@ -98,6 +102,8 @@ export async function parseRawMail(raw: Buffer): Promise<ParsedMail> {
     html,
     inReplyTo: ids(email.inReplyTo)[0] ?? null,
     references: ids(email.references),
+    replyTo: flatten(email.replyTo).slice(0, 10),
+    originalFrom: header('x-original-from').flatMap((v) => flatten(addressParser(v)))[0] ?? null,
     listIds: header('list-id').slice(0, 10),
     deliveredTo: [...header('delivered-to'), ...header('x-original-to')].map((v) => v.replace(/^<|>$/g, '').toLowerCase()).slice(0, 20),
     attachments: email.attachments.map((a, i) => ({

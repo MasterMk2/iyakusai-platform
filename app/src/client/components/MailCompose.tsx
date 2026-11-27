@@ -1,5 +1,4 @@
 import { useRef, useState } from 'react';
-import type { Address, ReceiptView } from '../../shared/api';
 import {
   MAIL_APPROVAL_NOTE_MAX,
   MAIL_ATTACHMENTS_MAX,
@@ -15,116 +14,21 @@ import {
   type MailSendResponse,
 } from '../../shared/mailbox';
 import { isDueDate, japaneseDay, jstDay, replyDueSentence } from '../../shared/mailDue';
-import { screenMail } from '../../shared/mailScreen';
-import { mailSignature, replaceDraftSignature } from '../../shared/signature';
-import { apiForm, fmtDate, toFailure } from '../api';
+import { screenMail, type ScreenFinding } from '../../shared/mailScreen';
+import { apiForm, toFailure } from '../api';
 import { MailReview } from './MailReview';
+import { signature, type ComposeDraft, type ComposeMode } from './mailDrafts.js';
 import { RecipientInput } from './RecipientInput';
 
 // Writing and sending mail from a committee address (2026-10-26): a reply, a reply to all, or new mail.
 // Write → check what will be sent (with a confirmation tick) → send once. The browser makes one token per
 // message, so pressing again after a lost answer never sends it twice. Mail also goes as BCC to the archive.
-// A reply-to address other than From can be given.
+// A reply-to address other than From can be given. The first text of the form is made in mailDrafts.ts.
 // Approval before sending (2026-11-11): from a mailbox where this person's mail needs an approval, the same form
 // asks a reviewer instead of sending ("承認を依頼する"); a returned mail opens here again with its files (`resubmit`).
 
-export type ComposeMode = 'new' | 'reply' | 'replyAll';
-
-export interface ComposeDraft {
-  mailboxId: string;
-  to: string;
-  cc: string;
-  bcc: string;
-  subject: string;
-  body: string;
-  replyToReceiptId: string | null;
-  /** 返信先 (Reply-To) as typed; empty: answers go to From. */
-  replyTo?: string;
-}
-
-const fmtAddress = (a: Address) => (a.name ? `${a.name} <${a.address}>` : a.address);
-
 function fmtSize(bytes: number): string {
   return bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-/**
- * The signature the body starts with (it can be changed like the rest of the text): the committee's shape, made from
- * what the server says (2026-11-10; each person sets their title and address in the settings). An older server sends
- * no parts: the earlier signature, which names the From mailbox.
- */
-export function signature(options: MailSendOptions, mailboxId: string): string {
-  if (options.signature) return mailSignature(options.signature);
-  const box = options.from.find((f) => f.mailboxId === mailboxId);
-  return ['--', options.fromName, box ? `${box.name}（${box.address}）` : '', options.senderName].filter(Boolean).join('\n');
-}
-
-/**
- * A Bot draft's body with the committee's signature: the Bot's own signature block is replaced by it, and a draft
- * without one gets it after the text unless the Bot already wrote the committee's name.
- */
-function withSignature(options: MailSendOptions, mailboxId: string, body: string): string {
-  const text = body.replace(/\r\n/g, '\n').trimEnd();
-  const sig = signature(options, mailboxId);
-  const replaced = options.signature ? replaceDraftSignature(text, sig, options.fromName) : null;
-  if (replaced !== null) return `${replaced}\n`;
-  return text.includes(options.fromName) ? `${text}\n` : `${text}\n\n${sig}\n`;
-}
-
-/** New mail; `to` is set when it is written from a contact. */
-export function newDraft(options: MailSendOptions, mailboxId?: string, fromBot?: { subject: string; body: string }, to = ''): ComposeDraft {
-  const from = options.from.find((f) => f.mailboxId === mailboxId)?.mailboxId ?? options.from[0]?.mailboxId ?? '';
-  return {
-    mailboxId: from,
-    to,
-    cc: '',
-    bcc: '',
-    subject: fromBot?.subject.slice(0, MAIL_SUBJECT_MAX) ?? '',
-    body: fromBot ? withSignature(options, from, fromBot.body) : `\n\n${signature(options, from)}\n`,
-    replyToReceiptId: null,
-  };
-}
-
-/**
- * A reply to one message: to its sender (or, for the committee's own mail, to whom it was sent), quoting it.
- * With a Bot draft, its subject and body replace the empty start.
- */
-export function replyDraft(options: MailSendOptions, receipt: ReceiptView, mode: 'reply' | 'replyAll', fromBot?: { subject: string; body: string }): ComposeDraft {
-  const inMailbox = new Set((receipt.mailboxes ?? [receipt.mailbox]).map((m) => m.id));
-  const from = options.from.find((f) => inMailbox.has(f.mailboxId)) ?? options.from[0];
-  const lower = (a: Address) => a.address.toLowerCase();
-  const sender = from?.address.toLowerCase() ?? '';
-  // Never written back: the addresses this person sends from (one account's aliases) and the archive BCC.
-  const skip = new Set([sender, ...options.from.map((f) => f.address.toLowerCase()), ...(options.bcc ? [options.bcc.toLowerCase()] : [])]);
-  // A reply to the committee's own message from the same address goes to whom it was sent; any other, to its sender.
-  const back = receipt.from.address.toLowerCase() === sender ? receipt.to.filter((a) => !skip.has(lower(a))) : [];
-  const to = back.length > 0 ? back : [receipt.from];
-  const toKeys = new Set(to.map(lower));
-  const cc =
-    mode === 'replyAll'
-      ? [...receipt.to, ...receipt.cc].filter((a, i, all) => {
-          const k = lower(a);
-          return !skip.has(k) && !toKeys.has(k) && all.findIndex((b) => lower(b) === k) === i;
-        })
-      : [];
-  const subject = /^\s*re\s*[:：]/i.test(receipt.subject) ? receipt.subject : `Re: ${receipt.subject}`;
-  const quoted = receipt.text
-    .replace(/\r\n/g, '\n')
-    .split('\n')
-    .slice(0, 300)
-    .map((l) => `> ${l}`)
-    .join('\n');
-  const mailboxId = from?.mailboxId ?? '';
-  const quote = `${fmtDate(receipt.receivedAt)} ${fmtAddress(receipt.from)}:\n${quoted}\n`;
-  return {
-    mailboxId,
-    to: to.map(fmtAddress).join(', '),
-    cc: cc.map(fmtAddress).join(', '),
-    bcc: '',
-    subject: (fromBot?.subject.trim() || subject).slice(0, MAIL_SUBJECT_MAX),
-    body: fromBot ? `${withSignature(options, mailboxId, fromBot.body)}\n${quote}` : `\n\n${signature(options, mailboxId)}\n\n${quote}`,
-    replyToReceiptId: receipt.receiptId,
-  };
 }
 
 interface Checked {
@@ -178,6 +82,8 @@ export function sentNoteText(result: MailSendResponse): string {
   const waitNote = result.replyWait === 'set' ? ' 返事待ちとして記録しました。' : result.replyWait === 'failed' ? ' ただし回答期限は保存できませんでした。下の「期限」から付け直してください。' : '';
   return base + waitNote;
 }
+
+export { newDraft, replyDraft, signature, type ComposeDraft, type ComposeMode } from './mailDrafts.js';
 
 export function MailCompose({
   options,
@@ -236,8 +142,13 @@ export function MailCompose({
   const dueHere = options.dueMailboxIds?.includes(draft.mailboxId) ?? false;
   const today = jstDay(new Date());
   // Checks before sending (fixed rules): shown with what will be sent.
-  const findings = preview
-    ? screenMail({ subject: draft.subject, body: preview.body, to: parsed(preview.to), cc: parsed(preview.cc), replyTo: preview.replyTo ? parseRecipient(preview.replyTo) : null, fromAddress: from?.address ?? '', fromName: options.fromName, attachments: fileCount })
+  // A reply to mail a group passed on that goes back to the group itself (2026-11-27).
+  const backToGroup = !!preview && !!initial.viaGroupAddress && parsed(preview.to).some((a) => a.address.toLowerCase() === initial.viaGroupAddress);
+  const findings: ScreenFinding[] = preview
+    ? [
+        ...(backToGroup ? [{ level: 'warning' as const, text: `宛先の ${initial.viaGroupAddress} は委員会のグループです。返信元のメールはこのグループを通って届いたもので、ここに送っても相手には届きません。相手のアドレスを宛先に入れてください。` }] : []),
+        ...screenMail({ subject: draft.subject, body: preview.body, to: parsed(preview.to), cc: parsed(preview.cc), replyTo: preview.replyTo ? parseRecipient(preview.replyTo) : null, fromAddress: from?.address ?? '', fromName: options.fromName, attachments: fileCount }),
+      ]
     : [];
   const warnings = findings.filter((f) => f.level === 'warning').length;
   const toNames = parsed(splitRecipients(draft.to)).map((a) => a.name ?? '（名前なし）');
@@ -410,6 +321,11 @@ export function MailCompose({
               </option>
             ))}
           </select>
+          {initial.notice && (
+            <p className="status warning" role="status" data-testid="compose-notice">
+              {initial.notice}
+            </p>
+          )}
           <label htmlFor="compose-to">宛先</label>
           <RecipientInput id="compose-to" rows={1} value={draft.to} onValueChange={(v) => edit('to', v)} {...field('to')} data-testid="compose-to" />
           {errorOf('to')}

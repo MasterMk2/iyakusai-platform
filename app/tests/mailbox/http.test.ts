@@ -172,6 +172,21 @@ describe('reading and handling mail', () => {
     expect((await call('GET', '/api/threads/th_0000000000000000', { cookie: member.cookie })).status).toBe(404);
   });
 
+  it('says where answers go for mail a Google Group passed on (Reply-To, X-Original-From)', async () => {
+    const member = await signIn(MEMBER, '21000002');
+    const headers = [`Reply-To: "取引先 担当" <${OUTSIDE}>`, `X-Original-From: "取引先 担当" <${OUTSIDE}>`];
+    await put(rawMail({ messageId: 'via@partner.example', from: `"'取引先 担当' via 協賛" <${SPONSOR}>`, to: SPONSOR, subject: 'グループ経由', headers }));
+    await put(rawMail({ messageId: 'direct@partner.example', to: SPONSOR, subject: '直接' }));
+    const receiptOf = async (subject: string) => {
+      const item = (await call('GET', '/api/inbox', { cookie: member.cookie })).json.items.find((t: { subject: string }) => t.subject === subject);
+      return (await call('GET', `/api/threads/${item.threadId}`, { cookie: member.cookie })).json.receipts[0];
+    };
+    expect(await receiptOf('グループ経由')).toMatchObject({ viaGroup: true, replyTo: [{ name: '取引先 担当', address: OUTSIDE }], originalFrom: { name: '取引先 担当', address: OUTSIDE } });
+    const direct = await receiptOf('直接');
+    expect(direct.viaGroup).toBe(false);
+    expect(direct.replyTo).toBeUndefined();
+  });
+
   it('requires mailbox grants for notes only; administrators grant edit', async () => {
     const chair = await signIn(CHAIR, '21000001');
     const member = await signIn(MEMBER, '21000002');
