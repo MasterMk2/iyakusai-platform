@@ -20,7 +20,7 @@ import { normalizeForSearch, type MailboxStore, type MessageRow, type OutgoingRo
 // Addresses of BCC recipients are never shown (only the number, in the count of recipients).
 
 /** The name Google Groups give mail they deliver for someone else: "'Name' via Group". */
-const GROUP_REWRITE = /\svia\s/i;
+export const GROUP_REWRITE = /\svia\s/i;
 /** A send still "sending" after this long was cut off (the app stopped) and may have gone out, as send.ts answers. */
 const CUT_OFF_MS = 10 * 60_000;
 

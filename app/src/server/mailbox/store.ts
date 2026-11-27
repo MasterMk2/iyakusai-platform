@@ -190,10 +190,13 @@ CREATE TABLE IF NOT EXISTS send_grants(user_id TEXT NOT NULL, mailbox_id TEXT NO
 CREATE TABLE IF NOT EXISTS outgoing(id TEXT PRIMARY KEY, client_token TEXT NOT NULL UNIQUE, user_id TEXT NOT NULL, mailbox_id TEXT NOT NULL, internet_message_id TEXT NOT NULL, reply_to_id TEXT, recipients INTEGER NOT NULL, bcc_json TEXT NOT NULL, size INTEGER NOT NULL, status TEXT NOT NULL, error TEXT, message_id TEXT, created_at TEXT NOT NULL, finished_at TEXT);
 CREATE INDEX IF NOT EXISTS outgoing_user ON outgoing(user_id, created_at);
 CREATE TABLE IF NOT EXISTS department_grants(department TEXT NOT NULL, mailbox_id TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('edit','send')), granted_by TEXT NOT NULL, granted_at TEXT NOT NULL, PRIMARY KEY(department, mailbox_id, kind));
+CREATE TABLE IF NOT EXISTS reply_targets(message_id TEXT PRIMARY KEY, reply_to_json TEXT NOT NULL, original_from_json TEXT);
 `;
 // Sending and department grants (2026-10-26) only added tables: an older version of the app still opens the file (schema 1).
 // Deadlines (2026-11-03, DUE_SCHEMA in due.ts) add one more table the same way; no column of an existing table changes.
 // Approval before sending (2026-11-11, APPROVAL_SCHEMA in approval-store.ts) adds its tables the same way.
+// Reply targets (2026-11-27): Reply-To and X-Original-From of a message, in a table of their own the same way. Mail
+// stored before has none (only a copy that comes in from another source, such as a backfill, fills them in).
 
 const SCHEMA_VERSION = '1';
 
@@ -338,11 +341,27 @@ export class MailboxStore {
         const insert = this.db.prepare('INSERT INTO attachments(message_id,idx,filename,content_type,disposition,content_id,size,sha256) VALUES(?,?,?,?,?,?,?,?)');
         p.attachments.forEach((a, i) => insert.run(id, i + 1, a.filename, a.contentType, a.disposition, a.contentId, a.content.length, hashes[i]!));
       }
+      this.keepReplyTargets(id, p);
       const link = this.db.prepare('INSERT OR IGNORE INTO message_mailboxes(message_id,mailbox_id) VALUES(?,?)');
       for (const mailboxId of input.mailboxIds) link.run(id, mailboxId);
       this.db.prepare('INSERT INTO sources(source,provider_id,message_id,received_at,stored_at) VALUES(?,?,?,?,?)').run(input.source, input.providerId, id, input.receivedAt, input.now);
       return { status, id };
     });
+  }
+
+  /** Reply-To and X-Original-From of a message, kept once (the first copy that has them). */
+  private keepReplyTargets(id: string, p: ParsedMail): void {
+    const replyTo = p.replyTo ?? [];
+    const originalFrom = p.originalFrom ?? null;
+    if (replyTo.length === 0 && !originalFrom) return;
+    this.db.prepare('INSERT OR IGNORE INTO reply_targets(message_id,reply_to_json,original_from_json) VALUES(?,?,?)').run(id, JSON.stringify(replyTo), originalFrom ? JSON.stringify(originalFrom) : null);
+  }
+
+  /** Where answers to a message should go, as its headers said; null when the message had neither header (or was stored before 2026-11-27). */
+  replyTargets(id: string): { replyTo: Address[]; originalFrom: Address | null } | null {
+    const row = this.db.prepare('SELECT reply_to_json, original_from_json FROM reply_targets WHERE message_id=?').get(id) as { reply_to_json: string; original_from_json: string | null } | undefined;
+    if (!row) return null;
+    return { replyTo: JSON.parse(row.reply_to_json) as Address[], originalFrom: row.original_from_json ? (JSON.parse(row.original_from_json) as Address) : null };
   }
 
   /** A signed request's nonce is accepted once. Expired nonces are forgotten. */

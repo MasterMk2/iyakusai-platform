@@ -240,6 +240,15 @@ export interface ReceiptView {
   receivedAt: string;
   subject: string;
   from: Address;
+  /**
+   * Committee mail: where answers should go, as the mail's Reply-To and X-Original-From said (2026-11-27). Mail a
+   * Google Group passed on shows the group's own address in From ("'名前' via システム課" <system@…>); its author is
+   * here. Absent when the mail had neither header or was stored before.
+   */
+  replyTo?: Address[];
+  originalFrom?: Address | null;
+  /** Committee mail: From is a committee address with "via" in its name, i.e. a group rewrote it and the author is not From. */
+  viaGroup?: boolean;
   /** Recipient display policy: only this receipt's mailbox address and non-app addresses. */
   to: Address[];
   cc: Address[];

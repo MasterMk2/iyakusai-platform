@@ -51,6 +51,8 @@ export interface RawMailOptions {
   references?: string[];
   listId?: string;
   deliveredTo?: string;
+  /** More header lines as written (Reply-To, X-Original-From, ...). */
+  headers?: string[];
   /** With contentId: an inline part (Content-ID) the HTML can show as src="cid:…". */
   attachments?: { filename: string; contentType: string; content: Buffer; contentId?: string }[];
 }
@@ -69,6 +71,7 @@ export function rawMail(o: RawMailOptions = {}): Buffer {
   if (o.inReplyTo) headers.push(`In-Reply-To: <${o.inReplyTo}>`);
   if (o.references) headers.push(`References: ${o.references.map((r) => `<${r}>`).join(' ')}`);
   if (o.listId) headers.push(`List-Id: ${o.listId}`);
+  headers.push(...(o.headers ?? []));
   headers.push('MIME-Version: 1.0');
 
   const textPart = o.textJis

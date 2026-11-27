@@ -69,6 +69,18 @@ describe('parsing raw mail', () => {
     expect(parsed.text).toContain('本文太字');
     expect(parsed.text).not.toContain('x()');
   });
+
+  it('reads Reply-To and X-Original-From of mail a Google Group passed on', async () => {
+    // A name in ISO-2022-JP as Japanese mailers write it ("テスト" in JIS).
+    const name = `=?ISO-2022-JP?B?${Buffer.from('\x1b$B%F%9%H\x1b(B', 'latin1').toString('base64')}?=`;
+    const parsed = await parseRawMail(rawMail({ from: `"'取引先 担当' via 協賛" <${SPONSOR}>`, to: SPONSOR, headers: [`Reply-To: ${name} <${OUTSIDE}>`, `X-Original-From: ${name} <${OUTSIDE}>`] }));
+    expect(parsed.from.address).toBe(SPONSOR);
+    expect(parsed.replyTo).toEqual([{ name: 'テスト', address: OUTSIDE }]);
+    expect(parsed.originalFrom).toEqual({ name: 'テスト', address: OUTSIDE });
+    const plain = await parseRawMail(rawMail({}));
+    expect(plain.replyTo).toEqual([]);
+    expect(plain.originalFrom).toBeNull();
+  });
 });
 
 describe('committee addresses', () => {
@@ -152,6 +164,18 @@ describe('the mailbox store', () => {
     expect(again).toEqual({ status: 'linked', id: first.id });
     expect(store.links([first.id]).get(first.id)?.sort()).toEqual(['adm', 'sponsorship']);
     expect(store.ingestSummary()).toMatchObject({ messages: 1, sources: { collector: 1, backfill: 1 } });
+  });
+
+  it('keeps where answers go (Reply-To, X-Original-From), and fills it in from a copy from another source', async () => {
+    const headers = [`Reply-To: "取引先 担当" <${OUTSIDE}>`, `X-Original-From: "取引先 担当" <${OUTSIDE}>`];
+    const answer = { replyTo: [{ name: '取引先 担当', address: OUTSIDE }], originalFrom: { name: '取引先 担当', address: OUTSIDE } };
+    const via = await put(rawMail({ messageId: 'via@partner.example', from: `"'取引先 担当' via 協賛" <${SPONSOR}>`, to: SPONSOR, headers }), ['sponsorship']);
+    expect(store.replyTargets(via.id)).toEqual(answer);
+    expect(store.replyTargets((await put(rawMail({ messageId: 'plain@partner.example', to: SPONSOR }), ['sponsorship'])).id)).toBeNull();
+    // Mail stored before these headers were kept: a copy from another source (a backfill) fills them in.
+    const older = await put(rawMail({ messageId: 'older@partner.example', to: SPONSOR }), ['sponsorship'], { id: 'g-older' });
+    expect((await put(rawMail({ messageId: 'older@partner.example', to: SPONSOR, headers }), ['adm'], { source: 'backfill', id: 'n-older' })).status).toBe('linked');
+    expect(store.replyTargets(older.id)).toEqual(answer);
   });
 
   it('threads replies by References and In-Reply-To in any arrival order', async () => {

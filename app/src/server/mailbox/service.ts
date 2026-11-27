@@ -9,7 +9,7 @@ import { AUTO_ACTOR, AUTO_ACTOR_NAME, dueEntries, loadDue, messageDueView, NO_DU
 import type { MailboxDefinition } from './config.js';
 import { contentIdOf, eachLimited, imageSources, MAIL_IMAGE_MAX_BYTES, MAIL_IMAGES_TOTAL_BYTES, MAIL_REMOTE_IMAGES_MAX, remoteImageUrl, sniffMailImage, type RemoteImageFetch } from './images.js';
 import { SIGN_IN_MAIL_SUBJECT, SIGN_IN_MAIL_TEXT } from './restricted.js';
-import { listSentMail, type SentQuery } from './sent.js';
+import { GROUP_REWRITE, listSentMail, type SentQuery } from './sent.js';
 import { approvalRequired, approvalRequiredMailboxesOf, departmentReviewGrants, departmentReviewMailboxes, reviewedMailboxes, reviewGrants, reviewMailboxesOf, setApprovalRequired, setApprovalRequiredMany, setDepartmentReviewGrant, setReviewGrant } from './approval-store.js';
 import { normalizeForSearch, type AttachmentRow, type ListFilter, type MailboxStore, type MessageRow } from './store.js';
 
@@ -226,6 +226,7 @@ export class MailboxService {
     const sanitized = row.html !== null && !hidden ? sanitizeMailHtml(row.html) : null;
     const attachments: AttachmentView[] = hidden ? [] : this.store.attachments(row.id).map((a) => ({ id: `att${a.idx}`, filename: a.filename, contentType: a.content_type, size: a.size }));
     const notes: NoteView[] = this.store.notes(row.id).map((n) => ({ id: n.id, authorName: this.name(n.author_id), createdAt: n.created_at, body: n.body }));
+    const targets = this.store.replyTargets(row.id);
     return {
       receiptId: row.id,
       threadId: row.thread_id,
@@ -237,6 +238,8 @@ export class MailboxService {
       receivedAt: row.received_at,
       subject: hidden ? SIGN_IN_MAIL_SUBJECT : row.subject,
       from: { name: row.from_name, address: row.from_address },
+      ...(targets ? { replyTo: targets.replyTo, originalFrom: targets.originalFrom } : {}),
+      viaGroup: GROUP_REWRITE.test(row.from_name ?? '') && this.addresses.isCommitteeAddress(row.from_address),
       to: JSON.parse(row.to_json) as ReceiptView['to'],
       cc: JSON.parse(row.cc_json) as ReceiptView['cc'],
       text: hidden ? SIGN_IN_MAIL_TEXT : row.text,
