@@ -9,6 +9,7 @@ import {
   type SiteEditorMetaResponse,
   type SiteEditorPagesResponse,
   type SiteEditorResult,
+  type SiteEditorVersion,
 } from '../../../shared/site-editor';
 import { api, toFailure } from '../../api';
 import { useLoader } from '../../useLoader';
@@ -63,10 +64,10 @@ export function SiteView() {
             </div>
           </div>
           <p className="hint">
-            {m.canPublish ? 'あなたは書くことと公開（公開の取り消しも）ができます。' : '書いた記事は、公開できる人か権限管理者が公開します。'}
+            {m.canPublish ? 'あなたは書くことと公開（非公開に戻すことも）ができます。' : '書いた記事は、公開できる人か権限管理者が公開します。'}
             記事はエディタ（別のタブ）で書きます。書いた内容は自動で下書きに保存され、「公開」を押すまでサイトには出ません。
           </p>
-          {m.canEdit && <PostList />}
+          {m.canEdit && <PostList canPublish={m.canPublish} />}
           {m.canAdminister && <AccessEditor onSaved={() => setRefresh((n) => n + 1)} />}
         </section>
       )}
@@ -75,9 +76,9 @@ export function SiteView() {
 }
 
 /** A change sent to the editor's server through this app, as the editor sends it (the server refuses one without X-WGE-Request). */
-async function changeOnEditor(path: string): Promise<SiteEditorResult> {
+async function changeOnEditor(path: string, body: object = {}): Promise<SiteEditorResult> {
   try {
-    const res = await fetch(`${SITE_EDITOR_PREFIX}${path}`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-WGE-Request': '1' }, body: '{}' });
+    const res = await fetch(`${SITE_EDITOR_PREFIX}${path}`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-WGE-Request': '1' }, body: JSON.stringify(body) });
     const json = (await res.json().catch(() => null)) as SiteEditorResult | null;
     return json && typeof json.ok === 'boolean' ? json : { ok: false };
   } catch (err) {
@@ -90,9 +91,10 @@ const dayOf = (ms: number) => new Date(ms).toLocaleDateString('ja-JP', { timeZon
 /**
  * The posts, newest first. Read again when the person comes back from the editor's browser tab. A draft can be deleted
  * (2026-11-24): the editor's server keeps it, so deleting asks nothing first and offers 元に戻す instead; a published
- * post is taken back in the editor first, so deleting never changes the site.
+ * post is made a draft first, so deleting never changes the site. A person who may publish makes a published post a
+ * draft with 非公開に戻す (2026-11-26, WebGenEngine #26): it leaves the site at once, so it asks first.
  */
-function PostList() {
+function PostList({ canPublish }: { canPublish: boolean }) {
   const [refresh, setRefresh] = useState(0);
   const load = useCallback(
     (signal: AbortSignal) => {
@@ -119,9 +121,43 @@ function PostList() {
     document.addEventListener('visibilitychange', again);
     return () => document.removeEventListener('visibilitychange', again);
   }, []);
+  // The post whose 非公開に戻す waits for a yes in its row.
+  const [asking, setAsking] = useState<string | null>(null);
   const list = useMemo(() => sortSitePages(pages.data?.pages ?? []), [pages.data]);
   const published = list.filter((p) => p.published).length;
   const gone = deleted.data?.pages ?? [];
+
+  // Asked in the row first (the post leaves the site at once). The live version is read then, so a post published
+  // again meanwhile is not taken off by an old list.
+  async function unpublish(id: string, title: string) {
+    setAsking(null);
+    setBusy(id);
+    setNotice(null);
+    let res: SiteEditorResult;
+    try {
+      const versions = await api<{ ok: boolean; versions: SiteEditorVersion[] }>('GET', `${SITE_EDITOR_PREFIX}/api/pages/${encodeURIComponent(id)}/versions`);
+      const live = versions.versions.find((v) => v.live);
+      res = live ? await changeOnEditor(`/api/pages/${encodeURIComponent(id)}/undo-publish`, { versionId: live.id, unpublish: true }) : { ok: false, reason: 'not-published' };
+    } catch (err) {
+      res = { ok: false, message: toFailure(err).message };
+    }
+    setBusy(null);
+    setRefresh((n) => n + 1);
+    // An editor's server older than WebGenEngine #26 ignores "unpublish" and goes back to the version before.
+    if (res.ok && res.published) {
+      setNotice({ text: `「${title}」は 1 つ前の公開版に戻っただけで、まだ公開中です。編集サーバーの版が古いため、システム課に連絡してください。`, ok: false });
+      return;
+    }
+    if (res.ok) {
+      setNotice({ text: `「${title}」を非公開に戻しました。下書きとして一覧にあります。`, ok: true });
+      return;
+    }
+    const why: Record<string, string> = {
+      'not-published': 'この記事はすでに公開されていません。',
+      'not-live': 'ほかの人が公開し直したため、非公開に戻せませんでした。もう一度押してください。',
+    };
+    setNotice({ text: (res.reason && why[res.reason]) ?? res.message ?? '非公開に戻せませんでした。もう一度押してください。', ok: false });
+  }
 
   async function change(id: string, action: 'delete' | 'restore', title: string) {
     setBusy(id);
@@ -134,7 +170,7 @@ function PostList() {
       return;
     }
     const why: Record<string, string> = {
-      published: 'この記事は公開中のため削除できません。エディタで公開を取り消してから削除してください。',
+      published: canPublish ? 'この記事は公開中のため削除できません。「非公開に戻す」を押してから削除してください。' : 'この記事は公開中のため削除できません。公開できる人か権限管理者に、非公開に戻してもらってから削除してください。',
       deleted: 'この記事はすでに削除されています。',
       'not-deleted': 'この記事はすでに一覧に戻っています。',
     };
@@ -180,11 +216,27 @@ function PostList() {
                   {busy === p.id ? '削除しています…' : '削除'}
                 </button>
               )}
+              {p.published && canPublish && (
+                <button type="button" className="secondary site-post-unpublish" disabled={busy !== null || asking === p.id} aria-label={`「${p.title?.trim() || '題名なし'}」を非公開に戻す`} onClick={() => { setNotice(null); setAsking(p.id); }} data-testid="site-post-unpublish">
+                  {busy === p.id ? '戻しています…' : '非公開に戻す'}
+                </button>
+              )}
+              {asking === p.id && (
+                <div className="status warning site-post-confirm" role="alert" data-testid="site-unpublish-confirm">
+                  <p>「{p.title?.trim() || '題名なし'}」を非公開に戻しますか？ サイトから外れます。書いた内容は下書きに残り、エディタでもう一度公開すれば戻ります。</p>
+                  <button type="button" disabled={busy !== null} onClick={() => void unpublish(p.id, p.title?.trim() || '題名なし')} data-testid="site-unpublish-yes">
+                    非公開に戻す
+                  </button>{' '}
+                  <button type="button" className="secondary" onClick={() => setAsking(null)} data-testid="site-unpublish-no">
+                    やめる
+                  </button>
+                </div>
+              )}
             </li>
           ))}
         </ul>
       )}
-      {list.length > 0 && <p className="hint">題名を押すと、その記事がエディタ（別のタブ）で開きます。下書きは「削除」で一覧から外せます。公開中の記事は、エディタで公開を取り消してから削除します。</p>}
+      {list.length > 0 && <p className="hint">題名を押すと、その記事がエディタ（別のタブ）で開きます。下書きは「削除」で一覧から外せます。{canPublish ? '公開中の記事は「非公開に戻す」で下書きにしてから削除します。' : '公開中の記事を非公開に戻せるのは、公開できる人と権限管理者です。'}</p>}
       {deleted.error && (
         <p className="status error">
           削除した記事を読み込めませんでした。{deleted.error.message}

@@ -14,6 +14,10 @@
 /* 削除・元に戻す: always the last column, so the buttons line up whether a row has a state chip or not. */
 .site-post > button { grid-column: -2 / -1; justify-self: end; min-height: 36px; }
 .site-post-delete { color: var(--red); }
+/* 非公開に戻す asks in its row, across the whole row, before anything changes on the site. */
+.site-post-confirm { grid-column: 1 / -1; margin: 4px 0; }
+.site-post-confirm p { margin: 0 0 8px; }
+.site-post-confirm button { min-height: 36px; }
 .site-posts > .status button { margin-left: 8px; }
 .site-trash { margin-top: 8px; }
 .site-trash summary { cursor: pointer; font-weight: 700; padding: 6px 0; }

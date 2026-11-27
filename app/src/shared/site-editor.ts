@@ -84,6 +84,17 @@ export interface SiteEditorResult {
   ok: boolean;
   reason?: string;
   message?: string;
+  /** After undo-publish: the version now live, or null when nothing is published. */
+  published?: { id: number } | null;
+}
+
+/** One version of a page, newest first (GET /site-editor/api/pages/{id}/versions). */
+export interface SiteEditorVersion {
+  id: number;
+  kind: 'publish' | 'auto';
+  at: number;
+  revision: number;
+  live: boolean;
 }
 
 /** The editor opened on one post. */
